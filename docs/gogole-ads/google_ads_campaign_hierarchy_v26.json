@@ -1,0 +1,982 @@
+{
+  "catalogName": "Google Ads Campaign Type and Resource Hierarchy Catalog",
+  "catalogVersion": "1.0.0",
+  "reviewedOn": "2026-10-29",
+  "googleAdsApiVersion": "v26",
+  "purpose": "Implementation planning catalog for a unified campaign builder. This is a normalized application-side capability catalog, not a literal Google Ads API request body.",
+  "criticalRules": [
+    "Google Ads API does not expose one universal native Campaign Objective field equivalent to the Google Ads UI objective picker. Store a normalized business objective in your app and map it to valid API resources/settings.",
+    "Campaign type controls the resource hierarchy, eligible ad formats, targeting, network/channel settings and bidding options.",
+    "Campaign budget is a separate CampaignBudget resource referenced by Campaign.campaign_budget; budget amount fields use micros and the account currency applies.",
+    "CampaignCriterion and AdGroupCriterion are separate resources; choose the correct level and criterion type for the campaign type.",
+    "Validate the selected configuration against the current API version, account eligibility, conversion setup, feed/account links and campaign-type-specific rules before mutation.",
+    "Use only documented API operations. Existing/readable campaign types are not necessarily creatable or fully mutable through the API.",
+    "Use idempotency and reconcile uncertain create outcomes before retrying; store provider resource names and IDs after every successful mutation."
+  ],
+  "commonApplicationBrief": {
+    "campaignName": {
+      "type": "string",
+      "required": true,
+      "description": "Human-readable shared name; map to a valid provider campaign name."
+    },
+    "businessObjective": {
+      "type": "enum",
+      "required": true,
+      "values": [
+        "SALES",
+        "LEADS",
+        "WEBSITE_TRAFFIC",
+        "AWARENESS_REACH",
+        "ENGAGEMENT",
+        "APP_PROMOTION",
+        "HOTEL_BOOKINGS",
+        "PRODUCT_SALES"
+      ],
+      "description": "Internal normalized value only; not a universal Google Ads API enum."
+    },
+    "destination": {
+      "type": "object",
+      "required": true,
+      "fields": {
+        "type": [
+          "WEBSITE",
+          "APP",
+          "HOTEL_LISTING",
+          "LOCAL_SERVICE"
+        ],
+        "url": "string|null",
+        "appId": "string|null",
+        "merchantCenterId": "string|null"
+      }
+    },
+    "budget": {
+      "type": "object",
+      "required": true,
+      "fields": {
+        "amount": "number",
+        "currency": "ISO-4217 string",
+        "period": [
+          "DAILY",
+          "LIFETIME"
+        ],
+        "providerOverrides": "optional per-provider amount/period/currency choices"
+      },
+      "description": "Never assume amount and currency can be applied unchanged to every connected ad account. Google account currency is generally determined by the account."
+    },
+    "schedule": {
+      "startDate": "YYYY-MM-DD|null",
+      "endDate": "YYYY-MM-DD|null",
+      "timeZone": "IANA time zone|null"
+    },
+    "market": {
+      "locations": "array of location criteria",
+      "languages": "array|null",
+      "description": "Targeting availability and allowed targeting level depend on campaign type; Search does not support manual campaign language criteria in the standard Search setup guide."
+    },
+    "conversion": {
+      "conversionActionResourceNames": "array|null",
+      "primaryOptimizationGoal": "string|null",
+      "conversionValueSource": "string|null"
+    },
+    "selectedGoogleAdAccountId": {
+      "type": "string",
+      "required": true
+    },
+    "providerSettings": {
+      "type": "object",
+      "description": "Type-specific Google configuration shown after selecting the campaign type."
+    }
+  },
+  "sharedApiObjects": {
+    "Customer": "Google Ads account/customer that owns campaign resources.",
+    "CampaignBudget": {
+      "role": "Separate resource referenced by Campaign.campaign_budget.",
+      "commonFields": [
+        "name",
+        "amount_micros",
+        "delivery_method",
+        "period where supported",
+        "explicitly_shared where supported"
+      ],
+      "notes": [
+        "Create non-shared budget for campaign types that require it.",
+        "Daily versus total/lifetime budget support varies by campaign type."
+      ]
+    },
+    "Campaign": {
+      "commonFields": [
+        "name",
+        "status",
+        "advertising_channel_type",
+        "advertising_channel_sub_type when required",
+        "campaign_budget",
+        "bidding strategy or bidding_strategy resource",
+        "start_date",
+        "end_date",
+        "network_settings/channel controls where applicable",
+        "targeting settings",
+        "conversion goal configuration where applicable"
+      ],
+      "notes": [
+        "advertising_channel_type and subtype are set at creation and are not generally changeable later.",
+        "API uses CampaignStatus values such as PAUSED or ENABLED; safe product launch flow should default to PAUSED where supported."
+      ]
+    },
+    "CampaignCriterion": "Campaign-level targeting or exclusions, for example location, device, schedule, negative keyword, or other type-supported criteria.",
+    "AdGroup": "Container for ads and ad-group-level settings in campaign types that use ad groups.",
+    "AdGroupCriterion": "Ad-group-level targeting, for example keywords, audience criteria, placements, or product/hotel listing-group rules depending on campaign type.",
+    "AdGroupAd": "Link/resource connecting an ad to an ad group.",
+    "Ad": "Contains a campaign-type-specific ad info union and often final URLs; actual fields depend on ad type.",
+    "Asset": "Reusable creative component such as headline, description, image, logo or video.",
+    "CampaignAsset / AdGroupAsset": "Optional links attaching compatible assets to campaign/ad-group levels.",
+    "ConversionGoalCampaignConfig / CampaignConversionGoal": "Optional goal configuration used when campaign-level conversion goals need to override account-level goals."
+  },
+  "campaignTypes": {
+    "SEARCH": {
+      "displayName": "Search",
+      "advertisingChannelType": "SEARCH",
+      "advertisingChannelSubType": null,
+      "apiCreationSupport": "SUPPORTED_CREATE_AND_MANAGE",
+      "resourceHierarchy": "Customer -> CampaignBudget -> Campaign(SEARCH) -> AdGroup -> [AdGroupCriterion(keyword/audience/other supported criteria), AdGroupAd -> Ad(ResponsiveSearchAdInfo or supported Search ad type)]",
+      "resourceObjects": {
+        "requiredForServing": [
+          "CampaignBudget",
+          "Campaign",
+          "at least one AdGroup",
+          "at least one AdGroupAd",
+          "at least one AdGroupCriterion (for standard keyword-targeted setup)"
+        ],
+        "typicalChildren": [
+          "AdGroup",
+          "AdGroupCriterion(keyword with match type)",
+          "AdGroupAd",
+          "Ad(ResponsiveSearchAdInfo)",
+          "CampaignCriterion(location/device/schedule/negative keywords where supported)",
+          "CampaignAsset or AdGroupAsset(sitelink/callout/call/structured snippet/image assets as supported)",
+          "ConversionGoalCampaignConfig (optional)"
+        ]
+      },
+      "semanticBusinessObjectives": [
+        "SALES",
+        "LEADS",
+        "WEBSITE_TRAFFIC"
+      ],
+      "performanceGoalConcepts": [
+        "CLICKS",
+        "CONVERSIONS",
+        "CONVERSION_VALUE",
+        "SEARCH_IMPRESSION_SHARE"
+      ],
+      "biddingStrategyExamples": [
+        "Manual CPC where supported",
+        "Maximize Clicks",
+        "Maximize Conversions with optional target CPA",
+        "Maximize Conversion Value with optional target ROAS",
+        "Target Impression Share where supported",
+        "other strategy only if v26 and account/context accepts it"
+      ],
+      "prerequisites": [
+        "Google Ads customer with billing and API access",
+        "Conversion tracking for conversion-based bidding",
+        "Final URL and Search ad assets",
+        "Keywords for standard keyword-targeted setup"
+      ],
+      "notes": [
+        "Display expansion is a Search network setting, not a separate advertising_channel_type.",
+        "AI Max is an optional optimization layer within Search, not a separate campaign type."
+      ],
+      "documentation": [
+        "https://developers.google.com/google-ads/api/docs/campaigns/search-campaigns/getting-started",
+        "https://developers.google.com/google-ads/api/docs/responsive-search-ads/create-responsive-search-ads",
+        "https://developers.google.com/google-ads/api/docs/campaigns/ai-max-for-search-campaigns/getting-started"
+      ]
+    },
+    "DISPLAY": {
+      "displayName": "Display",
+      "advertisingChannelType": "DISPLAY",
+      "advertisingChannelSubType": null,
+      "apiCreationSupport": "SUPPORTED_CREATE_AND_MANAGE",
+      "resourceHierarchy": "Customer -> CampaignBudget -> Campaign(DISPLAY) -> AdGroup -> [AdGroupCriterion(targeting), AdGroupAd -> Ad(ResponsiveDisplayAdInfo or another supported Display ad type)]",
+      "resourceObjects": {
+        "requiredForServing": [
+          "CampaignBudget",
+          "Campaign",
+          "AdGroup",
+          "AdGroupAd with an eligible display ad"
+        ],
+        "typicalChildren": [
+          "AdGroup",
+          "AdGroupCriterion(audience/placement/topic/keyword/demographic criteria as supported)",
+          "AdGroupAd",
+          "Ad(ResponsiveDisplayAdInfo)",
+          "Asset and AdGroupAsset/CampaignAsset for compatible extra assets",
+          "CampaignCriterion(location/schedule/device where supported)"
+        ]
+      },
+      "semanticBusinessObjectives": [
+        "SALES",
+        "LEADS",
+        "WEBSITE_TRAFFIC",
+        "AWARENESS_REACH"
+      ],
+      "performanceGoalConcepts": [
+        "CLICKS",
+        "CONVERSIONS",
+        "CONVERSION_VALUE",
+        "REACH"
+      ],
+      "biddingStrategyExamples": [
+        "Manual CPC where supported",
+        "Maximize Clicks where supported",
+        "Maximize Conversions with optional target CPA",
+        "Maximize Conversion Value with optional target ROAS",
+        "other strategy only if v26 and context permits"
+      ],
+      "prerequisites": [
+        "Eligible destination and ad assets",
+        "Audience, placement or other targeting as appropriate"
+      ],
+      "notes": [
+        "Display uses ad groups and ads; supported asset links can add sitelinks/callouts or similar assets.",
+        "Do not assume every legacy Display subtype is creatable."
+      ],
+      "documentation": [
+        "https://developers.google.com/google-ads/api/docs/campaigns/overview",
+        "https://developers.google.com/google-ads/api/docs/ads/ad-types",
+        "https://developers.google.com/google-ads/api/docs/campaigns/bidding/strategy-types"
+      ]
+    },
+    "PERFORMANCE_MAX": {
+      "displayName": "Performance Max",
+      "advertisingChannelType": "PERFORMANCE_MAX",
+      "advertisingChannelSubType": null,
+      "apiCreationSupport": "SUPPORTED_CREATE_AND_MANAGE",
+      "resourceHierarchy": "Customer -> CampaignBudget(non-shared, daily) -> Campaign(PERFORMANCE_MAX) -> AssetGroup -> Asset + AssetGroupAsset; optional AssetGroupSignal; optional AssetSet/CampaignAsset and product listing filters for relevant use cases",
+      "resourceObjects": {
+        "requiredForServing": [
+          "CampaignBudget",
+          "Campaign",
+          "at least one AssetGroup",
+          "required AssetGroupAsset links/assets meeting minimums (unless supported retail/other documented exception)"
+        ],
+        "typicalChildren": [
+          "AssetGroup",
+          "Asset(text headlines/long headlines/descriptions/images/videos/logos/business name/final URL as applicable)",
+          "AssetGroupAsset",
+          "AssetGroupSignal(audience and/or search themes; hints, not strict targeting)",
+          "CampaignCriterion(location and other supported criteria)",
+          "CampaignAsset(brand name/logo when brand guidelines enabled)",
+          "AssetSet/AssetSetAsset only for supported linked inventory",
+          "AssetGroupListingGroupFilter for supported retail/product subdivision"
+        ]
+      },
+      "semanticBusinessObjectives": [
+        "SALES",
+        "LEADS",
+        "PRODUCT_SALES",
+        "AWARENESS_REACH"
+      ],
+      "performanceGoalConcepts": [
+        "CONVERSIONS",
+        "CONVERSION_VALUE"
+      ],
+      "biddingStrategyExamples": [
+        "Maximize Conversions with optional target CPA",
+        "Maximize Conversion Value with optional target ROAS"
+      ],
+      "prerequisites": [
+        "Conversion tracking configured",
+        "Website or eligible feed/account setup",
+        "Sufficient required text/image/brand assets unless supported retail exceptions apply"
+      ],
+      "notes": [
+        "No standard AdGroup/Ad hierarchy for normal Performance Max; the creative unit is AssetGroup.",
+        "PMax has limited manual placement control; audience signals are hints, not restrictive audience targeting.",
+        "PMax for Travel Goals and Local Services PMax have extra subtype-specific requirements."
+      ],
+      "documentation": [
+        "https://developers.google.com/google-ads/api/performance-max/getting-started",
+        "https://developers.google.com/google-ads/api/performance-max/asset-groups",
+        "https://developers.google.com/google-ads/api/docs/campaigns/bidding/strategy-types"
+      ]
+    },
+    "DEMAND_GEN": {
+      "displayName": "Demand Gen",
+      "advertisingChannelType": "DEMAND_GEN",
+      "advertisingChannelSubType": null,
+      "apiCreationSupport": "SUPPORTED_CREATE_AND_MANAGE",
+      "resourceHierarchy": "Customer -> CampaignBudget(non-shared; supported budget period) -> Campaign(DEMAND_GEN) -> AdGroup -> [AdGroupCriterion(audience/location/language as supported), AdGroupAd -> Ad(DemandGenMultiAssetAdInfo | DemandGenCarouselAdInfo | DemandGenVideoResponsiveAdInfo | DemandGenProductAdInfo)]",
+      "resourceObjects": {
+        "requiredForServing": [
+          "CampaignBudget",
+          "Campaign",
+          "AdGroup",
+          "eligible AdGroupAd/Ad and required creative assets"
+        ],
+        "typicalChildren": [
+          "AdGroup",
+          "AdGroupCriterion(audience and supported targeting)",
+          "AdGroupAd",
+          "Ad with DemandGenMultiAssetAdInfo or DemandGenCarouselAdInfo or DemandGenVideoResponsiveAdInfo or feed-backed DemandGenProductAdInfo",
+          "Asset and ad asset references",
+          "Campaign channel controls (DemandGenChannelControls)",
+          "CampaignCriterion for supported criteria",
+          "ConversionGoalCampaignConfig optional"
+        ]
+      },
+      "semanticBusinessObjectives": [
+        "SALES",
+        "LEADS",
+        "WEBSITE_TRAFFIC",
+        "AWARENESS_REACH",
+        "ENGAGEMENT"
+      ],
+      "performanceGoalConcepts": [
+        "CLICKS",
+        "CONVERSIONS",
+        "CONVERSION_VALUE",
+        "VIDEO_VIEWS/ENGAGEMENT where supported by eligible setup"
+      ],
+      "biddingStrategyExamples": [
+        "Maximize Clicks where eligible",
+        "Maximize Conversions with optional target CPA where eligible",
+        "Maximize Conversion Value with optional target ROAS where eligible",
+        "only show strategies validated for chosen Demand Gen configuration"
+      ],
+      "prerequisites": [
+        "High-quality image/video/text assets",
+        "Audience and destination configuration",
+        "Product feed/Merchant Center link if using product ads"
+      ],
+      "notes": [
+        "Uses ad groups and ads plus modern assets (hybrid hierarchy).",
+        "Uses DemandGenChannelControls rather than generic Search network settings.",
+        "Budget must not be shared; API documents support for total budgets through the applicable budget period fields."
+      ],
+      "documentation": [
+        "https://developers.google.com/google-ads/api/docs/demand-gen/create-campaign",
+        "https://developers.google.com/google-ads/api/docs/campaigns/bidding/strategy-types"
+      ]
+    },
+    "SHOPPING": {
+      "displayName": "Standard Shopping",
+      "advertisingChannelType": "SHOPPING",
+      "advertisingChannelSubType": null,
+      "apiCreationSupport": "SUPPORTED_CREATE_AND_MANAGE",
+      "resourceHierarchy": "Customer -> CampaignBudget -> Campaign(SHOPPING + ShoppingSetting) -> AdGroup(type SHOPPING_PRODUCT_ADS) -> [AdGroupAd(ShoppingProductAdInfo), AdGroupCriterion(product listing groups/subdivision and exclusions)]",
+      "resourceObjects": {
+        "requiredForServing": [
+          "Google Ads and Merchant Center linked",
+          "CampaignBudget",
+          "Campaign with ShoppingSetting(merchant_id and campaign_priority)",
+          "AdGroup of type SHOPPING_PRODUCT_ADS",
+          "shopping product ad and valid feed/product eligibility"
+        ],
+        "typicalChildren": [
+          "ShoppingSetting(merchant_id,campaign_priority,optional feed_label/other supported fields)",
+          "AdGroup(type SHOPPING_PRODUCT_ADS)",
+          "AdGroupAd -> Ad(ShoppingProductAdInfo)",
+          "AdGroupCriterion listing groups/product partitions",
+          "CampaignCriterion for supported location/schedule/device settings",
+          "negative product/listing criteria where supported"
+        ]
+      },
+      "semanticBusinessObjectives": [
+        "PRODUCT_SALES",
+        "SALES"
+      ],
+      "performanceGoalConcepts": [
+        "CLICKS",
+        "CONVERSIONS",
+        "CONVERSION_VALUE"
+      ],
+      "biddingStrategyExamples": [
+        "Manual CPC where supported",
+        "Maximize Clicks where supported",
+        "Maximize Conversion Value with optional target ROAS where eligible",
+        "validate additional strategies against Shopping eligibility"
+      ],
+      "prerequisites": [
+        "Linked Merchant Center account",
+        "Product feed with eligible items",
+        "CampaignBudget and ShoppingSetting"
+      ],
+      "notes": [
+        "Standard Shopping is API-creatable.",
+        "New Smart Shopping campaigns cannot be created; use Performance Max for cross-channel retail.",
+        "AI Max support exists for Search and Shopping as an optional feature, not a new campaign type."
+      ],
+      "documentation": [
+        "https://developers.google.com/google-ads/api/docs/shopping-ads/create-campaign",
+        "https://developers.google.com/google-ads/api/docs/shopping-ads/create-ad-group",
+        "https://developers.google.com/google-ads/api/docs/campaigns/bidding/strategy-types"
+      ]
+    },
+    "APP_CAMPAIGN": {
+      "displayName": "App campaigns",
+      "advertisingChannelType": "MULTI_CHANNEL",
+      "advertisingChannelSubType": "APP_CAMPAIGN | APP_CAMPAIGN_FOR_ENGAGEMENT | APP_CAMPAIGN_FOR_PRE_REGISTRATION",
+      "apiCreationSupport": "SUPPORTED_CREATE_AND_MANAGE_FOR_SUPPORTED_SUBTYPES",
+      "resourceHierarchy": "Customer -> CampaignBudget(non-shared) -> Campaign(MULTI_CHANNEL + AppCampaignSetting/subtype-specific goal) -> AdGroup -> [AdGroupAd -> app-ad asset configuration]; optional AdGroupCriterion for selective optimization/user lists",
+      "resourceObjects": {
+        "requiredForServing": [
+          "CampaignBudget",
+          "Campaign with app_campaign_setting and matching subtype/goal/bidding",
+          "AdGroup",
+          "eligible app ad/assets and app store/app ID details"
+        ],
+        "typicalChildren": [
+          "AppCampaignSetting(app_id,app_store,bidding_strategy_goal_type and subtype-specific fields)",
+          "AdGroup",
+          "AdGroupAd/Ad with supported app ad info and text/image/video assets",
+          "CampaignCriterion(location/language where supported)",
+          "AdGroupCriterion(user list criteria for selected in-app action use cases)",
+          "conversion actions/selective optimization depending on subtype"
+        ]
+      },
+      "semanticBusinessObjectives": [
+        "APP_PROMOTION",
+        "SALES",
+        "ENGAGEMENT"
+      ],
+      "performanceGoalConcepts": [
+        "INSTALLS",
+        "IN_APP_ACTIONS",
+        "IN_APP_ACTION_VALUE",
+        "PRE_REGISTRATION"
+      ],
+      "biddingStrategyExamples": [
+        "Goal-dependent automated bidding; show only options supported by app subtype and goal, such as install/action/value-focused strategies"
+      ],
+      "prerequisites": [
+        "Valid Android/iOS app identification and store presence",
+        "Correct app campaign subtype and goal",
+        "Conversion/in-app event setup for action/value optimization"
+      ],
+      "notes": [
+        "App campaigns have advertising_channel_type MULTI_CHANNEL and a subtype-specific configuration.",
+        "The legacy App Campaign for installs workflow is not supported by the Google Ads API; implement only the currently documented supported subtype/goal combinations.",
+        "Do not offer portfolio strategy or shared campaign budget for App campaigns."
+      ],
+      "documentation": [
+        "https://developers.google.com/google-ads/api/docs/app-campaigns/overview",
+        "https://developers.google.com/google-ads/api/docs/app-campaigns/create-campaign",
+        "https://developers.google.com/google-ads/api/docs/campaigns/bidding/strategy-types"
+      ]
+    },
+    "HOTEL": {
+      "displayName": "Hotel Ads",
+      "advertisingChannelType": "HOTEL",
+      "advertisingChannelSubType": null,
+      "apiCreationSupport": "SUPPORTED_FOR_ALLOWLISTED_ACCOUNTS",
+      "resourceHierarchy": "Customer -> CampaignBudget -> Campaign(HOTEL + HotelSettingInfo) -> AdGroup(type HOTEL_ADS) -> AdGroupAd(HotelAdInfo); optional HotelListingGroupInfo/listing-group criteria",
+      "resourceObjects": {
+        "requiredForServing": [
+          "Hotel Center linked to Google Ads",
+          "allowlisted account access",
+          "CampaignBudget",
+          "Campaign with HotelSettingInfo.hotel_center_id",
+          "Hotel AdGroup and supported ad/resource configuration"
+        ],
+        "typicalChildren": [
+          "HotelSettingInfo(hotel_center_id)",
+          "AdGroup(type HOTEL_ADS)",
+          "AdGroupAd -> Ad(HotelAdInfo)",
+          "Hotel listing groups via supported listing-group criteria",
+          "ad group bids and bid modifiers",
+          "location/schedule criteria where supported"
+        ]
+      },
+      "semanticBusinessObjectives": [
+        "HOTEL_BOOKINGS"
+      ],
+      "performanceGoalConcepts": [
+        "HOTEL_BOOKINGS",
+        "CONVERSION_VALUE"
+      ],
+      "biddingStrategyExamples": [
+        "Percent CPC (classic documented setup)",
+        "Target ROAS or Maximize Conversion Value where supported; check account and current API rules"
+      ],
+      "prerequisites": [
+        "Hotel Center account and linked hotel inventory",
+        "Allowlisted access",
+        "Feeds/pricing configured in Hotel Center/appropriate travel feed systems"
+      ],
+      "notes": [
+        "Hotel Ads API support is allowlist-dependent.",
+        "Hotel feeds and pricing are managed outside Google Ads API in Hotel Center/Travel Partner systems.",
+        "Do not confuse Hotel Ads (HOTEL) with Performance Max for Travel Goals (PERFORMANCE_MAX + TRAVEL_GOALS)."
+      ],
+      "documentation": [
+        "https://developers.google.com/google-ads/api/docs/hotel-ads/overview",
+        "https://developers.google.com/google-ads/api/docs/hotel-ads/create-campaign",
+        "https://developers.google.com/google-ads/api/docs/campaigns/bidding/strategy-types"
+      ]
+    },
+    "PERFORMANCE_MAX_TRAVEL_GOALS": {
+      "displayName": "Performance Max for Travel Goals",
+      "advertisingChannelType": "PERFORMANCE_MAX",
+      "advertisingChannelSubType": "TRAVEL_GOALS",
+      "apiCreationSupport": "SUPPORTED_CREATE_AND_MANAGE_WITH_PREREQUISITES",
+      "resourceHierarchy": "Customer -> CampaignBudget(non-shared, daily) -> Campaign(PERFORMANCE_MAX, subtype TRAVEL_GOALS) -> Hotel property AssetSet(type HOTEL_PROPERTY) -> AssetSetAsset links; Campaign.hotel_property_asset_set -> AssetGroup -> AssetGroupAsset",
+      "resourceObjects": {
+        "requiredForServing": [
+          "CampaignBudget with daily period and not shared",
+          "Campaign with PERFORMANCE_MAX and TRAVEL_GOALS subtype",
+          "hotel_property_asset_set pointing to HotelPropertyAssetSet",
+          "AssetGroup and required AssetGroupAsset resources/assets per campaign rules"
+        ],
+        "typicalChildren": [
+          "AssetSet(type HOTEL_PROPERTY)",
+          "AssetSetAsset",
+          "TravelAssetSuggestionService-suggested assets optional",
+          "AssetGroup",
+          "AssetGroupAsset",
+          "Campaign.hotel_property_asset_set",
+          "CampaignCriterion and conversion goals as supported"
+        ]
+      },
+      "semanticBusinessObjectives": [
+        "HOTEL_BOOKINGS",
+        "SALES"
+      ],
+      "performanceGoalConcepts": [
+        "CONVERSIONS",
+        "CONVERSION_VALUE"
+      ],
+      "biddingStrategyExamples": [
+        "Maximize Conversions with optional target CPA",
+        "Maximize Conversion Value with optional target ROAS"
+      ],
+      "prerequisites": [
+        "Conversion tracking configured",
+        "Hotel property asset set/property data",
+        "Daily, non-shared budget"
+      ],
+      "notes": [
+        "This is a subtype of Performance Max, not a separate advertising_channel_type.",
+        "Requires hotel property asset set and special subtype value TRAVEL_GOALS."
+      ],
+      "documentation": [
+        "https://developers.google.com/google-ads/api/performance-max/getting-started?type=travel-goals",
+        "https://developers.google.com/google-ads/api/performance-max/getting-started",
+        "https://developers.google.com/google-ads/api/docs/campaigns/bidding/strategy-types"
+      ]
+    },
+    "LOCAL_SERVICES_PERFORMANCE_MAX": {
+      "displayName": "Local Services Performance Max",
+      "advertisingChannelType": "PERFORMANCE_MAX",
+      "advertisingChannelSubType": "provider-specific Local Services PMax settings (v26)",
+      "apiCreationSupport": "SUPPORTED_CREATE_WITH_V26_SPECIFIC_REQUIRED_FIELDS_AND_ACCOUNT_ELIGIBILITY",
+      "resourceHierarchy": "Customer -> CampaignBudget -> Campaign(PERFORMANCE_MAX + LocalServicesPmaxCampaignSettings) -> AssetGroup -> AssetGroupAsset; specialized Local Services listing/service identifiers and country settings",
+      "resourceObjects": {
+        "requiredForServing": [
+          "CampaignBudget",
+          "Campaign with required LocalServicesPmaxCampaignSettings fields including listing_id and country_code in v26",
+          "AssetGroup and required assets subject to Local Services PMax rules"
+        ],
+        "typicalChildren": [
+          "LocalServicesPmaxCampaignSettings(listing_id,country_code and other required supported fields)",
+          "AssetGroup",
+          "AssetGroupAsset",
+          "service/location/provider criteria as supported",
+          "ConversionGoalCampaignConfig if needed"
+        ]
+      },
+      "semanticBusinessObjectives": [
+        "LEADS",
+        "LOCAL_SERVICE"
+      ],
+      "performanceGoalConcepts": [
+        "LEADS",
+        "CONVERSIONS"
+      ],
+      "biddingStrategyExamples": [
+        "Use only strategy types explicitly supported for this special PMax subtype; runtime validate required fields/eligibility"
+      ],
+      "prerequisites": [
+        "Eligible Local Services listing/provider/account",
+        "v26-specific required listing_id and country_code",
+        "Required creative and location/service configuration"
+      ],
+      "notes": [
+        "This is a special PMax subtype/configuration, not the legacy LOCAL_SERVICES advertising_channel_type.",
+        "Google Ads API v26 release notes identify listing_id and country_code as required at creation. Treat it as an advanced later feature, not the default campaign builder."
+      ],
+      "documentation": [
+        "https://developers.google.com/google-ads/api/docs/release-notes",
+        "https://developers.google.com/google-ads/api/performance-max/getting-started",
+        "https://developers.google.com/google-ads/api/fields/v26/campaign"
+      ]
+    },
+    "TRAVEL_ACTIVITIES": {
+      "displayName": "Travel Activities",
+      "advertisingChannelType": "TRAVEL",
+      "advertisingChannelSubType": "TRAVEL_ACTIVITIES",
+      "apiCreationSupport": "SPECIALIZED_CHECK_API_ELIGIBILITY_BEFORE_EXPOSING_CREATE",
+      "resourceHierarchy": "Customer -> CampaignBudget -> Campaign(TRAVEL + TRAVEL_ACTIVITIES subtype) -> activity-related campaign/ad-group/criteria resources as permitted for the account and API release",
+      "resourceObjects": {
+        "typicalChildren": [
+          "Travel/activity-specific campaign settings",
+          "Travel activity group/criterion resources where enabled",
+          "campaign budget and bidding configuration"
+        ],
+        "requiredForServing": [
+          "Must be established from the current v26 travel-activities-specific API guide and eligibility; do not infer solely from enum existence"
+        ]
+      },
+      "semanticBusinessObjectives": [
+        "TRAVEL_BOOKINGS"
+      ],
+      "performanceGoalConcepts": [
+        "BOOKINGS",
+        "CONVERSION_VALUE"
+      ],
+      "biddingStrategyExamples": [
+        "Only strategies accepted by the travel-activities-specific API flow"
+      ],
+      "prerequisites": [
+        "Specialized travel activity inventory/account eligibility"
+      ],
+      "notes": [
+        "The v26 field reference includes TRAVEL and TRAVEL_ACTIVITIES enum values; an enum value alone is not proof the workflow is generally available or supports all create operations."
+      ],
+      "documentation": [
+        "https://developers.google.com/google-ads/api/fields/v26/campaign",
+        "https://developers.google.com/google-ads/api/docs/release-notes"
+      ]
+    },
+    "VIDEO": {
+      "displayName": "Legacy Video campaigns",
+      "advertisingChannelType": "VIDEO",
+      "advertisingChannelSubType": null,
+      "apiCreationSupport": "READ_AND_REPORT_ONLY_FOR_CAMPAIGN_MANAGEMENT",
+      "resourceHierarchy": "Existing resources may appear as Campaign(VIDEO) -> AdGroup -> AdGroupAd/Video ads and criteria; use for reporting/read operations only",
+      "resourceObjects": {
+        "readableChildren": [
+          "Campaign",
+          "AdGroup",
+          "AdGroupAd",
+          "Video/criteria/reporting resources"
+        ],
+        "createOrUpdateChildren": []
+      },
+      "semanticBusinessObjectives": [
+        "AWARENESS_REACH",
+        "ENGAGEMENT",
+        "WEBSITE_TRAFFIC"
+      ],
+      "performanceGoalConcepts": [
+        "VIEWS",
+        "REACH",
+        "CLICKS",
+        "CONVERSIONS"
+      ],
+      "biddingStrategyExamples": [
+        "Do not expose creation/update bidding choices through the Google Ads API for legacy Video campaigns"
+      ],
+      "prerequisites": [],
+      "notes": [
+        "Google Ads API documentation says Video campaigns can be queried/reported but cannot be created or updated through the API.",
+        "For new programmatic video workflows, evaluate Demand Gen or Performance Max instead."
+      ],
+      "documentation": [
+        "https://developers.google.com/google-ads/api/docs/video/overview",
+        "https://developers.google.com/google-ads/api/docs/campaigns/overview"
+      ]
+    },
+    "SMART": {
+      "displayName": "Smart campaigns",
+      "advertisingChannelType": "SMART",
+      "advertisingChannelSubType": "SMART_CAMPAIGN",
+      "apiCreationSupport": "CREATE_DEPRECATED_FROM_2026-09-23; EXISTING_SETTINGS_CAN_BE_UPDATED",
+      "resourceHierarchy": "Existing campaign: Customer -> CampaignBudget -> Campaign(SMART/SMART_CAMPAIGN) -> SmartCampaignSetting and supported existing campaign resources",
+      "resourceObjects": {
+        "legacyChildren": [
+          "SmartCampaignSetting",
+          "SmartCampaignSearchTermView for reporting",
+          "campaign budget and supported existing settings"
+        ],
+        "newCreationChildren": []
+      },
+      "semanticBusinessObjectives": [
+        "LEADS",
+        "WEBSITE_TRAFFIC",
+        "LOCAL_SERVICE"
+      ],
+      "performanceGoalConcepts": [
+        "CLICKS",
+        "CALLS",
+        "LEADS"
+      ],
+      "biddingStrategyExamples": [
+        "Do not expose new Smart campaign bid setup; only supported management of existing campaigns"
+      ],
+      "prerequisites": [],
+      "notes": [
+        "The current official Smart campaign guide says creation is deprecated starting September 23, 2026; existing settings can still be updated."
+      ],
+      "documentation": [
+        "https://developers.google.com/google-ads/api/docs/smart-campaigns/create-campaign",
+        "https://developers.google.com/google-ads/api/fields/v26/campaign"
+      ]
+    },
+    "LOCAL_SERVICES_LEGACY": {
+      "displayName": "Legacy Local Services Ads",
+      "advertisingChannelType": "LOCAL_SERVICES",
+      "advertisingChannelSubType": null,
+      "apiCreationSupport": "EXISTING_CAMPAIGNS_ONLY_FOR_SUPPORTED_OPERATIONS",
+      "resourceHierarchy": "Existing Campaign(LOCAL_SERVICES) and reporting/lead resources; no normal create-new Campaign -> AdGroup -> Ad flow via API",
+      "resourceObjects": {
+        "supportedExistingOperations": [
+          "retrieve/report",
+          "supported status and budget edits",
+          "supported bidding/schedule/location/service-type settings",
+          "lead feedback where documented"
+        ],
+        "unsupportedCreateOperations": [
+          "create/remove Local Services campaigns",
+          "create/modify/delete typical sub-entities such as ad groups, ads or criteria"
+        ]
+      },
+      "semanticBusinessObjectives": [
+        "LEADS",
+        "LOCAL_SERVICE"
+      ],
+      "performanceGoalConcepts": [
+        "LEADS",
+        "CALLS"
+      ],
+      "biddingStrategyExamples": [
+        "Manual CPA or Maximize Conversions only where documented for existing Local Services campaign contexts"
+      ],
+      "prerequisites": [
+        "Existing Local Services Ads account and supported access"
+      ],
+      "notes": [
+        "Do not confuse this legacy channel with the newer Local Services Performance Max configuration."
+      ],
+      "documentation": [
+        "https://developers.google.com/google-ads/api/docs/campaigns/local-service-campaigns",
+        "https://developers.google.com/google-ads/api/fields/v26/campaign"
+      ]
+    },
+    "LOCAL_LEGACY": {
+      "displayName": "Legacy Local campaigns",
+      "advertisingChannelType": "LOCAL",
+      "advertisingChannelSubType": null,
+      "apiCreationSupport": "DO_NOT_ASSUME_NEW_CAMPAIGN_CREATION; CHECK MIGRATION/ACCOUNT_SUPPORT",
+      "resourceHierarchy": "Legacy/existing Local campaign resources; modern local objectives are commonly handled via Performance Max or eligible Local Services products",
+      "resourceObjects": {
+        "legacyChildren": [
+          "existing campaign and any exposed resources depending on account/API support"
+        ]
+      },
+      "semanticBusinessObjectives": [
+        "STORE_VISITS",
+        "LOCAL_ACTIONS"
+      ],
+      "performanceGoalConcepts": [
+        "STORE_VISITS",
+        "LOCAL_ACTIONS"
+      ],
+      "biddingStrategyExamples": [
+        "Use only options returned as supported for the existing resource/account"
+      ],
+      "prerequisites": [],
+      "notes": [
+        "LOCAL remains an enum in the v26 Campaign field reference, but support for a legacy channel enum does not imply a modern general-purpose create workflow. Verify specific docs/account support before implementation."
+      ],
+      "documentation": [
+        "https://developers.google.com/google-ads/api/fields/v26/campaign",
+        "https://developers.google.com/google-ads/api/docs/campaigns/overview"
+      ]
+    }
+  },
+  "campaignSelectionRecommendations": {
+    "mvpCreateTypes": [
+      "SEARCH",
+      "DISPLAY",
+      "PERFORMANCE_MAX",
+      "DEMAND_GEN",
+      "SHOPPING"
+    ],
+    "laterAdvancedTypes": [
+      "APP_CAMPAIGN",
+      "PERFORMANCE_MAX_TRAVEL_GOALS",
+      "HOTEL",
+      "LOCAL_SERVICES_PERFORMANCE_MAX"
+    ],
+    "notDefaultForNewCreation": [
+      "VIDEO",
+      "SMART",
+      "LOCAL_SERVICES_LEGACY",
+      "LOCAL_LEGACY",
+      "TRAVEL_ACTIVITIES"
+    ],
+    "notes": [
+      "For a general business website, Search and Performance Max are practical first integrations.",
+      "For e-commerce, add Standard Shopping after Merchant Center linkage; Performance Max can also support retail.",
+      "For app promotion, require app-specific inputs and subtype selection.",
+      "Treat Hotel and Local Services as vertical-specific products with specialized onboarding."
+    ]
+  },
+  "runtimeCapabilityContract": {
+    "designPrinciple": "Frontend renders the form from backend-supplied capabilities; do not hardcode a single global objective/performance-goal/bidding list.",
+    "recommendedEndpoint": "GET /api/providers/google/campaign-capabilities?customerId={id}&campaignType={type}&subType={subtype}",
+    "exampleResponse": {
+      "provider": "google_ads",
+      "apiVersion": "v26",
+      "campaignType": "SEARCH",
+      "subType": null,
+      "businessObjectives": [
+        "SALES",
+        "LEADS",
+        "WEBSITE_TRAFFIC"
+      ],
+      "performanceGoals": [
+        "CLICKS",
+        "CONVERSIONS",
+        "CONVERSION_VALUE",
+        "SEARCH_IMPRESSION_SHARE"
+      ],
+      "biddingStrategies": [
+        "MANUAL_CPC",
+        "MAXIMIZE_CLICKS",
+        "MAXIMIZE_CONVERSIONS",
+        "MAXIMIZE_CONVERSION_VALUE",
+        "TARGET_IMPRESSION_SHARE"
+      ],
+      "requiredFields": [
+        "campaignName",
+        "destination.url",
+        "budget.amount",
+        "market.locations",
+        "adGroups[].keywords",
+        "ads[].responsiveSearchAd.headlines",
+        "ads[].responsiveSearchAd.descriptions"
+      ],
+      "conditionalFields": {
+        "MAXIMIZE_CONVERSIONS": [
+          "bidding.targetCpaMicros optional"
+        ],
+        "MAXIMIZE_CONVERSION_VALUE": [
+          "bidding.targetRoas optional"
+        ],
+        "TARGET_IMPRESSION_SHARE": [
+          "bidding.targetImpressionShareLocation",
+          "bidding.targetImpressionSharePercent",
+          "bidding.maxCpcBidCeilingMicros"
+        ]
+      },
+      "validationWarnings": [
+        "Bidding choices are illustrative until validated for the exact campaign/account setup.",
+        "Final eligible choices must be checked against current v26 enums/rules and account state."
+      ]
+    },
+    "validationPipeline": [
+      "validate OAuth/account access",
+      "validate campaign type/subtype creation support",
+      "validate Merchant Center/Hotel Center/app/listing prerequisites",
+      "validate budget period and shared-budget restrictions",
+      "validate objective-to-conversion mapping",
+      "validate bidding scheme and conditional values",
+      "validate targeting level and criteria types",
+      "validate required ad/asset fields",
+      "create paused where supported",
+      "persist every resource name/id",
+      "reconcile uncertain API timeout before retry"
+    ]
+  },
+  "officialReferences": [
+    {
+      "topic": "campaign_overview",
+      "url": "https://developers.google.com/google-ads/api/docs/campaigns/overview"
+    },
+    {
+      "topic": "api_structure",
+      "url": "https://developers.google.com/google-ads/api/docs/concepts/api-structure"
+    },
+    {
+      "topic": "campaign_resource_v26",
+      "url": "https://developers.google.com/google-ads/api/fields/v26/campaign"
+    },
+    {
+      "topic": "bidding_strategies",
+      "url": "https://developers.google.com/google-ads/api/docs/campaigns/bidding/strategy-types"
+    },
+    {
+      "topic": "search",
+      "url": "https://developers.google.com/google-ads/api/docs/campaigns/search-campaigns/getting-started"
+    },
+    {
+      "topic": "responsive_search_ads",
+      "url": "https://developers.google.com/google-ads/api/docs/responsive-search-ads/create-responsive-search-ads"
+    },
+    {
+      "topic": "display",
+      "url": "https://developers.google.com/google-ads/api/docs/ads/ad-types"
+    },
+    {
+      "topic": "performance_max",
+      "url": "https://developers.google.com/google-ads/api/performance-max/getting-started"
+    },
+    {
+      "topic": "pmax_asset_groups",
+      "url": "https://developers.google.com/google-ads/api/performance-max/asset-groups"
+    },
+    {
+      "topic": "pmax_travel_goals",
+      "url": "https://developers.google.com/google-ads/api/performance-max/getting-started?type=travel-goals"
+    },
+    {
+      "topic": "demand_gen",
+      "url": "https://developers.google.com/google-ads/api/docs/demand-gen/create-campaign"
+    },
+    {
+      "topic": "shopping",
+      "url": "https://developers.google.com/google-ads/api/docs/shopping-ads/create-campaign"
+    },
+    {
+      "topic": "shopping_ad_group",
+      "url": "https://developers.google.com/google-ads/api/docs/shopping-ads/create-ad-group"
+    },
+    {
+      "topic": "app_campaigns",
+      "url": "https://developers.google.com/google-ads/api/docs/app-campaigns/overview"
+    },
+    {
+      "topic": "app_create",
+      "url": "https://developers.google.com/google-ads/api/docs/app-campaigns/create-campaign"
+    },
+    {
+      "topic": "hotel",
+      "url": "https://developers.google.com/google-ads/api/docs/hotel-ads/overview"
+    },
+    {
+      "topic": "hotel_create",
+      "url": "https://developers.google.com/google-ads/api/docs/hotel-ads/create-campaign"
+    },
+    {
+      "topic": "video",
+      "url": "https://developers.google.com/google-ads/api/docs/video/overview"
+    },
+    {
+      "topic": "smart",
+      "url": "https://developers.google.com/google-ads/api/docs/smart-campaigns/create-campaign"
+    },
+    {
+      "topic": "local_services",
+      "url": "https://developers.google.com/google-ads/api/docs/campaigns/local-service-campaigns"
+    },
+    {
+      "topic": "ai_max",
+      "url": "https://developers.google.com/google-ads/api/docs/campaigns/ai-max-for-search-campaigns/getting-started"
+    },
+    {
+      "topic": "release_notes",
+      "url": "https://developers.google.com/google-ads/api/docs/release-notes"
+    }
+  ]
+}

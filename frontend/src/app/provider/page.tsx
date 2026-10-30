@@ -108,6 +108,7 @@ export default function ProviderPage() {
 
   const [isLoading, setIsLoading] = useState(true);
   const [isConnectingGoogle, setIsConnectingGoogle] = useState(false);
+  const [isConnectingMeta, setIsConnectingMeta] = useState(false);
   const [savingProvider, setSavingProvider] = useState<ProviderName | null>(
     null,
   );
@@ -160,6 +161,7 @@ export default function ProviderPage() {
         }
 
         if (cancelled) return;
+        console.log("data : ", data.providers);
 
         setGoogle(normalizeProvider(data.providers?.googleAds));
         setMeta(normalizeProvider(data.providers?.metaAds));
@@ -186,6 +188,39 @@ export default function ProviderPage() {
     };
   }, [getToken, isLoaded, isSignedIn]);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+
+    if (params.get("google") === "connected") {
+      setNotice(
+        "Google Ads authorization completed. Your connection details have been refreshed.",
+      );
+    }
+    console.log(params.get("meta"));
+
+    if (params.get("meta") === "connected") {
+      setNotice(
+        "Meta Ads connected successfully. Your advertising accounts have been loaded.",
+      );
+    }
+
+    if (params.get("meta") === "error") {
+      const reason = params.get("reason");
+
+      const messages: Record<string, string> = {
+        authorization_denied: "Meta Ads authorization was denied.",
+        invalid_callback: "Invalid Meta OAuth callback. Please try again.",
+        invalid_or_expired_state:
+          "Meta authorization expired or could not be verified. Please reconnect.",
+        token_exchange_failed: "Meta token exchange failed. Please reconnect.",
+        callback_failed: "Meta connection failed. Please try again.",
+      };
+
+      setError(
+        messages[reason || ""] || "Unable to complete Meta Ads authorization.",
+      );
+    }
+  }, []);
   // Show a message after Google OAuth redirects back to this page.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -237,6 +272,45 @@ export default function ProviderPage() {
       );
 
       setIsConnectingGoogle(false);
+    }
+  };
+  const connectMeta = async () => {
+    try {
+      setIsConnectingMeta(true);
+      setError("");
+      setNotice("");
+
+      const token = await getToken();
+
+      if (!token) {
+        throw new Error("Please sign in first.");
+      }
+
+      const response = await fetch(`${API_BASE_URL}/api/meta-ads/auth/meta`, {
+        method: "GET",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+        cache: "no-store",
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data.authUrl) {
+        throw new Error(
+          data.message || "Unable to start Meta Ads authorization.",
+        );
+      }
+
+      window.location.assign(data.authUrl);
+    } catch (err) {
+      console.error("Meta connection error:", err);
+
+      setError(
+        err instanceof Error ? err.message : "Unable to connect Meta Ads.",
+      );
+
+      setIsConnectingMeta(false);
     }
   };
 
@@ -557,12 +631,25 @@ export default function ProviderPage() {
 
               {!meta.connected && (
                 <div className="mt-5 rounded-xl border border-blue-100 bg-blue-50 p-3 text-sm text-blue-800">
-                  Meta Ads OAuth and account selection will be connected in the
-                  next integration step.
+                  Connect your Meta Business account to retrieve your available
+                  Facebook and Instagram advertising accounts.
                 </div>
               )}
 
               <button
+                type="button"
+                onClick={connectMeta}
+                disabled={isConnectingMeta || isLoading}
+                className="mt-6 w-full rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isConnectingMeta
+                  ? "Redirecting to Meta..."
+                  : meta.connected
+                    ? "Reconnect Meta Ads"
+                    : "Connect Meta Ads"}
+              </button>
+
+              {/* <button
                 type="button"
                 disabled
                 className="mt-6 w-full cursor-not-allowed rounded-xl bg-slate-200 px-4 py-3 text-sm font-semibold text-slate-500"
@@ -570,7 +657,7 @@ export default function ProviderPage() {
                 {meta.connected
                   ? "Meta Ads Connected"
                   : "Meta Ads Integration Coming Next"}
-              </button>
+              </button> */}
             </section>
           </div>
         </div>
@@ -582,10 +669,9 @@ export default function ProviderPage() {
           </p>
 
           <p className="mt-1 text-sm leading-6 text-blue-800">
-            Connection details and selected accounts are loaded from your
-            backend. Provider access tokens remain on the backend and are not
-            displayed in the frontend. Meta Ads connection is not yet enabled
-            through this page.
+            Connection details and selected advertising accounts are loaded from
+            your backend. Google Ads and Meta Ads access tokens remain encrypted
+            on the backend and are never exposed to the frontend.
           </p>
         </div>
       </div>

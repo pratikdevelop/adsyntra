@@ -28,7 +28,7 @@ const app = express();
 app.use(authRoutes);
 
 // Every remaining Meta API route is user-scoped. The middleware reads the
-// verified Clerk req.auth.userId and creates an async request context used by
+// verified Clerk req.auth()?.userId and creates an async request context used by
 // legacy routes that still call `await readAccessToken()`.
 app.use(metaUserContextMiddleware);
 

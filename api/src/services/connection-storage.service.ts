@@ -308,7 +308,7 @@ export async function saveProviderTokens(
 
         // A persistent connection requires a refresh token.
         providerConnection.connected =
-            providerConnection.tokens.refreshToken !== null;
+            providerConnection.tokens.refreshToken !== null || (provider === 'metaAds' && providerConnection.tokens.accessToken !== null);
 
         connection.updatedAt = new Date().toISOString();
         store[userId] = connection;

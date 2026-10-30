@@ -60,7 +60,7 @@ type MetaAccountsResponse = {
 type ClerkRequest = Request & { auth?: { userId?: string } };
 
 function getAuthenticatedUserId(req: Request): string | null {
-  return (req as ClerkRequest).auth?.userId ?? null;
+  return req.auth()?.userId ?? null;
 }
 
 function assertOAuthConfig(): void {
@@ -140,7 +140,11 @@ function providerPageUrl(params: Record<string, string>): string {
   for (const [key, value] of Object.entries(params)) {
     url.searchParams.set(key, value);
   }
-  return url.toString();
+  console.log(
+    url.href.toString()
+  );
+
+  return url.href.toString();
 }
 
 async function requestMetaJson<T>(url: URL): Promise<T> {
@@ -355,7 +359,7 @@ router.get("/auth/meta/callback", async (req, res) => {
     }
 
     return res.redirect(
-      providerPageUrl({ meta: "connected", metaAccounts: accountsLoaded }),
+      providerPageUrl({ meta: "connected" }),
     );
   } catch (error) {
     console.error(

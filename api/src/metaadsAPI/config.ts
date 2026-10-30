@@ -6,7 +6,7 @@ import { getProviderAccessToken } from "../services/provider-token.service.js";
 /**
  * Compatibility bridge for the existing Meta route modules.
  *
- * Clerk's verified req.auth.userId is used to load this user's Meta token once
+ * Clerk's verified req.auth()?.userId is used to load this user's Meta token once
  * per request. AsyncLocalStorage keeps the token isolated between concurrent
  * requests, so legacy route handlers can continue using `await readAccessToken()`.
  * Never populate this context from a userId supplied in the request body/query.

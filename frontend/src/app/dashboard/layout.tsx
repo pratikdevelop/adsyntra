@@ -2,7 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-
+import {
+  ClerkProvider,
+  Show,
+  SignInButton,
+  SignUpButton,
+  UserButton,
+} from "@clerk/nextjs";
+import { Suspense } from "react";
 const navigation = [
   {
     label: "Overview",
@@ -99,6 +106,7 @@ export default function DashboardLayout({
 
                   {item.label}
                 </Link>
+
               );
             })}
           </nav>
@@ -192,12 +200,21 @@ export default function DashboardLayout({
             </p>
           </div>
 
+          <div className="flex items-center justify-end space-x-6">
+
           <Link
             href="/provider"
             className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
           >
             Manage Connections
           </Link>
+          <Suspense>
+
+            <Show when="signed-in">
+            <UserButton />
+          </Show>
+          </Suspense>
+              </div>
         </header>
 
         {/* Current Page */}

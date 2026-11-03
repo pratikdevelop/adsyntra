@@ -16,12 +16,12 @@ export default function DashboardPage() {
           </p>
         </div>
 
-        <Link
+        {/* <Link
           href="/dashboard/create-campaign"
           className="rounded-xl bg-blue-600 px-5 py-3 text-center text-sm font-semibold text-white hover:bg-blue-700"
         >
           + Create Campaign
-        </Link>
+        </Link> */}
       </div>
 
       <div className="mt-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">

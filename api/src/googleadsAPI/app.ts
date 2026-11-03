@@ -13,7 +13,6 @@ import adRetrievalRouter from "./routes/adRetrieval.routes.js";
 
 const app = express();
 
-
 // Google Ads routes
 app.use(biddingRouter);
 app.use(adsGroupRouter);

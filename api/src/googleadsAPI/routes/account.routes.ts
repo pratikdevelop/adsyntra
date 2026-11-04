@@ -9,7 +9,7 @@ import {
     exchangeGoogleAuthorizationCode,
     refreshGoogleAccessToken,
     youtubeOAuth,
-} from "../config.js";
+} from "../../config/google.js";
 
 import {
     getUserConnection,
@@ -20,7 +20,7 @@ import {
 const router = express.Router();
 
 const FRONTEND_URL =
-    process.env.FRONTEND_URL || "http://localhost:3000";
+    process.env[`FRONTEND_URL`] || "http://localhost:3000";
 
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
@@ -180,7 +180,7 @@ router.get("/accounts", async (req, res) => {
         }
 
         const developerToken =
-            process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
+            process.env[`GOOGLE_ADS_DEVELOPER_TOKEN`];
 
         if (!developerToken) {
             return res.status(500).json({

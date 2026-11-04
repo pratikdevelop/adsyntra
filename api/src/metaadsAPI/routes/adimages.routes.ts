@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import multer from "multer";
-import readAccessToken from "../config.js";
+import readAccessToken from "../../config/meta.js";
 
 
 const router = Router();

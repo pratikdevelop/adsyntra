@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
 
 // Adjust this import path to your existing token helper.
-import readAccessToken from "../config.js";
+import readAccessToken from "../../config/meta.js";
 
 const router = Router();
 

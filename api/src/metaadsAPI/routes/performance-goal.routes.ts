@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from "express";
-import readAccessToken from "../config.js";
+import readAccessToken from "../../config/meta.js";
 
 const router = Router();
 

@@ -1,7 +1,7 @@
 import "dotenv/config";
 import express from "express";
 
-import readAccessToken, { metaUserContextMiddleware } from "./config.js";
+import readAccessToken, { metaUserContextMiddleware } from "../config/meta.js";
 
 import authRoutes from "./routes/auth.routes.js";
 import metaRoutes from "./routes/meta.routes.js";

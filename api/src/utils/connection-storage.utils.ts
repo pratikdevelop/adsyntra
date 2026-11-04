@@ -1,15 +1,15 @@
 
-import fs from "node:fs/promises";
-import path from "node:path";
 import crypto from "node:crypto";
 
-const CONNECTION_FILE = path.join(
-    process.cwd(),
-    "data",
-    "user-connections.json"
-);
+import UserModel from "../models/user.model.js";
+import ProviderConnectionModel, {
+    type AdvertisingProvider,
+    type EncryptedSecret,
+    type ProviderConnectionDocument,
+} from "../models/provider-connection.model.js";
+import AdAccountModel from "../models/ad-account.model.js";
 
-export type ProviderName = "googleAds" | "metaAds";
+export type ProviderName = AdvertisingProvider;
 
 export interface ProviderTokens {
     accessToken: string;
@@ -22,7 +22,6 @@ export interface ProviderConnection {
     tokens: ProviderTokens | null;
     accounts: unknown[];
     selectedAccountId: string | null;
-
 }
 
 export interface UserConnection {
@@ -37,53 +36,6 @@ export interface UserConnection {
     updatedAt: string;
 }
 
-interface EncryptedToken {
-    version: 1;
-    iv: string;
-    authTag: string;
-    ciphertext: string;
-}
-
-interface StoredProviderTokens {
-    accessToken: EncryptedToken;
-    refreshToken: EncryptedToken | null;
-    expiryDate: number | null;
-}
-
-interface StoredProviderConnection {
-    connected: boolean;
-    tokens: StoredProviderTokens | null;
-    accounts: unknown[];
-    selectedAccountId: string | null;
-
-}
-
-interface StoredUserConnection {
-    clerk: UserConnection["clerk"];
-    providers: {
-        googleAds: StoredProviderConnection;
-        metaAds: StoredProviderConnection;
-    };
-    updatedAt: string;
-}
-
-type ConnectionStore = Record<string, StoredUserConnection>;
-
-// Serialize read-modify-write operations within this Node.js process.
-let writeQueue: Promise<void> = Promise.resolve();
-
-function withStoreLock<T>(operation: () => Promise<T>): Promise<T> {
-    const result = writeQueue.then(operation, operation);
-
-    writeQueue = result.then(
-        () => undefined,
-        () => undefined
-    );
-
-    return result;
-}
-
-// TOKEN_ENCRYPTION_KEY must decode to exactly 32 bytes.
 function getEncryptionKey(): Buffer {
     const encodedKey = process.env.TOKEN_ENCRYPTION_KEY;
 
@@ -102,8 +54,9 @@ function getEncryptionKey(): Buffer {
     return key;
 }
 
-function encryptToken(value: string): EncryptedToken {
+function encryptToken(value: string): EncryptedSecret {
     const iv = crypto.randomBytes(12);
+
     const cipher = crypto.createCipheriv(
         "aes-256-gcm",
         getEncryptionKey(),
@@ -123,7 +76,7 @@ function encryptToken(value: string): EncryptedToken {
     };
 }
 
-function decryptToken(value: EncryptedToken): string {
+function decryptToken(value: EncryptedSecret): string {
     if (value.version !== 1) {
         throw new Error("Unsupported encrypted token format.");
     }
@@ -144,201 +97,76 @@ function decryptToken(value: EncryptedToken): string {
     return plaintext.toString("utf8");
 }
 
-async function readStore(): Promise<ConnectionStore> {
-    try {
-        const content = await fs.readFile(CONNECTION_FILE, "utf8");
-
-        // Support a new or currently empty JSON file.
-        if (!content.trim()) {
-            return {};
-        }
-
-        return JSON.parse(content) as ConnectionStore;
-    } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-            return {};
-        }
-
-        throw error;
+async function ensureUserExists(userId: string): Promise<void> {
+    if (!userId?.trim()) {
+        throw new Error("User ID is required.");
     }
+
+    await UserModel.updateOne(
+        { clerkUserId: userId },
+        {
+            $setOnInsert: {
+                clerkUserId: userId,
+            },
+        },
+        {
+            upsert: true,
+            setDefaultsOnInsert: true,
+        }
+    ).exec();
 }
 
-async function writeStore(store: ConnectionStore): Promise<void> {
-    await fs.mkdir(path.dirname(CONNECTION_FILE), {
-        recursive: true,
-    });
+async function findProviderConnection(
+    userId: string,
+    provider: ProviderName,
+    includeCredentials = false
+): Promise<ProviderConnectionDocument | null> {
+    let query = ProviderConnectionModel.find({
+        userId,
+        provider,
+    }).sort({ updatedAt: -1 }).limit(2);
 
-    const temporaryFile = `${CONNECTION_FILE}.${process.pid}.${crypto.randomUUID()}.tmp`;
+    if (includeCredentials) {
+        query = query.select("+credentials");
+    }
 
-    try {
-        await fs.writeFile(
-            temporaryFile,
-            JSON.stringify(store, null, 2),
-            { encoding: "utf8", mode: 0o600 }
+    const connections = await query.exec();
+
+    if (connections.length > 1) {
+        throw new Error(
+            `Multiple ${provider} connections exist for this user. ` +
+            "The current connection API requires a single provider identity."
         );
-
-        await fs.rename(temporaryFile, CONNECTION_FILE);
-    } catch (error) {
-        await fs.unlink(temporaryFile).catch(() => undefined);
-        throw error;
     }
-}
 
-function createEmptyConnection(userId: string): StoredUserConnection {
-    const emptyProvider = (): StoredProviderConnection => ({
+    return connections[0] ?? null;
+}
+function createEmptyProvider(): ProviderConnection {
+    return {
         connected: false,
         tokens: null,
         accounts: [],
-        selectedAccountId: null
-
-    });
-
-    return {
-        clerk: { userId },
-        providers: {
-            googleAds: emptyProvider(),
-            metaAds: emptyProvider(),
-        },
-        updatedAt: new Date().toISOString(),
+        selectedAccountId: null,
     };
 }
 
-function decryptProvider(
-    provider: StoredProviderConnection
-): ProviderConnection {
-    if (!provider.tokens) {
-        return {
-            connected: provider.connected,
-            tokens: null,
-            accounts: provider.accounts,
-            selectedAccountId: provider.selectedAccountId ?? null,
-        };
+function decryptProviderTokens(
+    connection: ProviderConnectionDocument | null
+): ProviderTokens | null {
+    const credentials = connection?.credentials;
+
+    if (!credentials) {
+        return null;
     }
 
     return {
-        connected: provider.connected,
-        accounts: provider.accounts,
-        selectedAccountId: provider.selectedAccountId ?? null,
-        tokens: {
-            accessToken: decryptToken(provider.tokens.accessToken),
-            refreshToken: provider.tokens.refreshToken
-                ? decryptToken(provider.tokens.refreshToken)
-                : null,
-            expiryDate: provider.tokens.expiryDate,
-        },
+        accessToken: decryptToken(credentials.accessToken),
+        refreshToken: credentials.refreshToken
+            ? decryptToken(credentials.refreshToken)
+            : null,
+        expiryDate: credentials.expiresAt?.getTime() ?? null,
     };
 }
-
-function decryptConnection(
-    connection: StoredUserConnection
-): UserConnection {
-    return {
-        clerk: connection.clerk,
-        updatedAt: connection.updatedAt,
-        providers: {
-            googleAds: decryptProvider(connection.providers.googleAds),
-            metaAds: decryptProvider(connection.providers.metaAds),
-        },
-    };
-}
-
-export async function getUserConnection(
-    userId: string
-): Promise<UserConnection | null> {
-    const store = await readStore();
-    const connection = store[userId];
-
-    return connection ? decryptConnection(connection) : null;
-}
-
-export async function getOrCreateUserConnection(
-    userId: string
-): Promise<UserConnection> {
-    const connection = await withStoreLock(async () => {
-        const store = await readStore();
-
-        if (!store[userId]) {
-            store[userId] = createEmptyConnection(userId);
-            await writeStore(store);
-        }
-
-        return store[userId];
-    });
-
-    return decryptConnection(connection);
-}
-
-// Save tokens for one provider without changing the other provider.
-// An omitted or null refresh token preserves the existing refresh token.
-export async function saveProviderTokens(
-    userId: string,
-    provider: ProviderName,
-    tokens: {
-        accessToken: string;
-        refreshToken?: string | null;
-        expiryDate?: number | null;
-    }
-): Promise<void> {
-    if (!tokens.accessToken) {
-        throw new Error("Access token is required.");
-    }
-
-    await withStoreLock(async () => {
-        const store = await readStore();
-
-        const connection =
-            store[userId] ?? createEmptyConnection(userId);
-
-        const providerConnection = connection.providers[provider];
-        const existingTokens = providerConnection.tokens;
-
-        const refreshToken =
-            tokens.refreshToken || null;
-
-        providerConnection.tokens = {
-            accessToken: encryptToken(tokens.accessToken),
-            refreshToken: refreshToken
-                ? encryptToken(refreshToken)
-                : existingTokens?.refreshToken ?? null,
-            expiryDate:
-                tokens.expiryDate ??
-                existingTokens?.expiryDate ??
-                null,
-        };
-
-        // A persistent connection requires a refresh token.
-        providerConnection.connected =
-            providerConnection.tokens.refreshToken !== null || (provider === 'metaAds' && providerConnection.tokens.accessToken !== null);
-
-        connection.updatedAt = new Date().toISOString();
-        store[userId] = connection;
-
-        await writeStore(store);
-    });
-}
-
-// Save account information without changing the user's tokens
-// or the other provider's information.
-export async function saveProviderAccounts(
-    userId: string,
-    provider: ProviderName,
-    accounts: unknown[]
-): Promise<void> {
-    await withStoreLock(async () => {
-        const store = await readStore();
-
-        const connection =
-            store[userId] ?? createEmptyConnection(userId);
-
-        connection.providers[provider].accounts = accounts;
-        connection.updatedAt = new Date().toISOString();
-
-        store[userId] = connection;
-
-        await writeStore(store);
-    });
-}
-
 
 function getAccountId(account: unknown): string | null {
     if (typeof account === "string") {
@@ -364,36 +192,427 @@ function getAccountId(account: unknown): string | null {
         : null;
 }
 
+function getAccountName(account: unknown, accountId: string): string {
+    if (!account || typeof account !== "object") {
+        return accountId;
+    }
+
+    const item = account as Record<string, unknown>;
+
+    const name =
+        item.name ??
+        item.accountName ??
+        item.account_name ??
+        item.displayName ??
+        item.customerName ??
+        item.customer_name;
+
+    return typeof name === "string" && name.trim()
+        ? name.trim()
+        : accountId;
+}
+
+function getAccountStringField(
+    account: unknown,
+    ...keys: string[]
+): string | undefined {
+    if (!account || typeof account !== "object") {
+        return undefined;
+    }
+
+    const item = account as Record<string, unknown>;
+
+    for (const key of keys) {
+        const value = item[key];
+
+        if (typeof value === "string" && value.trim()) {
+            return value.trim();
+        }
+    }
+
+    return undefined;
+}
+
+interface BuiltProviderConnection {
+    connection: ProviderConnection;
+    latestUpdatedAt: Date;
+}
+
+async function buildProviderConnection(
+    userId: string,
+    provider: ProviderName,
+    providerDocument: ProviderConnectionDocument | null
+): Promise<BuiltProviderConnection> {
+    if (!providerDocument) {
+        return {
+            connection: createEmptyProvider(),
+            latestUpdatedAt: new Date(0),
+        };
+    }
+
+    const accountDocuments = await AdAccountModel.find({
+        userId,
+        connectionId: providerDocument._id,
+        provider,
+    })
+        .sort({ createdAt: 1 })
+        .exec();
+
+    const selectedAccount = accountDocuments.find(
+        (account) => account.isSelected
+    );
+
+    const accounts = accountDocuments.map(
+        (account) =>
+            account.providerData ?? {
+                id: account.externalAccountId,
+                name: account.name,
+            }
+    );
+
+    const accountUpdateTimes = accountDocuments.map(
+        (account) => account.updatedAt.getTime()
+    );
+
+    const latestAccountUpdate = accountUpdateTimes.length
+        ? Math.max(...accountUpdateTimes)
+        : 0;
+
+    return {
+        connection: {
+            connected: providerDocument.status === "connected",
+            tokens: decryptProviderTokens(providerDocument),
+            accounts,
+            selectedAccountId:
+                selectedAccount?.externalAccountId ?? null,
+        },
+        latestUpdatedAt: new Date(
+            Math.max(
+                providerDocument.updatedAt.getTime(),
+                latestAccountUpdate
+            )
+        ),
+    };
+}
+
+export async function getUserConnection(
+    userId: string
+): Promise<UserConnection | null> {
+    const user = await UserModel.findOne({
+        clerkUserId: userId,
+    }).exec();
+
+    if (!user) {
+        return null;
+    }
+
+    const [googleDocument, metaDocument] = await Promise.all([
+        findProviderConnection(userId, "googleAds", true),
+        findProviderConnection(userId, "metaAds", true),
+    ]);
+
+    const [googleResult, metaResult] = await Promise.all([
+        buildProviderConnection(userId, "googleAds", googleDocument),
+        buildProviderConnection(userId, "metaAds", metaDocument),
+    ]);
+
+    const latestUpdatedAt = Math.max(
+        user.updatedAt.getTime(),
+        googleResult.latestUpdatedAt.getTime(),
+        metaResult.latestUpdatedAt.getTime()
+    );
+
+    return {
+        clerk: {
+            userId: user.clerkUserId,
+            ...(user.email ? { email: user.email } : {}),
+        },
+        providers: {
+            googleAds: googleResult.connection,
+            metaAds: metaResult.connection,
+        },
+        updatedAt: new Date(latestUpdatedAt).toISOString(),
+    };
+}
+
+export async function getOrCreateUserConnection(
+    userId: string
+): Promise<UserConnection> {
+    await ensureUserExists(userId);
+
+    const connection = await getUserConnection(userId);
+
+    if (!connection) {
+        throw new Error("Unable to create or retrieve user connection.");
+    }
+
+    return connection;
+}
+
+/**
+ * Save tokens for one provider without modifying the other provider.
+ *
+ * An omitted or null refresh token preserves the existing refresh token.
+ * An omitted or null expiry date preserves the existing expiry date.
+ */
+export async function saveProviderTokens(
+    userId: string,
+    provider: ProviderName,
+    tokens: {
+        accessToken: string;
+        refreshToken?: string | null;
+        expiryDate?: number | null;
+    }
+): Promise<void> {
+    if (!tokens.accessToken) {
+        throw new Error("Access token is required.");
+    }
+
+    await ensureUserExists(userId);
+
+    const existingConnection = await findProviderConnection(
+        userId,
+        provider,
+        true
+    );
+
+    const existingCredentials = existingConnection?.credentials;
+
+    const refreshToken = tokens.refreshToken
+        ? encryptToken(tokens.refreshToken)
+        : existingCredentials?.refreshToken ?? null;
+
+    const expiryTimestamp =
+        tokens.expiryDate ??
+        existingCredentials?.expiresAt?.getTime() ??
+        null;
+
+    const expiresAt =
+        expiryTimestamp === null
+            ? null
+            : new Date(expiryTimestamp);
+
+    if (expiresAt && Number.isNaN(expiresAt.getTime())) {
+        throw new Error("Invalid token expiry date.");
+    }
+
+    const credentials = {
+        accessToken: encryptToken(tokens.accessToken),
+        refreshToken,
+        expiresAt,
+        ...(existingCredentials?.tokenType
+            ? { tokenType: existingCredentials.tokenType }
+            : {}),
+    };
+
+const tokenIsValid =
+    expiresAt === null || expiresAt.getTime() > Date.now();
+
+const isConnected =
+    provider === "googleAds"
+        ? Boolean(credentials.refreshToken) || tokenIsValid
+        : tokenIsValid;
+
+    if (existingConnection) {
+        existingConnection.credentials = credentials;
+        existingConnection.status = isConnected
+            ? "connected"
+            : "expired";
+
+        await existingConnection.save();
+        return;
+    }
+
+    await ProviderConnectionModel.create({
+        userId,
+        provider,
+        status: isConnected ? "connected" : "expired",
+        credentials,
+        scopes: [],
+        connectedAt: new Date(),
+    });
+}
+
+/**
+ * Replace the stored account list for one provider.
+ * Existing selected-account state is preserved when that account
+ * is still present in the refreshed list.
+ */
+export async function saveProviderAccounts(
+    userId: string,
+    provider: ProviderName,
+    accounts: unknown[]
+): Promise<void> {
+    await ensureUserExists(userId);
+
+    const connection = await findProviderConnection(userId, provider);
+
+    if (!connection) {
+        throw new Error(
+            `Cannot save ${provider} accounts before saving provider tokens.`
+        );
+    }
+
+    const uniqueAccounts = new Map<
+        string,
+        { account: unknown; accountId: string }
+    >();
+
+    for (const account of accounts) {
+        const accountId = getAccountId(account);
+
+        if (!accountId) {
+            throw new Error(
+                "Every provider account must contain a supported account ID."
+            );
+        }
+
+        uniqueAccounts.set(accountId, {
+            account,
+            accountId,
+        });
+    }
+
+    const accountRecords = Array.from(uniqueAccounts.values());
+
+    if (accountRecords.length === 0) {
+        await AdAccountModel.deleteMany({
+            userId,
+            connectionId: connection._id,
+            provider,
+        }).exec();
+
+        return;
+    }
+
+    const syncedAt = new Date();
+
+    const operations = accountRecords.map(
+        ({ account, accountId }) => {
+            const providerData =
+                account && typeof account === "object"
+                    ? account as Record<string, unknown>
+                    : { id: accountId };
+
+            const fieldsToSet: Record<string, unknown> = {
+                name: getAccountName(account, accountId),
+                status: "active",
+                providerData,
+                lastSyncedAt: syncedAt,
+            };
+
+            const currency = getAccountStringField(
+                account,
+                "currency",
+                "currencyCode",
+                "currency_code"
+            );
+
+            const timezone = getAccountStringField(
+                account,
+                "timezone",
+                "timeZone",
+                "time_zone"
+            );
+
+            if (currency) fieldsToSet.currency = currency;
+            if (timezone) fieldsToSet.timezone = timezone;
+
+            return {
+                updateOne: {
+                    filter: {
+                        userId,
+                        connectionId: connection._id,
+                        provider,
+                        externalAccountId: accountId,
+                    },
+                    update: {
+                        $set: fieldsToSet,
+                        $setOnInsert: {
+                            isSelected: false,
+                        },
+                    },
+                    upsert: true,
+                },
+            };
+        }
+    );
+
+    await AdAccountModel.bulkWrite(operations, {
+        ordered: true,
+    });
+
+    // Remove accounts no longer returned by the provider.
+    // Accounts that remain keep their existing selection state.
+    await AdAccountModel.deleteMany({
+        userId,
+        connectionId: connection._id,
+        provider,
+        externalAccountId: {
+            $nin: accountRecords.map(({ accountId }) => accountId),
+        },
+    }).exec();
+}
+
+/**
+ * Select one account for this user's provider connection.
+ */
 export async function selectProviderAccount(
     userId: string,
     provider: ProviderName,
     accountId: string
 ): Promise<void> {
-    if (!accountId) {
+    if (!accountId?.trim()) {
         throw new Error("Account ID is required.");
     }
 
-    await withStoreLock(async () => {
-        const store = await readStore();
-        const connection = store[userId];
+    const connection = await findProviderConnection(userId, provider);
 
-        if (!connection) {
-            throw new Error("User connection not found.");
+    if (!connection) {
+        throw new Error("Provider connection not found.");
+    }
+
+    const account = await AdAccountModel.findOne({
+        userId,
+        connectionId: connection._id,
+        provider,
+        externalAccountId: accountId,
+    }).exec();
+
+    if (!account) {
+        throw new Error("Selected account was not found.");
+    }
+
+    // Clear the previous selection before selecting the new account.
+    await AdAccountModel.updateMany(
+        {
+            userId,
+            connectionId: connection._id,
+            provider,
+            isSelected: true,
+        },
+        {
+            $set: {
+                isSelected: false,
+            },
         }
+    ).exec();
 
-        const providerConnection = connection.providers[provider];
-
-        const accountExists = providerConnection.accounts.some(
-            (account) => getAccountId(account) === accountId
-        );
-
-        if (!accountExists) {
-            throw new Error("Selected account was not found.");
+    const result = await AdAccountModel.updateOne(
+        {
+            _id: account._id,
+            userId,
+            connectionId: connection._id,
+            provider,
+        },
+        {
+            $set: {
+                isSelected: true,
+            },
         }
+    ).exec();
 
-        providerConnection.selectedAccountId = accountId;
-        connection.updatedAt = new Date().toISOString();
-
-        await writeStore(store);
-    });
+    if (result.matchedCount === 0) {
+        throw new Error("Selected account was not found.");
+    }
 }

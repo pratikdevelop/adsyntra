@@ -4,9 +4,10 @@ import { OAuth2Client } from "google-auth-library";
 import {
     getUserConnection,
     saveProviderTokens,
+    type ProviderName,
 } from "./connection-storage.utils.js";
 
-export type AdProvider = "googleAds" | "metaAds";
+export type AdProvider = ProviderName;
 
 const TOKEN_EXPIRY_BUFFER_MS = 60 * 1000;
 
@@ -39,7 +40,20 @@ export async function getProviderAccessToken(
     }
 
     const providerConnection = connection.providers[provider];
-    const tokens = providerConnection?.tokens;
+
+    if (!providerConnection?.connected) {
+        throw new Error(
+            `${provider} is not connected. Please reconnect your account.`,
+        );
+    }
+
+    const tokens = providerConnection.tokens;
+
+    if (!tokens?.accessToken) {
+        throw new Error(
+            `${provider} access token is missing. Please reconnect your account.`,
+        );
+    }
 
     if (!tokens?.accessToken) {
         throw new Error(
@@ -66,9 +80,9 @@ export async function getProviderAccessToken(
             );
         }
 
-        const clientId = process.env[`GOOGLE_CLIENT_ID`];
-        const clientSecret = process.env[`GOOGLE_CLIENT_SECRET`];
-        const redirectUri = process.env[`GOOGLE_REDIRECT_URI`];
+        const clientId = process.env.GOOGLE_CLIENT_ID;
+        const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
+        const redirectUri = process.env.GOOGLE_REDIRECT_URI;
 
         if (!clientId || !clientSecret || !redirectUri) {
             throw new Error(
@@ -96,7 +110,9 @@ export async function getProviderAccessToken(
                 result.token ?? oauthClient.credentials.access_token;
 
             if (!newAccessToken) {
-                throw new Error("Google did not return a new access token.");
+                throw new Error(
+                    "Google did not return a new access token.",
+                );
             }
 
             const newRefreshToken =

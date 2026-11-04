@@ -1,5 +1,5 @@
 import { Router } from "express";
-import readAccessToken from "../config.js";
+import readAccessToken from "../../config/meta.js";
 const router = Router();
 
 const {

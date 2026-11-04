@@ -4,7 +4,7 @@ import { META_DATE_PRESETS, META_FILTER_OPERATORS, META_FILTER_TARGETS, META_INS
 import { buildInsightsDateFilter } from "../utils/insightsDateFilter.js";
 import { META_METRIC_DEFINITIONS } from "../utils/insightsMetrics.js";
 // Adjust this import according to your existing project.
-import readAccessToken from "../config.js";
+import readAccessToken from "../../config/meta.js";
 
 const router = Router();
 

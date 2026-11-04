@@ -246,7 +246,7 @@ export default function ProviderPage() {
       }
 
       const response = await fetch(
-        `${API_BASE_URL}/api/google-ads/auth/google`,
+        `${API_BASE_URL}/api/auth/google`,
         {
           method: "GET",
           headers: {
@@ -286,7 +286,7 @@ export default function ProviderPage() {
         throw new Error("Please sign in first.");
       }
 
-      const response = await fetch(`${API_BASE_URL}/api/meta-ads/auth/meta`, {
+      const response = await fetch(`${API_BASE_URL}/api/auth/meta`, {
         method: "GET",
         headers: {
           Authorization: `Bearer ${token}`,

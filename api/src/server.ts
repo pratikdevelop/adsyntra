@@ -6,19 +6,22 @@ import express, {
 import cors from "cors";
 import { clerkMiddleware } from "@clerk/express";
 
-import googleAdsApp from "./googleadsAPI/app.js";
-import metaAdsApp from "./metaadsAPI/app.js";
+
+// import googleAdsApp from "./googleadsAPI/app.js";
+// import metaAdsApp from "./metaadsAPI/app.js";
 
 import connectionRouter from "./routes/connection.router.js";
+import providerAuthRoutes from "./routes/provider-auth.routes.js";
 
 import {
   connectToMongoDB,
   disconnectFromMongoDB,
 } from "./config/db.js";
 
-import {
-  ensureCampaignIndexes,
-} from "./campaigns/campaign.repository.js";
+import campaignRouter from "./routes/campgin.router.js";
+// import {
+//   ensureCampaignIndexes,
+// } from "./campaigns/campaign.repository.js";
 
 const app = express();
 
@@ -35,6 +38,7 @@ const {
   META_APP_SECRET,
   META_LOGIN_CONFIG_ID,
   META_REDIRECT_URI,
+  GOOGLE_ADS_DEVELOPER_TOKEN,
 } = process.env;
 
 if (
@@ -42,7 +46,8 @@ if (
   !META_APP_ID ||
   !META_APP_SECRET ||
   !META_LOGIN_CONFIG_ID ||
-  !META_REDIRECT_URI
+  !META_REDIRECT_URI ||
+  !GOOGLE_ADS_DEVELOPER_TOKEN
 ) {
   throw new Error("Missing required settings in .env");
 }
@@ -83,15 +88,17 @@ app.use("/api/connections", connectionRouter);
 
 // Other common feature routers will be mounted here:
 // app.use("/api/accounts", accountRouter);
-// app.use("/api/campaigns", campaignRouter);
+app.use("/api/campaigns", campaignRouter);
+app.use("/api/auth", providerAuthRoutes);
+
 // app.use("/api/reports", reportRouter);
 
 // --------------------------------------------------
 // Provider-specific API applications
 // --------------------------------------------------
 
-app.use("/api/google-ads", googleAdsApp);
-app.use("/api/meta-ads", metaAdsApp);
+// app.use("/api/google-ads", googleAdsApp);
+// app.use("/api/meta-ads", metaAdsApp);
 
 // --------------------------------------------------
 // 404 handler
@@ -143,7 +150,7 @@ async function startServer(): Promise<void> {
     // Temporary compatibility with the existing native
     // campaign index implementation.
     // This will move into the Campaign Mongoose model.
-    await ensureCampaignIndexes(database);
+    // await ensureCampaignIndexes(database);
 
     server = app.listen(PORT, () => {
       console.log(`Server is running on http://localhost:${PORT}`);

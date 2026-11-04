@@ -4429,8 +4429,8 @@ export default function CreateCampaignPage() {
         {(
           [
             { value: "builder", label: "Campaign Builder", icon: "＋" },
-            { value: "campaigns", label: "Campaign Management", icon: "▦" },
-            { value: "campaign", label: "Campaign Details", icon: "▤" },
+            // { value: "campaigns", label: "Campaign Management", icon: "▦" },
+            // { value: "campaign", label: "Campaign Details", icon: "▤" },
             { value: "ads", label: "Ad Management", icon: "◫" },
             { value: "assets", label: "Asset Library", icon: "▧" },
             { value: "creative", label: "AI Creative Studio", icon: "✦" },

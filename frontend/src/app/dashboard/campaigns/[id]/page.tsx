@@ -169,16 +169,12 @@ export default function CampaignDetailsPage() {
                 Resume campaign
               </button>
             )}
-            <button
-              onClick={() =>
-                setNotice(
-                  "Edit campaign is not connected yet. Use the existing Create Campaign workflow to prepare a new campaign.",
-                )
-              }
+            <Link
+              href={`/dashboard/campaigns/${encodeURIComponent(campaign.id)}/edit`}
               className="rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-semibold text-slate-700 hover:bg-slate-50"
             >
-              Edit
-            </button>
+              Edit campaign
+            </Link>
           </div>
         </div>
         {notice && (

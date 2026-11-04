@@ -26,26 +26,26 @@ const navigation = [
   //   href: "/dashboard/create-campaign",
   //   icon: "+",
   // },
-  {
-    label: "Ad Accounts",
-    href: "/dashboard/accounts",
-    icon: "▣",
-  },
-  {
-    label: "Reports",
-    href: "/dashboard/reports",
-    icon: "▤",
-  },
-  {
-    label: "Audiences",
-    href: "/dashboard/audiences",
-    icon: "◎",
-  },
-  {
-    label: "Creative Library",
-    href: "/dashboard/creatives",
-    icon: "▧",
-  },
+  // {
+  //   label: "Ad Accounts",
+  //   href: "/dashboard/accounts",
+  //   icon: "▣",
+  // },
+  // {
+  //   label: "Reports",
+  //   href: "/dashboard/reports",
+  //   icon: "▤",
+  // },
+  // {
+  //   label: "Audiences",
+  //   href: "/dashboard/audiences",
+  //   icon: "◎",
+  // },
+  // {
+  //   label: "Creative Library",
+  //   href: "/dashboard/creatives",
+  //   icon: "▧",
+  // },
 ];
 
 export default function DashboardLayout({
@@ -74,7 +74,7 @@ export default function DashboardLayout({
             </div>
 
             <div>
-              <h1 className="text-lg font-bold">Unified Ads</h1>
+              <h1 className="text-lg font-bold">adsyntra</h1>
               <p className="text-xs text-slate-500">Management Platform</p>
             </div>
           </Link>
@@ -110,7 +110,7 @@ export default function DashboardLayout({
             })}
           </nav>
 
-          <div className="my-6 border-t border-slate-100" />
+          {/* <div className="my-6 border-t border-slate-100" />
 
           <p className="mb-3 px-3 text-xs font-semibold uppercase tracking-wider text-slate-400">
             Configuration
@@ -144,11 +144,11 @@ export default function DashboardLayout({
               </span>
               Settings
             </Link>
-          </nav>
+          </nav> */}
         </div>
 
         <div className="border-t border-slate-200 p-4">
-          <p className="text-xs text-slate-400">Unified Ads Platform</p>
+          <p className="text-xs text-slate-400">adsyntra - Unified Ads Platform</p>
           <p className="mt-1 text-xs text-slate-500">
             Manage multiple ad platforms in one place.
           </p>

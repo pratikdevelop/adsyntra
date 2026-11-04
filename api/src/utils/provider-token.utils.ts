@@ -4,7 +4,7 @@ import { OAuth2Client } from "google-auth-library";
 import {
     getUserConnection,
     saveProviderTokens,
-} from "./connection-storage.service.js";
+} from "./connection-storage.utils.js";
 
 export type AdProvider = "googleAds" | "metaAds";
 
@@ -66,9 +66,9 @@ export async function getProviderAccessToken(
             );
         }
 
-        const clientId = process.env.GOOGLE_CLIENT_ID;
-        const clientSecret = process.env.GOOGLE_CLIENT_SECRET;
-        const redirectUri = process.env.GOOGLE_REDIRECT_URI;
+        const clientId = process.env[`GOOGLE_CLIENT_ID`];
+        const clientSecret = process.env[`GOOGLE_CLIENT_SECRET`];
+        const redirectUri = process.env[`GOOGLE_REDIRECT_URI`];
 
         if (!clientId || !clientSecret || !redirectUri) {
             throw new Error(

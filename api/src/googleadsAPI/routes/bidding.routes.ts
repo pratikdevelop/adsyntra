@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getProviderAccessToken } from "../../services/provider-token.service.js";
+import { getProviderAccessToken } from "../../utils/provider-token.utils.js";
 import {
     BiddingConfigurationError,
     buildBiddingConfig,
@@ -28,11 +28,11 @@ type CampaignData = {
 };
 
 function getCustomerId(): string | undefined {
-    return process.env.GOOGLE_ADS_CUSTOMER_ID?.replace(/-/g, "");
+    return process.env[`GOOGLE_ADS_CUSTOMER_ID`]?.replace(/-/g, "");
 }
 
 function getHeaders(accessToken: string): Record<string, string> {
-    const developerToken = process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
+    const developerToken = process.env[`GOOGLE_ADS_DEVELOPER_TOKEN`];
     if (!developerToken) {
         throw new Error("Missing GOOGLE_ADS_DEVELOPER_TOKEN");
     }

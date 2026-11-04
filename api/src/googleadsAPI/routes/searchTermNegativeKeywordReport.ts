@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from "express";
-import { getProviderAccessToken } from "../../services/provider-token.service.js";
+import { getProviderAccessToken } from "../../utils/provider-token.utils.js";
 
 const router = Router();
 const API_VERSION = "v25";

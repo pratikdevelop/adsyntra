@@ -8,7 +8,7 @@ import {
 import {
   saveProviderAccounts,
   saveProviderTokens,
-} from "../../services/connection-storage.service.js";
+} from "../../utils/connection-storage.utils.js";
 
 const router = Router();
 

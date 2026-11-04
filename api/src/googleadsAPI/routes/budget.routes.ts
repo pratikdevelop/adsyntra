@@ -1,5 +1,5 @@
 import express from "express";
-import { getProviderAccessToken } from "../../services/provider-token.service.js";
+import { getProviderAccessToken } from "../../utils/provider-token.utils.js";
 import { parseMutationMode } from "../utils/safety.js";
 const router = express.Router();
 

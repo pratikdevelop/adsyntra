@@ -15,7 +15,7 @@ import {
     getUserConnection,
     saveProviderTokens,
     saveProviderAccounts,
-} from "../../services/connection-storage.service.js";
+} from "../../utils/connection-storage.utils.js";
 
 const router = express.Router();
 

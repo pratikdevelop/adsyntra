@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { NextFunction, Request, Response } from "express";
 
-import { getProviderAccessToken } from "../services/provider-token.service.js";
+import { getProviderAccessToken } from "../utils/provider-token.utils.js";
 
 /**
  * Compatibility bridge for the existing Meta route modules.

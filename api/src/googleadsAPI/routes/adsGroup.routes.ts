@@ -1,5 +1,5 @@
 import { Router, type Request, type Response } from "express";
-import { getProviderAccessToken } from "../../services/provider-token.service.js";
+import { getProviderAccessToken } from "../../utils/provider-token.utils.js";
 // import { escapeGaqlString, getGoogleAdsConfig, getErrorMessage, GoogleAdsResult, googleAdsRequest, isValidId, GOOGLE_ADS_BASE_URL, AdGroupUpdate } from '../utils/shared.js'
 import { parseMutationMode } from "../utils/safety.js";
 

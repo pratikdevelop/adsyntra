@@ -1,7 +1,7 @@
 import { Router, type Request } from "express";
 
-import { getProviderAccessToken } from "../../services/provider-token.service.js";
-import { saveProviderAccounts } from "../../services/connection-storage.service.js";
+import { getProviderAccessToken } from "../../utils/provider-token.utils.js";
+import { saveProviderAccounts } from "../../utils/connection-storage.utils.js";
 
 const router = Router();
 const META_GRAPH_API_VERSION = process.env.META_GRAPH_API_VERSION || "v26.0";

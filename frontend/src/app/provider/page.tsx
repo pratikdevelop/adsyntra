@@ -257,13 +257,13 @@ export default function ProviderPage() {
 
       const data = await response.json();
 
-      if (!response.ok || !data.authUrl) {
+      if (!response.ok || !data.authorizationUrl) {
         throw new Error(
           data.message || "Unable to start Google authorization.",
         );
       }
-
-      window.location.assign(data.authUrl);
+    console.log("data.authorizationUrl : ", data.authorizationUrl);
+      window.location.assign(data.authorizationUrl);
     } catch (err) {
       console.error("Google connection error:", err);
 
@@ -296,13 +296,13 @@ export default function ProviderPage() {
 
       const data = await response.json();
 
-      if (!response.ok || !data.authUrl) {
+      if (!response.ok || !data.authorizationUrl) {
         throw new Error(
           data.message || "Unable to start Meta Ads authorization.",
         );
       }
 
-      window.location.assign(data.authUrl);
+      window.location.assign(data.authorizationUrl);
     } catch (err) {
       console.error("Meta connection error:", err);
 

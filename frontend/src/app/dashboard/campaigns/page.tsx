@@ -31,10 +31,21 @@ function PlatformBadge({ platform }: { platform: "GOOGLE" | "META" }) {
   );
 }
 
-export default function CampaignsPage() {
+interface CampaignsPageProps {
+  initialStatusFilter?: StatusFilter;
+  pageTitle?: string;
+  pageDescription?: string;
+}
+
+export default function CampaignsPage({
+  initialStatusFilter = "ALL",
+  pageTitle = "Campaign Management",
+  pageDescription = "Manage Google Ads and Meta Ads independently, with a shared initiative view when campaigns come from one brief.",
+}: CampaignsPageProps = {}) {
+  const isDraftsPage = initialStatusFilter === "DRAFT";
   const [view, setView] = useState<View>("ALL");
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("ALL");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>(initialStatusFilter);
   const [statuses, setStatuses] = useState<Record<string, CampaignStatus>>({});
   const [campaigns, setCampaigns] = useState<CampaignRecord[]>([]);
   const [notice, setNotice] = useState("");
@@ -157,9 +168,17 @@ export default function CampaignsPage() {
     setNotice("A separate provider-specific draft copy was created locally.");
   }
 
-  const visibleGroups = groups.filter((g) =>
-    `${g.name} ${g.id}`.toLowerCase().includes(search.toLowerCase()),
-  );
+  const visibleGroups = groups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter(
+        (campaign) => statusFilter === "ALL" || campaign.status === statusFilter,
+      ),
+    }))
+    .filter((group) => group.items.length > 0)
+    .filter((group) =>
+      `${group.name} ${group.id}`.toLowerCase().includes(search.toLowerCase()),
+    );
 
   return (
     <div className="mx-auto max-w-7xl">
@@ -169,15 +188,12 @@ export default function CampaignsPage() {
             Campaign workspace
           </p>
           <h1 className="mt-1 text-3xl font-bold tracking-tight text-slate-900">
-            Campaign Management
+            {pageTitle}
           </h1>
-          <p className="mt-2 text-sm text-slate-500">
-            Manage Google Ads and Meta Ads independently, with a shared
-            initiative view when campaigns come from one brief.
-          </p>
+          <p className="mt-2 text-sm text-slate-500">{pageDescription}</p>
         </div>
         <Link
-          href="/dashboard/create-campaign"
+          href="/dashboard/campaigns/new"
           className="inline-flex items-center justify-center rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
         >
           <span className="mr-2 text-lg leading-none">+</span>Create campaign
@@ -190,25 +206,39 @@ export default function CampaignsPage() {
         separate. Live provider sync is not connected.
       </div>
 
+      <nav aria-label="Campaign sections" className="mt-6 flex flex-wrap items-center gap-2">
+        <Link
+          href="/dashboard/campaigns"
+          aria-current={!isDraftsPage ? "page" : undefined}
+          className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${!isDraftsPage ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+        >
+          All campaigns
+        </Link>
+        <Link
+          href="/dashboard/campaigns/drafts"
+          aria-current={isDraftsPage ? "page" : undefined}
+          className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${isDraftsPage ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+        >
+          Drafts
+        </Link>
+      </nav>
+
       <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {[
-          {
-            label: "Provider campaigns",
-            value: rows.length,
-            hint: "Separate Google / Meta records",
-          },
-          {
-            label: "Active in view",
-            value: active,
-            hint: "Currently marked active",
-          },
-          {
-            label: "Paused in view",
-            value: paused,
-            hint: "Currently marked paused",
-          },
-          { label: "Failed in view", value: failed, hint: "Needs review" },
-        ].map((s) => (
+        {(
+          isDraftsPage
+            ? [
+                { label: "Draft campaigns", value: rows.filter((c) => c.status === "DRAFT").length, hint: "Saved and ready to continue" },
+                { label: "Google drafts", value: rows.filter((c) => c.status === "DRAFT" && c.platform === "GOOGLE").length, hint: "Google Ads drafts" },
+                { label: "Meta drafts", value: rows.filter((c) => c.status === "DRAFT" && c.platform === "META").length, hint: "Meta Ads drafts" },
+                { label: "All campaigns", value: rows.length, hint: "Across both providers" },
+              ]
+            : [
+                { label: "Provider campaigns", value: rows.length, hint: "Separate Google / Meta records" },
+                { label: "Active in view", value: active, hint: "Currently marked active" },
+                { label: "Paused in view", value: paused, hint: "Currently marked paused" },
+                { label: "Failed in view", value: failed, hint: "Needs review" },
+              ]
+        ).map((s) => (
           <div
             key={s.label}
             className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"

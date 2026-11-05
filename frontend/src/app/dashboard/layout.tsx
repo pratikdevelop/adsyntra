@@ -21,6 +21,11 @@ const navigation = [
     href: "/dashboard/campaigns",
     icon: "◫",
   },
+  {
+    label: "Drafts",
+    href: "/dashboard/campaigns/drafts",
+    icon: "▱",
+  },
   // {
   //   label: "Create Campaign",
   //   href: "/dashboard/create-campaign",
@@ -58,6 +63,14 @@ export default function DashboardLayout({
   const isActive = (href: string) => {
     if (href === "/dashboard") {
       return pathname === href;
+    }
+
+    if (href === "/dashboard/campaigns") {
+      if (pathname === "/dashboard/create-campaign") return true;
+      // Keep the dedicated Drafts item active on the drafts screen.
+      if (pathname === "/dashboard/campaigns/drafts" || pathname.startsWith("/dashboard/campaigns/drafts/")) {
+        return false;
+      }
     }
 
     return pathname === href || pathname.startsWith(`${href}/`);
@@ -194,8 +207,12 @@ export default function DashboardLayout({
         <header className="hidden h-16 items-center justify-between border-b border-slate-200 bg-white px-8 md:flex">
           <div>
             <p className="text-sm font-semibold">
-              {navigation.find((item) => isActive(item.href))?.label ??
-                (pathname === "/dashboard/settings" ? "Settings" : "Workspace")}
+              {pathname === "/dashboard/create-campaign" || pathname === "/dashboard/campaigns/new"
+                ? "Create campaign"
+                : [...navigation]
+                    .filter((item) => isActive(item.href))
+                    .sort((a, b) => b.href.length - a.href.length)[0]?.label ??
+                  (pathname === "/dashboard/settings" ? "Settings" : "Workspace")}
             </p>
           </div>
 

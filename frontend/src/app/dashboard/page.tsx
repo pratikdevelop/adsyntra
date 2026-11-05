@@ -17,7 +17,7 @@ export default function DashboardPage() {
         </div>
 
         {/* <Link
-          href="/dashboard/create-campaign"
+          href="/dashboard/campaigns/new"
           className="rounded-xl bg-blue-600 px-5 py-3 text-center text-sm font-semibold text-white hover:bg-blue-700"
         >
           + Create Campaign

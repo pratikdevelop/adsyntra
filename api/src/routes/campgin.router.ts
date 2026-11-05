@@ -1,88 +1,145 @@
-import { Router } from "express";
+
+import { Router, type Request, type Response } from "express";
+import { getAuth } from "@clerk/express";
 
 import {
     getCampaigns as getGoogleCampaigns,
 } from "../googleadsAPI/services/campaign.js";
-import AdAccount from "../models/ad-account.model.js";
 
 import {
     getCampaigns as getMetaCampaigns,
 } from "../metaadsAPI/services/campaign.js";
 
+import AdAccount from "../models/ad-account.model.js";
+
 const router = Router();
 
-router.get("/", async (req: any, res: any) => {
-    try {
-        const userId = req.auth().userId;
-        const [googleAccount, metaAccount] = await Promise.all([
-            AdAccount.findOne({
-                userId,
-                provider: "googleAds",
-                isSelected: true,
-            }).select("externalAccountId"),
+interface ProviderCampaignResult {
+    success: boolean;
+    accountId: string | null;
+    data: unknown | null;
+    error: string | null;
+}
 
-            AdAccount.findOne({
-                userId,
-                provider: "metaAds",
-                isSelected: true,
-            }).select("externalAccountId"),
-        ]);
-        const googleCustomerId: any = googleAccount?.externalAccountId;
-        const metaAdAccountId: any = metaAccount?.externalAccountId;
+function getErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+        return error.message;
+    }
 
-        const [googleResult, metaResult] = await Promise.allSettled([
-            getGoogleCampaigns(userId, googleCustomerId),
-            getMetaCampaigns(userId, metaAdAccountId),
-        ]);
+    if (typeof error === "string") {
+        return error;
+    }
 
-        const providers = {
-            googleAds: {
-                success: googleResult.status === "fulfilled",
-                data:
-                    googleResult.status === "fulfilled"
-                        ? googleResult.value
-                        : null,
-                error:
-                    googleResult.status === "rejected"
-                        ? googleResult.reason.message
-                        : null,
-            },
+    return "An unexpected provider error occurred.";
+}
 
-            metaAds: {
-                success: metaResult.status === "fulfilled",
-                data:
-                    metaResult.status === "fulfilled"
-                        ? metaResult.value
-                        : null,
-                error:
-                    metaResult.status === "rejected"
-                        ? metaResult.reason.message
-                        : null,
-            },
+async function fetchProviderCampaigns(
+    accountId: string | null | undefined,
+    fetchCampaigns: (accountId: string) => Promise<unknown>
+): Promise<ProviderCampaignResult> {
+    if (!accountId) {
+        return {
+            success: false,
+            accountId: null,
+            data: null,
+            error: "No account selected for this provider.",
         };
+    }
 
-        const hasSuccess =
-            providers.googleAds.success || providers.metaAds.success;
+    try {
+        const data = await fetchCampaigns(accountId);
 
-        if (!hasSuccess) {
-            return res.status(502).json({
-                success: false,
-                message: "Failed to retrieve campaigns from both providers.",
+        return {
+            success: true,
+            accountId,
+            data,
+            error: null,
+        };
+    } catch (error) {
+        return {
+            success: false,
+            accountId,
+            data: null,
+            error: getErrorMessage(error),
+        };
+    }
+}
+
+router.get(
+    "/",
+    async (req: Request, res: Response) => {
+        try {
+            const { userId } = getAuth(req);
+
+            if (!userId) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Authentication required.",
+                });
+            }
+
+            // Get the user's selected account for each provider.
+            const [googleAccount, metaAccount] = await Promise.all([
+                AdAccount.findOne({
+                    userId,
+                    provider: "googleAds",
+                    isSelected: true,
+                })
+                    .select("externalAccountId")
+                    .lean(),
+
+                AdAccount.findOne({
+                    userId,
+                    provider: "metaAds",
+                    isSelected: true,
+                })
+                    .select("externalAccountId")
+                    .lean(),
+            ]);
+
+            // Fetch both providers independently.
+            const [googleResult, metaResult] = await Promise.all([
+                fetchProviderCampaigns(
+                    googleAccount?.externalAccountId,
+                    (accountId) => getGoogleCampaigns(userId, accountId)
+                ),
+
+                fetchProviderCampaigns(
+                    metaAccount?.externalAccountId,
+                    (accountId) => getMetaCampaigns(userId, accountId)
+                ),
+            ]);
+
+            const providers = {
+                googleAds: googleResult,
+                metaAds: metaResult,
+            };
+
+            const hasSuccess =
+                googleResult.success || metaResult.success;
+
+            if (!hasSuccess) {
+                return res.status(502).json({
+                    success: false,
+                    message: "Failed to retrieve campaigns from both providers.",
+                    providers,
+                });
+            }
+
+            return res.status(200).json({
+                success: true,
                 providers,
             });
+
+        } catch (error) {
+            console.error("Get campaigns error:", error);
+
+            return res.status(500).json({
+                success: false,
+                message: getErrorMessage(error),
+            });
         }
-
-        return res.status(200).json({
-            success: true,
-            providers,
-        });
-
-    } catch (error: any) {
-        return res.status(500).json({
-            success: false,
-            message: error.message || "Failed to retrieve campaigns.",
-        });
     }
-});
+);
 
 export default router;

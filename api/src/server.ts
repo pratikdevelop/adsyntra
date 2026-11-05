@@ -18,10 +18,7 @@ import {
   disconnectFromMongoDB,
 } from "./config/db.js";
 
-import campaignRouter from "./routes/campgin.router.js";
-// import {
-//   ensureCampaignIndexes,
-// } from "./campaigns/campaign.repository.js";
+import campaignRouter from "./routes/campaign.routes.js";
 
 const app = express();
 
@@ -143,14 +140,9 @@ async function startServer(): Promise<void> {
     | undefined;
 
   try {
-    // Connect to MongoDB through the existing Mongoose
-    // connection configuration.
-    const database = await connectToMongoDB();
+    // Connect to MongoDB through the existing Mongoose configuration.
+    await connectToMongoDB();
 
-    // Temporary compatibility with the existing native
-    // campaign index implementation.
-    // This will move into the Campaign Mongoose model.
-    // await ensureCampaignIndexes(database);
 
     server = app.listen(PORT, () => {
       console.log(`Server is running on http://localhost:${PORT}`);

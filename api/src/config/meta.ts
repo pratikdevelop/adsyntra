@@ -1,4 +1,13 @@
-import "dotenv/config";
+
+function getRequiredEnv(name: string): string {
+  const value = process.env[name]?.trim();
+
+  if (!value) {
+    throw new Error(`Missing required environment variable: ${name}`);
+  }
+
+  return value;
+}
 
 export interface MetaOAuthConfig {
   appId: string;
@@ -6,41 +15,35 @@ export interface MetaOAuthConfig {
   loginConfigId: string;
   redirectUri: string;
   graphApiVersion: string;
-}
-
-function requiredEnv(name: string): string {
-  const value = process.env[name]?.trim();
-
-  if (!value) {
-    throw new Error(`${name} environment variable is missing.`);
-  }
-
-  return value;
+  sessionSecret: string;
+  frontendUrl: string;
 }
 
 export function getMetaOAuthConfig(): MetaOAuthConfig {
+  const graphApiVersion =
+    process.env.META_GRAPH_API_VERSION?.trim() || "v26.0";
+
+  if (!/^v\d+\.\d+$/.test(graphApiVersion)) {
+    throw new Error("META_GRAPH_API_VERSION must look like v26.0");
+  }
+
+  const redirectUri = getRequiredEnv("META_REDIRECT_URI");
+  const frontendUrl = getRequiredEnv("FRONTEND_URL");
+
+  try {
+    new URL(redirectUri);
+    new URL(frontendUrl);
+  } catch {
+    throw new Error("META_REDIRECT_URI and FRONTEND_URL must be valid URLs");
+  }
+
   return {
-    appId: requiredEnv("META_APP_ID"),
-    appSecret: requiredEnv("META_APP_SECRET"),
-    loginConfigId: requiredEnv("META_LOGIN_CONFIG_ID"),
-    redirectUri: requiredEnv("META_REDIRECT_URI"),
-    graphApiVersion:
-      process.env.META_GRAPH_API_VERSION?.trim() || "v26.0",
+    appId: getRequiredEnv("META_APP_ID"),
+    appSecret: getRequiredEnv("META_APP_SECRET"),
+    loginConfigId: getRequiredEnv("META_LOGIN_CONFIG_ID"),
+    redirectUri,
+    graphApiVersion,
+    sessionSecret: getRequiredEnv("SESSION_SECRET"),
+    frontendUrl,
   };
-}
-
-export function createMetaAuthorizationUrl(state: string): string {
-  const config = getMetaOAuthConfig();
-
-  const url = new URL(
-    `https://www.facebook.com/${config.graphApiVersion}/dialog/oauth`
-  );
-
-  url.searchParams.set("client_id", config.appId);
-  url.searchParams.set("redirect_uri", config.redirectUri);
-  url.searchParams.set("config_id", config.loginConfigId);
-  url.searchParams.set("response_type", "code");
-  url.searchParams.set("state", state);
-
-  return url.toString();
 }

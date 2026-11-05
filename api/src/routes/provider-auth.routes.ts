@@ -9,7 +9,6 @@ import {
 } from "../config/google.js";
 
 import {
-  createMetaAuthorizationUrl,
   getMetaOAuthConfig,
 } from "../config/meta.js";
 
@@ -192,6 +191,21 @@ function consumeOAuthState(
   return savedState;
 }
 
+function createMetaAuthorizationUrl(state: string): string {
+  const config = getMetaOAuthConfig();
+
+  const url = new URL(
+    `https://www.facebook.com/${config.graphApiVersion}/dialog/oauth`
+  );
+
+  url.searchParams.set("client_id", config.appId);
+  url.searchParams.set("redirect_uri", config.redirectUri);
+  url.searchParams.set("config_id", config.loginConfigId);
+  url.searchParams.set("response_type", "code");
+  url.searchParams.set("state", state);
+
+  return url.toString();
+}
 // ------------------------------------------------------------------
 // COMMON HELPERS
 // ------------------------------------------------------------------

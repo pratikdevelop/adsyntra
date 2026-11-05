@@ -168,36 +168,77 @@ function decryptProviderTokens(
     };
 }
 
-function getAccountId(account: unknown): string | null {
-    if (typeof account === "string") {
-        return account;
+function normalizeProviderAccountId(
+    provider: ProviderName,
+    value: unknown
+): string | null {
+    if (typeof value !== "string" && typeof value !== "number") {
+        return null;
+    }
+
+    const accountId = String(value).trim();
+
+    if (!accountId) {
+        return null;
+    }
+
+    // Meta's canonical account ID must use the act_ prefix.
+    if (provider === "metaAds") {
+        if (/^act_/i.test(accountId)) {
+            return `act_${accountId.slice(4)}`;
+        }
+
+        if (/^\d+$/.test(accountId)) {
+            return `act_${accountId}`;
+        }
+    }
+
+    // Preserve Google's resource name or ID as returned by its API.
+    return accountId;
+}
+
+function getAccountId(
+    provider: ProviderName,
+    account: unknown
+): string | null {
+    if (typeof account === "string" || typeof account === "number") {
+        return normalizeProviderAccountId(provider, account);
     }
 
     if (!account || typeof account !== "object") {
         return null;
     }
 
-    const item = account as Record<string, unknown>;
+    const item: any = account as Record<string, unknown>;
 
-    const id =
-        item.resourceName ??
-        item.resource_name ??
-        item.customerId ??
-        item.customer_id ??
-        item.account_id ??
-        item.id;
+    const candidates =
+        provider === "metaAds"
+            ? [item.id, item.account_id, item.accountId]
+            : [
+                item.resourceName,
+                item.resource_name,
+                item.customerId,
+                item.customer_id,
+                item.id,
+                item.account_id,
+            ];
 
-    return typeof id === "string" || typeof id === "number"
-        ? String(id)
-        : null;
+    for (const candidate of candidates) {
+        const accountId = normalizeProviderAccountId(provider, candidate);
+
+        if (accountId) {
+            return accountId;
+        }
+    }
+
+    return null;
 }
-
 function getAccountName(account: unknown, accountId: string): string {
     if (!account || typeof account !== "object") {
         return accountId;
     }
 
-    const item = account as Record<string, unknown>;
+    const item: any = account as Record<string, unknown>;
 
     const name =
         item.name ??
@@ -405,13 +446,13 @@ export async function saveProviderTokens(
             : {}),
     };
 
-const tokenIsValid =
-    expiresAt === null || expiresAt.getTime() > Date.now();
+    const tokenIsValid =
+        expiresAt === null || expiresAt.getTime() > Date.now();
 
-const isConnected =
-    provider === "googleAds"
-        ? Boolean(credentials.refreshToken) || tokenIsValid
-        : tokenIsValid;
+    const isConnected =
+        provider === "googleAds"
+            ? Boolean(credentials.refreshToken) || tokenIsValid
+            : tokenIsValid;
 
     if (existingConnection) {
         existingConnection.credentials = credentials;
@@ -459,7 +500,7 @@ export async function saveProviderAccounts(
     >();
 
     for (const account of accounts) {
-        const accountId = getAccountId(account);
+        const accountId = getAccountId(provider, account);
 
         if (!accountId) {
             throw new Error(
@@ -515,8 +556,8 @@ export async function saveProviderAccounts(
                 "time_zone"
             );
 
-            if (currency) fieldsToSet.currency = currency;
-            if (timezone) fieldsToSet.timezone = timezone;
+            if (currency) fieldsToSet[`currency`] = currency;
+            if (timezone) fieldsToSet[`timezone`] = timezone;
 
             return {
                 updateOne: {

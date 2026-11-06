@@ -14,9 +14,10 @@ export default async function Home() {
   const { userId } = await auth();
 
   // Already signed in? Go directly to account connections.
-  if (userId) {
-    redirect("/provider");
-  }
+  // if (userId) {
+  //   redirect("/provider");
+  // }
+
 
   return (
     <>
@@ -26,6 +27,7 @@ export default async function Home() {
           <p className="text-xs text-slate-500">Unified Ads Platform</p>
         </div>
         <Suspense>
+          <div className="flex gap-8 items-center">
           <Show when="signed-out">
             <SignInButton />
             <SignUpButton>
@@ -37,6 +39,7 @@ export default async function Home() {
           <Show when="signed-in">
             <UserButton />
           </Show>
+          </div>
         </Suspense>
       </header>
       <main className="flex min-h-screen items-center justify-center bg-slate-50 px-6">

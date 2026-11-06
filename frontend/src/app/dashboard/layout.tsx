@@ -21,11 +21,6 @@ const navigation = [
     href: "/dashboard/campaigns",
     icon: "◫",
   },
-  {
-    label: "Drafts",
-    href: "/dashboard/campaigns/drafts",
-    icon: "▱",
-  },
   // {
   //   label: "Create Campaign",
   //   href: "/dashboard/create-campaign",

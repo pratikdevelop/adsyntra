@@ -1,571 +1,706 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import axios from "axios";
 import {
-  CAMPAIGN_STATUS_STORAGE_KEY,
-  CampaignStatus,
-  CampaignRecord,
-  getCampaignRecords,
-  readManagedCampaigns,
-  writeManagedCampaigns,
-} from "./_lib/campaigns";
+  Alert,
+  Box,
+  Button,
+  Card,
+  CardContent,
+  Chip,
+  CircularProgress,
+  Collapse,
+  Paper,
+  Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Typography,
+} from "@mui/material";
 
-type View = "ALL" | "GOOGLE" | "META" | "GROUPS";
-type StatusFilter = "ALL" | CampaignStatus;
-const statusStyles: Record<CampaignStatus, string> = {
-  ACTIVE: "bg-emerald-50 text-emerald-700 ring-emerald-200",
-  PAUSED: "bg-amber-50 text-amber-700 ring-amber-200",
-  DRAFT: "bg-slate-100 text-slate-600 ring-slate-200",
-  FAILED: "bg-red-50 text-red-700 ring-red-200",
-  ARCHIVED: "bg-slate-100 text-slate-500 ring-slate-200",
-};
+type ProviderKey = "googleAds" | "metaAds";
+type JsonRecord = Record<string, unknown>;
 
-function PlatformBadge({ platform }: { platform: "GOOGLE" | "META" }) {
-  return (
-    <span
-      className={`inline-flex rounded-lg px-2.5 py-1 text-xs font-semibold ${platform === "GOOGLE" ? "bg-blue-50 text-blue-700" : "bg-indigo-50 text-indigo-700"}`}
-    >
-      {platform === "GOOGLE" ? "Google Ads" : "Meta Ads"}
-    </span>
-  );
+interface GlobalCampaign {
+  id: string;
+  provider: ProviderKey | string;
+  accountId?: string | null;
+  name: string;
+  status?: string | null;
+  effectiveStatus?: string | null;
+  objective?: string | null;
+  campaignType?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  source?: JsonRecord | null;
+}
+
+interface ProviderPagination {
+  hasMore?: boolean;
+  nextToken?: string | null;
+  totalResults?: number | null;
+}
+
+interface ProviderResult {
+  connected?: boolean;
+  status?: string;
+  account?: {
+    id?: string;
+    name?: string;
+    currency?: string | null;
+    timezone?: string | null;
+  } | null;
+  pagination?: ProviderPagination;
+  error?: unknown;
+}
+
+interface GlobalCampaignsApiResponse {
+  success: boolean;
+  message?: string;
+  providers?: Partial<Record<ProviderKey, ProviderResult>>;
+  campaigns?: GlobalCampaign[];
+  stats?: {
+    total?: number;
+    providersSucceeded?: number;
+    providersFailed?: number;
+  };
 }
 
 interface CampaignsPageProps {
-  initialStatusFilter?: StatusFilter;
   pageTitle?: string;
   pageDescription?: string;
+  /** Kept so existing route wrappers remain type-compatible. The global table no longer filters by status. */
+  initialStatusFilter?: string;
+}
+
+const DEFAULT_DESCRIPTION =
+  "View Google Ads and Meta Ads campaigns together in one table.";
+
+function asRecord(value: unknown): JsonRecord | null {
+  return value !== null && typeof value === "object"
+    ? (value as JsonRecord)
+    : null;
+}
+
+function readNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+
+function getCampaignCurrency(
+  campaign: GlobalCampaign,
+  providers: Partial<Record<ProviderKey, ProviderResult>>,
+): string | null {
+  const source = asRecord(campaign.source);
+  const customer = asRecord(source?.customer);
+  const budget = asRecord(source?.budget);
+  const campaignBudget = asRecord(source?.campaignBudget);
+  const currency =
+    customer?.currencyCode ??
+    budget?.currencyCode ??
+    campaignBudget?.currencyCode ??
+    providers[campaign.provider as ProviderKey]?.account?.currency;
+
+  return typeof currency === "string" && currency.trim()
+    ? currency.trim()
+    : null;
+}
+
+function getCampaignSpend(campaign: GlobalCampaign): number | null {
+  const metrics = asRecord(asRecord(campaign.source)?.metrics);
+  const spend = readNumber(metrics?.spend);
+  if (spend !== null) return spend;
+
+  const costMicros = readNumber(metrics?.costMicros);
+  return costMicros !== null ? costMicros / 1_000_000 : null;
+}
+
+function getCampaignBudget(campaign: GlobalCampaign): number | null {
+  const source = asRecord(campaign.source);
+  const normalizedBudget = asRecord(source?.budget);
+  const apiBudget = asRecord(source?.campaignBudget);
+
+  const normalizedAmount = readNumber(normalizedBudget?.amount);
+  if (normalizedAmount !== null) return normalizedAmount;
+
+  const amountMicros = readNumber(
+    normalizedBudget?.amountMicros ?? apiBudget?.amountMicros,
+  );
+  return amountMicros !== null ? amountMicros / 1_000_000 : null;
+}
+
+function formatCurrency(value: number | null, currency: string | null): string {
+  if (value === null) return "—";
+  if (!currency) {
+    return new Intl.NumberFormat("en-IN", {
+      maximumFractionDigits: 2,
+    }).format(value);
+  }
+
+  try {
+    return new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency,
+      maximumFractionDigits: 2,
+    }).format(value);
+  } catch {
+    return `${value.toLocaleString("en-IN")} ${currency}`;
+  }
+}
+
+function formatMetric(value: unknown): string {
+  const parsed = readNumber(value);
+  return parsed === null ? "—" : new Intl.NumberFormat("en-IN").format(parsed);
+}
+
+function getMetric(campaign: GlobalCampaign, key: string): unknown {
+  return asRecord(asRecord(campaign.source)?.metrics)?.[key];
+}
+
+function getCampaignType(campaign: GlobalCampaign): string {
+  if (campaign.campaignType) return campaign.campaignType;
+  const source = asRecord(campaign.source);
+  const rawCampaign = asRecord(source?.campaign);
+  const channel = rawCampaign?.advertisingChannelType ?? source?.buying_type;
+  return typeof channel === "string" ? channel : "—";
+}
+
+function getProviderLabel(provider: string): string {
+  if (provider === "googleAds") return "Google Ads";
+  if (provider === "metaAds") return "Meta Ads";
+  return provider;
+}
+
+function getProviderColor(
+  provider: string,
+): "primary" | "secondary" | "default" {
+  if (provider === "googleAds") return "primary";
+  if (provider === "metaAds") return "secondary";
+  return "default";
+}
+
+function getStatusColor(
+  status: string | null | undefined,
+): "success" | "warning" | "error" | "default" {
+  const normalized = status?.toUpperCase();
+  if (normalized === "ACTIVE" || normalized === "ENABLED") return "success";
+  if (normalized === "PAUSED") return "warning";
+  if (normalized === "FAILED" || normalized === "ERROR") return "error";
+  return "default";
+}
+
+function getErrorMessage(error: unknown): string {
+  if (axios.isAxiosError(error)) {
+    const data = error.response?.data as
+      | { message?: string; error?: string }
+      | undefined;
+    return (
+      data?.message ??
+      data?.error ??
+      error.message ??
+      "Failed to load campaigns."
+    );
+  }
+  return error instanceof Error ? error.message : "Failed to load campaigns.";
 }
 
 export default function CampaignsPage({
-  initialStatusFilter = "ALL",
   pageTitle = "Campaign Management",
-  pageDescription = "Manage Google Ads and Meta Ads independently, with a shared initiative view when campaigns come from one brief.",
+  pageDescription = DEFAULT_DESCRIPTION,
 }: CampaignsPageProps = {}) {
-  const isDraftsPage = initialStatusFilter === "DRAFT";
-  const [view, setView] = useState<View>("ALL");
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>(initialStatusFilter);
-  const [statuses, setStatuses] = useState<Record<string, CampaignStatus>>({});
-  const [campaigns, setCampaigns] = useState<CampaignRecord[]>([]);
-  const [notice, setNotice] = useState("");
+  const [campaigns, setCampaigns] = useState<GlobalCampaign[]>([]);
+  const [providers, setProviders] = useState<
+    Partial<Record<ProviderKey, ProviderResult>>
+  >({});
+  const providersRef = useRef<Partial<Record<ProviderKey, ProviderResult>>>({});
+  const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
+
+  const loadCampaigns = useCallback(
+    async (append = false) => {
+      if (append) setLoadingMore(true);
+      else setLoading(true);
+
+      try {
+        const params: Record<string, string> = {};
+        if (append) {
+          const googleToken = providersRef.current.googleAds?.pagination?.nextToken;
+          const metaToken = providersRef.current.metaAds?.pagination?.nextToken;
+          if (googleToken) params.googlePageToken = googleToken;
+          if (metaToken) params.metaPageToken = metaToken;
+        }
+
+        const response = await axios.get<GlobalCampaignsApiResponse>(
+          "/api/campaigns",
+          { params },
+        );
+        const payload = response.data;
+
+        if (!payload?.success) {
+          throw new Error(payload?.message || "Campaign API returned an unsuccessful response.");
+        }
+
+        const incomingCampaigns = Array.isArray(payload.campaigns)
+          ? payload.campaigns
+          : [];
+
+        setCampaigns((current) => {
+          if (!append) return incomingCampaigns;
+          const merged = new Map<string, GlobalCampaign>();
+          [...current, ...incomingCampaigns].forEach((campaign) => {
+            merged.set(`${campaign.provider}:${campaign.id}`, campaign);
+          });
+          return [...merged.values()];
+        });
+        providersRef.current = payload.providers ?? {};
+        setProviders(payload.providers ?? {});
+        setError(null);
+      } catch (requestError) {
+        setError(getErrorMessage(requestError));
+      } finally {
+        setLoading(false);
+        setLoadingMore(false);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
-    const load = () => setCampaigns(getCampaignRecords());
-    load();
-    try {
-      const saved = window.localStorage.getItem(CAMPAIGN_STATUS_STORAGE_KEY);
-      if (saved)
-        setStatuses(JSON.parse(saved) as Record<string, CampaignStatus>);
-    } catch {
-      setNotice("Saved prototype actions could not be loaded in this browser.");
-    }
-    const onStorage = () => load();
-    window.addEventListener("storage", onStorage);
-    window.addEventListener("focus", onStorage);
-    return () => {
-      window.removeEventListener("storage", onStorage);
-      window.removeEventListener("focus", onStorage);
-    };
-  }, []);
+    void loadCampaigns(false);
+  }, [loadCampaigns]);
 
-  const rows = useMemo(
-    () => campaigns.map((c) => ({ ...c, status: statuses[c.id] ?? c.status })),
-    [campaigns, statuses],
-  );
-  const groups = useMemo(() => {
-    const map = new Map<string, CampaignRecord[]>();
-    rows.forEach((row) => {
-      const key = row.groupId || row.id;
-      map.set(key, [...(map.get(key) ?? []), row]);
-    });
-    return [...map.entries()].map(([id, items]) => ({
-      id,
-      name: items[0].name,
-      items,
-      createdAt: items[0].createdAt,
-    }));
-  }, [rows]);
-  const filtered = useMemo(
-    () =>
-      rows.filter((c) => {
-        const matchView = view === "ALL" || view === c.platform;
-        const matchSearch =
-          `${c.name} ${c.id} ${c.groupId} ${c.campaignType} ${c.account}`
-            .toLowerCase()
-            .includes(search.toLowerCase());
-        return (
-          matchView &&
-          matchSearch &&
-          (statusFilter === "ALL" || c.status === statusFilter)
+  const totalSpend = useMemo(() => {
+    const totalsByCurrency = new Map<string, number>();
+    let unknownCurrencyTotal = 0;
+    let hasUnknownCurrencySpend = false;
+
+    campaigns.forEach((campaign) => {
+      const spend = getCampaignSpend(campaign);
+      if (spend === null) return;
+      const currency = getCampaignCurrency(campaign, providers);
+      if (currency) {
+        totalsByCurrency.set(
+          currency,
+          (totalsByCurrency.get(currency) ?? 0) + spend,
         );
-      }),
-    [rows, view, search, statusFilter],
-  );
-  const active = filtered.filter((c) => c.status === "ACTIVE").length;
-  const paused = filtered.filter((c) => c.status === "PAUSED").length;
-  const failed = filtered.filter((c) => c.status === "FAILED").length;
+      } else {
+        unknownCurrencyTotal += spend;
+        hasUnknownCurrencySpend = true;
+      }
+    });
 
-  function updateStatus(id: string, next: CampaignStatus) {
-    const nextStatuses = { ...statuses, [id]: next };
-    setStatuses(nextStatuses);
-    setCampaigns((current) =>
-      current.map((c) =>
-        c.id === id
-          ? { ...c, status: next, updatedAt: new Date().toLocaleString() }
-          : c,
-      ),
-    );
-    try {
-      window.localStorage.setItem(
-        CAMPAIGN_STATUS_STORAGE_KEY,
-        JSON.stringify(nextStatuses),
-      );
-      const stored = readManagedCampaigns();
-      writeManagedCampaigns(
-        stored.map((c) =>
-          c.id === id
-            ? { ...c, status: next, updatedAt: new Date().toLocaleString() }
-            : c,
-        ),
-      );
-      setNotice(
-        `Prototype status updated to ${next.toLowerCase()}. This has not been sent to ${id.endsWith("GOOGLE") ? "Google Ads" : "Meta Ads"}.`,
-      );
-    } catch {
-      setNotice(
-        "Status changed on this page, but could not be saved in this browser.",
-      );
+    if (totalsByCurrency.size > 1) return "Multiple currencies";
+    if (totalsByCurrency.size === 1 && !hasUnknownCurrencySpend) {
+      const [currency, amount] = [...totalsByCurrency.entries()][0];
+      return formatCurrency(amount, currency);
     }
-  }
+    if (totalsByCurrency.size === 0 && !hasUnknownCurrencySpend) {
+      return formatCurrency(0, null);
+    }
+    if (totalsByCurrency.size === 0) {
+      return formatCurrency(unknownCurrencyTotal, null);
+    }
+    return "Multiple currencies";
+  }, [campaigns, providers]);
 
-  function duplicateCampaign(campaign: CampaignRecord) {
-    const now = new Date().toLocaleString();
-    const copyId = `LOCAL-COPY-${Date.now()}`;
-    const copy = {
-      ...campaign,
-      id: copyId,
-      groupId: copyId,
-      name: `${campaign.name} (Copy)`,
-      status: "DRAFT" as CampaignStatus,
-      creationStatus: "DRAFT" as const,
-      createdAt: now,
-      updatedAt: now,
-      source: "LOCAL" as const,
-      activity: [
-        {
-          date: now,
-          title: "Prototype duplicate created",
-          description:
-            "This is a local draft copy; no provider API request was made.",
-          status: "warning" as const,
-        },
-      ],
-    };
-    const stored = readManagedCampaigns();
-    writeManagedCampaigns([copy, ...stored]);
-    setCampaigns((current) => [copy, ...current]);
-    setNotice("A separate provider-specific draft copy was created locally.");
-  }
+  const googleCount = campaigns.filter(
+    (campaign) => campaign.provider === "googleAds",
+  ).length;
+  const metaCount = campaigns.filter(
+    (campaign) => campaign.provider === "metaAds",
+  ).length;
+  const connectedProviders = ["googleAds", "metaAds"].filter(
+    (provider) => providers[provider as ProviderKey]?.connected,
+  ).length;
 
-  const visibleGroups = groups
-    .map((group) => ({
-      ...group,
-      items: group.items.filter(
-        (campaign) => statusFilter === "ALL" || campaign.status === statusFilter,
-      ),
-    }))
-    .filter((group) => group.items.length > 0)
-    .filter((group) =>
-      `${group.name} ${group.id}`.toLowerCase().includes(search.toLowerCase()),
-    );
+  const hasMore = Boolean(
+    providers.googleAds?.pagination?.hasMore ||
+      providers.metaAds?.pagination?.hasMore,
+  );
 
   return (
-    <div className="mx-auto max-w-7xl">
-      <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
-        <div>
-          <p className="text-sm font-semibold text-blue-600">
-            Campaign workspace
-          </p>
-          <h1 className="mt-1 text-3xl font-bold tracking-tight text-slate-900">
+    <Box sx={{ width: "100%", maxWidth: 1600, mx: "auto" }}>
+      <Stack
+        direction={{ xs: "column", sm: "row" }}
+        justifyContent="space-between"
+        alignItems={{ xs: "stretch", sm: "center" }}
+        spacing={2}
+        sx={{ mb: 3 }}
+      >
+        <Box>
+          <Typography variant="h4" component="h1" fontWeight={700}>
             {pageTitle}
-          </h1>
-          <p className="mt-2 text-sm text-slate-500">{pageDescription}</p>
-        </div>
-        <Link
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>
+            {pageDescription}
+          </Typography>
+        </Box>
+        <Button
+          component={Link}
           href="/dashboard/campaigns/new"
-          className="inline-flex items-center justify-center rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700"
+          variant="contained"
+          size="large"
+          disableElevation
         >
-          <span className="mr-2 text-lg leading-none">+</span>Create campaign
-        </Link>
-      </div>
-      <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
-        <strong className="mr-2 uppercase tracking-wide">Prototype data</strong>
-        Provider campaigns are separate records. Shared initiatives only link
-        related Google and Meta records; metrics and provider actions remain
-        separate. Live provider sync is not connected.
-      </div>
+          Create campaign
+        </Button>
+      </Stack>
 
-      <nav aria-label="Campaign sections" className="mt-6 flex flex-wrap items-center gap-2">
-        <Link
-          href="/dashboard/campaigns"
-          aria-current={!isDraftsPage ? "page" : undefined}
-          className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${!isDraftsPage ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+      <Box
+        sx={{
+          display: "grid",
+          gridTemplateColumns: {
+            xs: "1fr",
+            sm: "repeat(2, minmax(0, 1fr))",
+            xl: "repeat(4, minmax(0, 1fr))",
+          },
+          gap: 2,
+          mb: 3,
+        }}
+      >
+        <MetricCard label="Total campaigns" value={campaigns.length} detail="Across all connected platforms" />
+        <MetricCard label="Google Ads" value={googleCount} detail={providers.googleAds?.connected ? "Account connected" : "Not connected"} />
+        <MetricCard label="Meta Ads" value={metaCount} detail={providers.metaAds?.connected ? "Account connected" : "Not connected"} />
+        <MetricCard label="Total spend" value={totalSpend} detail="Based on metrics returned by providers" />
+      </Box>
+
+      {error && (
+        <Alert
+          severity="error"
+          sx={{ mb: 2 }}
+          action={
+            <Button color="inherit" size="small" onClick={() => void loadCampaigns(false)}>
+              Retry
+            </Button>
+          }
         >
-          All campaigns
-        </Link>
-        <Link
-          href="/dashboard/campaigns/drafts"
-          aria-current={isDraftsPage ? "page" : undefined}
-          className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${isDraftsPage ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"}`}
+          {error}
+        </Alert>
+      )}
+
+      <Paper variant="outlined" sx={{ width: "100%", overflow: "hidden" }}>
+        <Stack
+          direction={{ xs: "column", sm: "row" }}
+          justifyContent="space-between"
+          alignItems={{ xs: "stretch", sm: "center" }}
+          spacing={1}
+          sx={{ px: 2.5, py: 2, borderBottom: 1, borderColor: "divider" }}
         >
-          Drafts
-        </Link>
-      </nav>
+          <Box>
+            <Typography variant="h6" fontWeight={700}>
+              All campaigns
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              {campaigns.length} campaigns · {connectedProviders} of 2 providers connected
+            </Typography>
+          </Box>
+          <Stack direction="row" spacing={1}>
+            <Chip
+              label={`Google ${providers.googleAds?.status ?? "unknown"}`}
+              color={providers.googleAds?.connected ? "success" : "default"}
+              variant="outlined"
+              size="small"
+            />
+            <Chip
+              label={`Meta ${providers.metaAds?.status ?? "unknown"}`}
+              color={providers.metaAds?.connected ? "success" : "default"}
+              variant="outlined"
+              size="small"
+            />
+          </Stack>
+        </Stack>
 
-      <div className="mt-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {(
-          isDraftsPage
-            ? [
-                { label: "Draft campaigns", value: rows.filter((c) => c.status === "DRAFT").length, hint: "Saved and ready to continue" },
-                { label: "Google drafts", value: rows.filter((c) => c.status === "DRAFT" && c.platform === "GOOGLE").length, hint: "Google Ads drafts" },
-                { label: "Meta drafts", value: rows.filter((c) => c.status === "DRAFT" && c.platform === "META").length, hint: "Meta Ads drafts" },
-                { label: "All campaigns", value: rows.length, hint: "Across both providers" },
-              ]
-            : [
-                { label: "Provider campaigns", value: rows.length, hint: "Separate Google / Meta records" },
-                { label: "Active in view", value: active, hint: "Currently marked active" },
-                { label: "Paused in view", value: paused, hint: "Currently marked paused" },
-                { label: "Failed in view", value: failed, hint: "Needs review" },
-              ]
-        ).map((s) => (
-          <div
-            key={s.label}
-            className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm"
-          >
-            <p className="text-sm font-medium text-slate-500">{s.label}</p>
-            <p className="mt-3 text-3xl font-bold tracking-tight text-slate-900">
-              {s.value}
-            </p>
-            <p className="mt-1 text-xs text-slate-400">{s.hint}</p>
-          </div>
-        ))}
-      </div>
-
-      <section className="mt-7 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-        <div className="border-b border-slate-200 p-5 sm:p-6">
-          <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-            <div>
-              <h2 className="text-lg font-bold text-slate-900">
-                Campaign listing
-              </h2>
-              <p className="mt-1 text-sm text-slate-500">
-                Each row represents one platform campaign, never a merged Google
-                + Meta campaign.
-              </p>
-            </div>
-            <div className="flex flex-col gap-3 sm:flex-row">
-              <label className="relative block sm:min-w-64">
-                <span className="sr-only">Search campaigns</span>
-                <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">
-                  ⌕
-                </span>
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search campaigns or initiatives..."
-                  className="w-full rounded-xl border border-slate-200 py-2.5 pl-9 pr-3 text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-                />
-              </label>
-              <select
-                value={statusFilter}
-                onChange={(e) =>
-                  setStatusFilter(e.target.value as StatusFilter)
-                }
-                className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-700"
-              >
-                <option value="ALL">All statuses</option>
-                <option value="ACTIVE">Active</option>
-                <option value="PAUSED">Paused</option>
-                <option value="DRAFT">Draft</option>
-                <option value="FAILED">Failed</option>
-                <option value="ARCHIVED">Archived</option>
-              </select>
-            </div>
-          </div>
-          <div className="mt-5 flex flex-wrap gap-2">
-            {(
-              [
-                ["ALL", `All platforms (${rows.length})`],
-                [
-                  "GOOGLE",
-                  `Google Ads (${rows.filter((x) => x.platform === "GOOGLE").length})`,
-                ],
-                [
-                  "META",
-                  `Meta Ads (${rows.filter((x) => x.platform === "META").length})`,
-                ],
-                ["GROUPS", `Shared initiatives (${groups.length})`],
-              ] as [View, string][]
-            ).map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => setView(key)}
-                className={`rounded-xl px-4 py-2.5 text-sm font-semibold transition ${view === key ? "bg-slate-900 text-white" : "border border-slate-200 text-slate-600 hover:bg-slate-50"}`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-        </div>
-        {notice && (
-          <div
-            role="status"
-            className="border-b border-blue-100 bg-blue-50 px-5 py-3 text-sm text-blue-800"
-          >
-            {notice}
-          </div>
-        )}
-        {view === "GROUPS" ? (
-          <div className="divide-y divide-slate-100">
-            {visibleGroups.map((group) => (
-              <article key={group.id} className="p-5 sm:p-6">
-                <div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-start">
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                      Shared marketing initiative
-                    </p>
-                    <h3 className="mt-1 text-base font-bold text-slate-900">
-                      {group.name}
-                    </h3>
-                    <p className="mt-1 text-xs text-slate-400">
-                      {group.id} · Created {group.createdAt}
-                    </p>
-                  </div>
-                  <span className="w-fit rounded-lg bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700">
-                    {group.items.length} platform campaign
-                    {group.items.length === 1 ? "" : "s"}
-                  </span>
-                </div>
-                <div className="mt-4 grid gap-3 md:grid-cols-2">
-                  {group.items.map((campaign) => (
-                    <div
-                      key={campaign.id}
-                      className="rounded-xl border border-slate-200 p-4"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <PlatformBadge platform={campaign.platform} />
-                        <span
-                          className={`rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${statusStyles[campaign.status]}`}
-                        >
-                          {campaign.status}
-                        </span>
-                      </div>
-                      <p className="mt-3 font-semibold text-slate-900">
-                        {campaign.campaignType}
-                      </p>
-                      <p className="mt-1 text-sm text-slate-500">
-                        Budget: {campaign.budget}
-                      </p>
-                      <Link
-                        href={`/dashboard/campaigns/${encodeURIComponent(campaign.id)}`}
-                        className="mt-3 inline-flex text-sm font-semibold text-blue-600 hover:text-blue-800"
-                      >
-                        Open{" "}
-                        {campaign.platform === "GOOGLE" ? "Google" : "Meta"}{" "}
-                        campaign →
-                      </Link>
-                    </div>
-                  ))}
-                </div>
-              </article>
-            ))}
-            {visibleGroups.length === 0 && (
-              <EmptyState onClear={() => setSearch("")} />
-            )}
-          </div>
+        {loading ? (
+          <Stack alignItems="center" justifyContent="center" spacing={2} sx={{ py: 9 }}>
+            <CircularProgress />
+            <Typography variant="body2" color="text.secondary">
+              Loading campaigns from Google Ads and Meta Ads…
+            </Typography>
+          </Stack>
+        ) : campaigns.length === 0 ? (
+          <Alert severity="info" sx={{ m: 2 }}>
+            No campaigns were returned by the connected advertising accounts.
+          </Alert>
         ) : (
-          <>
-            <div className="hidden overflow-x-auto md:block">
-              <table className="w-full min-w-[900px] text-left">
-                <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-                  <tr>
-                    <th className="px-6 py-4 font-semibold">Campaign</th>
-                    <th className="px-4 py-4 font-semibold">Platform</th>
-                    <th className="px-4 py-4 font-semibold">Budget</th>
-                    <th className="px-4 py-4 font-semibold">Status</th>
-                    <th className="px-4 py-4 font-semibold">Initiative</th>
-                    <th className="px-4 py-4 font-semibold">Updated</th>
-                    <th className="px-6 py-4 text-right font-semibold">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {filtered.map((c) => (
-                    <tr key={c.id} className="transition hover:bg-slate-50/70">
-                      <td className="px-6 py-4">
-                        <Link
-                          href={`/dashboard/campaigns/${encodeURIComponent(c.id)}`}
-                          className="font-semibold text-slate-900 hover:text-blue-700"
-                        >
-                          {c.name}
-                        </Link>
-                        <p className="mt-1 text-xs text-slate-400">
-                          {c.id} · {c.campaignType}
-                        </p>
-                      </td>
-                      <td className="px-4 py-4">
-                        <PlatformBadge platform={c.platform} />
-                      </td>
-                      <td className="px-4 py-4 text-sm font-medium text-slate-700">
-                        {c.budget}
-                      </td>
-                      <td className="px-4 py-4">
-                        <span
-                          className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${statusStyles[c.status]}`}
-                        >
-                          {c.status}
-                        </span>
-                      </td>
-                      <td className="px-4 py-4">
-                        <span className="text-xs text-slate-500">
-                          {c.groupId}
-                        </span>
-                      </td>
-                      <td className="px-4 py-4 text-xs text-slate-500">
-                        {c.updatedAt}
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="flex justify-end gap-2">
-                          {c.status === "ACTIVE" && (
-                            <button
-                              onClick={() => updateStatus(c.id, "PAUSED")}
-                              className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600"
-                            >
-                              Pause
-                            </button>
-                          )}
-                          {c.status === "PAUSED" && (
-                            <button
-                              onClick={() => updateStatus(c.id, "ACTIVE")}
-                              className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600"
-                            >
-                              Resume
-                            </button>
-                          )}
-                          <button
-                            onClick={() => duplicateCampaign(c)}
-                            className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-600"
+          <TableContainer sx={{ width: "100%" }}>
+            <Table size="medium" sx={{ minWidth: 1900 }} aria-label="Global advertising campaigns">
+              <TableHead>
+                <TableRow sx={{ backgroundColor: "action.hover" }}>
+                  <TableCell sx={{ fontWeight: 700 }}>Campaign</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Platform</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Objective</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Campaign type</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Bid strategy</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>Budget</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>Spend</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>Impressions</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>Reach</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>Clicks</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>CTR</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>CPC</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>CPM</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>Conversions</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>Conv. rate</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>Cost / conv.</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>Conv. value</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>ROAS</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Status</TableCell>
+                  <TableCell align="center" sx={{ fontWeight: 700 }}>Details</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>Action</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {campaigns.map((campaign) => {
+                  const currency = getCampaignCurrency(campaign, providers);
+                  const status = campaign.effectiveStatus || campaign.status || "UNKNOWN";
+                  const rowKey = `${campaign.provider}:${campaign.id}`;
+                  const isExpanded = Boolean(expandedRows[rowKey]);
+                  const source = asRecord(campaign.source);
+                  const rawCampaign = asRecord(source?.campaign);
+                  const budget = asRecord(source?.budget) ?? asRecord(source?.campaignBudget);
+                  const bidding = asRecord(source?.bidding);
+                  const specialCategories = source?.special_ad_categories;
+                  const startTime = source?.start_time;
+                  const createdTime = source?.created_time ?? campaign.createdAt;
+                  const updatedTime = source?.updated_time ?? campaign.updatedAt;
+
+                  const metricCurrency = currency;
+                  const formatPercent = (value: unknown) => {
+                    const number = readNumber(value);
+                    return number === null
+                      ? "—"
+                      : `${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(number)}%`;
+                  };
+                  const formatRatio = (value: unknown) => {
+                    const number = readNumber(value);
+                    return number === null
+                      ? "—"
+                      : `${new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(number)}x`;
+                  };
+                  const displayValue = (value: unknown) =>
+                    value === null || value === undefined || value === ""
+                      ? "—"
+                      : Array.isArray(value)
+                        ? value.length ? value.join(", ") : "None"
+                        : String(value);
+
+                  return (
+                    <Fragment key={rowKey}>
+                      <TableRow hover>
+                        <TableCell sx={{ minWidth: 230 }}>
+                          <Typography variant="body2" fontWeight={600}>
+                            {campaign.name || "Untitled campaign"}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary" display="block">
+                            ID: {campaign.id}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary" display="block">
+                            Account: {campaign.accountId || "—"}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Chip
+                            label={getProviderLabel(campaign.provider)}
+                            color={getProviderColor(campaign.provider)}
+                            size="small"
+                            variant="outlined"
+                          />
+                        </TableCell>
+                        <TableCell>{campaign.objective || "—"}</TableCell>
+                        <TableCell>{getCampaignType(campaign)}</TableCell>
+                        <TableCell>
+                          {displayValue(bidding?.strategy ?? rawCampaign?.biddingStrategyType)}
+                        </TableCell>
+                        <TableCell align="right">
+                          {formatCurrency(getCampaignBudget(campaign), currency)}
+                          <Typography variant="caption" color="text.secondary" display="block">
+                            {displayValue(budget?.period ?? budget?.type)}
+                          </Typography>
+                        </TableCell>
+                        <TableCell align="right">
+                          {formatCurrency(getCampaignSpend(campaign), currency)}
+                        </TableCell>
+                        <TableCell align="right">{formatMetric(getMetric(campaign, "impressions"))}</TableCell>
+                        <TableCell align="right">{formatMetric(getMetric(campaign, "reach"))}</TableCell>
+                        <TableCell align="right">{formatMetric(getMetric(campaign, "clicks"))}</TableCell>
+                        <TableCell align="right">{formatPercent(getMetric(campaign, "ctr"))}</TableCell>
+                        <TableCell align="right">
+                          {formatCurrency(readNumber(getMetric(campaign, "cpc")), metricCurrency)}
+                        </TableCell>
+                        <TableCell align="right">
+                          {formatCurrency(readNumber(getMetric(campaign, "cpm")), metricCurrency)}
+                        </TableCell>
+                        <TableCell align="right">{formatMetric(getMetric(campaign, "conversions"))}</TableCell>
+                        <TableCell align="right">{formatPercent(getMetric(campaign, "conversionRate"))}</TableCell>
+                        <TableCell align="right">
+                          {formatCurrency(readNumber(getMetric(campaign, "costPerConversion")), metricCurrency)}
+                        </TableCell>
+                        <TableCell align="right">
+                          {formatCurrency(readNumber(getMetric(campaign, "conversionValue")), metricCurrency)}
+                        </TableCell>
+                        <TableCell align="right">{formatRatio(getMetric(campaign, "roas"))}</TableCell>
+                        <TableCell>
+                          <Chip
+                            label={status}
+                            color={getStatusColor(status)}
+                            size="small"
+                            variant="outlined"
+                          />
+                        </TableCell>
+                        <TableCell align="center">
+                          <Button
+                            size="small"
+                            onClick={() =>
+                              setExpandedRows((current) => ({
+                                ...current,
+                                [rowKey]: !current[rowKey],
+                              }))
+                            }
                           >
-                            Duplicate
-                          </button>
-                          <Link
-                            href={`/dashboard/campaigns/${encodeURIComponent(c.id)}`}
-                            className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
+                            {isExpanded ? "Hide" : "Expand"}
+                          </Button>
+                        </TableCell>
+                        <TableCell align="right">
+                          <Button
+                            component={Link}
+                            href={`/dashboard/campaigns/${encodeURIComponent(campaign.id)}`}
+                            size="small"
+                            variant="text"
                           >
-                            Details
-                          </Link>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="divide-y divide-slate-100 md:hidden">
-              {filtered.map((c) => (
-                <article key={c.id} className="p-5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <Link
-                        href={`/dashboard/campaigns/${encodeURIComponent(c.id)}`}
-                        className="font-semibold text-slate-900"
-                      >
-                        {c.name}
-                      </Link>
-                      <p className="mt-1 text-xs text-slate-400">{c.id}</p>
-                    </div>
-                    <span
-                      className={`rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ring-inset ${statusStyles[c.status]}`}
-                    >
-                      {c.status}
-                    </span>
-                  </div>
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <PlatformBadge platform={c.platform} />
-                    <span className="text-xs text-slate-500">{c.budget}</span>
-                  </div>
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {c.status === "ACTIVE" && (
-                      <button
-                        onClick={() => updateStatus(c.id, "PAUSED")}
-                        className="rounded-lg border px-3 py-2 text-xs font-semibold"
-                      >
-                        Pause
-                      </button>
-                    )}
-                    {c.status === "PAUSED" && (
-                      <button
-                        onClick={() => updateStatus(c.id, "ACTIVE")}
-                        className="rounded-lg border px-3 py-2 text-xs font-semibold"
-                      >
-                        Resume
-                      </button>
-                    )}
-                    <button
-                      onClick={() => duplicateCampaign(c)}
-                      className="rounded-lg border px-3 py-2 text-xs font-semibold"
-                    >
-                      Duplicate
-                    </button>
-                    <Link
-                      href={`/dashboard/campaigns/${encodeURIComponent(c.id)}`}
-                      className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white"
-                    >
-                      Details
-                    </Link>
-                  </div>
-                </article>
-              ))}
-            </div>
-            {filtered.length === 0 && (
-              <EmptyState
-                onClear={() => {
-                  setSearch("");
-                  setStatusFilter("ALL");
-                  setView("ALL");
-                }}
-              />
-            )}
-          </>
+                            View
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                      <TableRow key={`${rowKey}:details`}>
+                        <TableCell colSpan={21} sx={{ py: 0, borderBottom: isExpanded ? undefined : 0 }}>
+                          <Collapse in={isExpanded} timeout="auto" unmountOnExit>
+                            <Box sx={{ py: 2.5 }}>
+                              <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1.5 }}>
+                                Campaign details
+                              </Typography>
+                              <Box
+                                sx={{
+                                  display: "grid",
+                                  gridTemplateColumns: {
+                                    xs: "1fr",
+                                    sm: "repeat(2, minmax(0, 1fr))",
+                                    lg: "repeat(4, minmax(0, 1fr))",
+                                  },
+                                  gap: 2,
+                                }}
+                              >
+                                <DetailItem label="Campaign ID" value={campaign.id} />
+                                <DetailItem label="Account ID" value={campaign.accountId} />
+                                <DetailItem label="Effective status" value={campaign.effectiveStatus} />
+                                <DetailItem label="Campaign objective" value={campaign.objective} />
+                                <DetailItem label="Channel / campaign type" value={getCampaignType(campaign)} />
+                                <DetailItem label="Bidding strategy" value={bidding?.strategy ?? rawCampaign?.biddingStrategyType} />
+                                <DetailItem label="Bidding system status" value={bidding?.systemStatus ?? rawCampaign?.biddingStrategySystemStatus} />
+                                <DetailItem label="Budget name" value={budget?.name} />
+                                <DetailItem label="Budget amount" value={formatCurrency(getCampaignBudget(campaign), currency)} />
+                                <DetailItem label="Budget period" value={budget?.period ?? budget?.type} />
+                                <DetailItem label="Budget delivery" value={budget?.deliveryMethod} />
+                                <DetailItem label="Buying type" value={source?.buying_type} />
+                                <DetailItem label="Start time" value={startTime} />
+                                <DetailItem label="Created" value={createdTime} />
+                                <DetailItem label="Last updated" value={updatedTime} />
+                                <DetailItem
+                                  label="Special ad categories"
+                                  value={specialCategories}
+                                />
+                              </Box>
+                            </Box>
+                          </Collapse>
+                        </TableCell>
+                      </TableRow>
+                    </Fragment>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          </TableContainer>
         )}
-      </section>
-      <p className="mt-4 text-xs text-slate-400">
-        Google metrics, Meta metrics, ad group / ad set breakdowns, and live
-        actions will be connected independently through their respective
-        reporting and management endpoints.
-      </p>
-    </div>
+
+        {!loading && hasMore && (
+          <Box sx={{ display: "flex", justifyContent: "center", p: 2, borderTop: 1, borderColor: "divider" }}>
+            <Button onClick={() => void loadCampaigns(true)} disabled={loadingMore}>
+              {loadingMore ? <CircularProgress size={18} sx={{ mr: 1 }} /> : null}
+              Load more campaigns
+            </Button>
+          </Box>
+        )}
+      </Paper>
+    </Box>
   );
 }
 
-function EmptyState({ onClear }: { onClear: () => void }) {
+function DetailItem({
+  label,
+  value,
+}: {
+  label: string;
+  value: unknown;
+}) {
+  const display =
+    value === null || value === undefined || value === ""
+      ? "—"
+      : Array.isArray(value)
+        ? value.length
+          ? value.join(", ")
+          : "None"
+        : String(value);
+
   return (
-    <div className="px-6 py-16 text-center">
-      <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-xl text-slate-500">
-        ⌕
-      </div>
-      <h3 className="mt-4 font-semibold text-slate-900">No campaigns found</h3>
-      <p className="mt-1 text-sm text-slate-500">
-        Try changing your search or filters.
-      </p>
-      <button
-        onClick={onClear}
-        className="mt-4 text-sm font-semibold text-blue-600 hover:text-blue-800"
+    <Box sx={{ minWidth: 0 }}>
+      <Typography variant="caption" color="text.secondary" display="block">
+        {label}
+      </Typography>
+      <Typography
+        variant="body2"
+        fontWeight={600}
+        sx={{ overflowWrap: "anywhere", mt: 0.25 }}
       >
-        Clear filters
-      </button>
-    </div>
+        {display}
+      </Typography>
+    </Box>
+  );
+}
+
+function MetricCard({
+  label,
+  value,
+  detail,
+}: {
+  label: string;
+  value: string | number;
+  detail: string;
+}) {
+  return (
+    <Card variant="outlined" sx={{ height: "100%" }}>
+      <CardContent>
+        <Typography variant="body2" color="text.secondary" fontWeight={500}>
+          {label}
+        </Typography>
+        <Typography variant="h4" component="p" fontWeight={700} sx={{ mt: 1.25 }}>
+          {value}
+        </Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.75, display: "block" }}>
+          {detail}
+        </Typography>
+      </CardContent>
+    </Card>
   );
 }

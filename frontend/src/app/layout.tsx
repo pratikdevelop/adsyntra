@@ -15,6 +15,13 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={` h-full antialiased`}>
+      <head>
+        <link
+  rel="stylesheet"
+  href="https://fonts.googleapis.com/icon?family=Material+Icons"
+/>
+
+      </head>
       <body className=" flex relative min-h-full flex flex-col bg-slate-100">
         <ClerkProvider>{children}</ClerkProvider>
       </body>

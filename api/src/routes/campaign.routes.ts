@@ -1,333 +1,315 @@
 import { Router, type Request, type Response } from "express";
+import { getAuth } from "@clerk/express";
 
-import AdAccountModel from "../models/ad-account.model.js";
-import ProviderConnectionModel from "../models/provider-connection.model.js";
 import {
     getCampaigns as getGoogleCampaigns,
-    type GoogleCampaignRow,
-    type GoogleCampaignListResponse,
 } from "../googleadsAPI/services/campaign.js";
 import {
     getCampaigns as getMetaCampaigns,
-    type MetaCampaignRow,
-    type MetaCampaignListResponse,
 } from "../metaadsAPI/services/campaign.js";
+
+import CampaignModel, {
+    type CampaignProviders,
+    type AdvertisingProvider,
+} from "../models/campaign.model.js";
+import AdAccountModel from "../models/ad-account.model.js";
+import ProviderConnectionModel from "../models/provider-connection.model.js";
+import {
+    CampaignRequestValidationError,
+    parseCreateCampaignRequest,
+} from "../services/campaign-validation.service.js";
 
 const router = Router();
 
-type ProviderKey = "googleAds" | "metaAds";
-type CampaignStatus = "not_connected" | "not_selected" | "ready" | "error";
-
-interface AccountSummary {
-    id: string;
-    name: string;
-    currency: string | null;
-    timezone: string | null;
+interface ProviderCampaignResult {
+    success: boolean;
+    accountId: string | null;
+    data: unknown | null;
+    error: string | null;
 }
-
-interface NormalizedCampaign {
-    id: string;
-    provider: ProviderKey;
-    accountId: string;
-    name: string;
-    status: string | null;
-    effectiveStatus: string | null;
-    objective: string | null;
-    campaignType: string | null;
-    createdAt: string | null;
-    updatedAt: string | null;
-    source: GoogleCampaignRow | MetaCampaignRow;
-}
-
-interface Pagination {
-    hasMore: boolean;
-    nextToken: string | null;
-}
-
-interface ProviderCampaignState {
-    connected: boolean;
-    status: CampaignStatus;
-    account: AccountSummary | null;
-    campaigns: NormalizedCampaign[];
-    pagination: Pagination;
-    error: { message: string } | null;
-}
-
-const EMPTY_PAGINATION: Pagination = {
-    hasMore: false,
-    nextToken: null,
-};
 
 function getErrorMessage(error: unknown): string {
-    if (error instanceof Error) return error.message;
-    if (typeof error === "string") return error;
+    if (error instanceof Error) {
+        return error.message;
+    }
+
+    if (typeof error === "string") {
+        return error;
+    }
+
     return "An unexpected provider error occurred.";
 }
 
-function getOptionalQueryString(
-    req: Request,
-    key: string,
-): { value?: string; invalid: boolean } {
-    const raw = req.query[key];
-
-    if (raw === undefined) return { invalid: false };
-    if (typeof raw !== "string" || !raw.trim()) {
-        return { invalid: true };
-    }
-
-    // Preserve opaque provider cursors; do not trim or decode their value.
-    return { value: raw, invalid: false };
-}
-
-function normalizeGoogleCampaigns(
-    accountId: string,
-    rows: GoogleCampaignRow[],
-): NormalizedCampaign[] {
-    return rows.flatMap((row) => {
-        const campaign = row.campaign;
-        if (!campaign?.id) return [];
-
-        return [{
-            id: String(campaign.id),
-            provider: "googleAds" as const,
-            accountId,
-            name: campaign.name ?? "Untitled campaign",
-            status: campaign.status ?? null,
-            effectiveStatus: campaign.status ?? null,
-            objective: null,
-            campaignType: campaign.advertisingChannelType ?? null,
-            createdAt: null,
-            updatedAt: null,
-            source: row,
-        }];
-    });
-}
-
-function normalizeMetaCampaigns(
-    accountId: string,
-    rows: MetaCampaignRow[],
-): NormalizedCampaign[] {
-    return rows.flatMap((row) => {
-        if (!row.id) return [];
-
-        return [{
-            id: String(row.id),
-            provider: "metaAds" as const,
-            accountId,
-            name: row.name ?? "Untitled campaign",
-            status: row.status ?? null,
-            effectiveStatus: row.effective_status ?? row.status ?? null,
-            objective: row.objective ?? null,
-            campaignType: row.buying_type ?? null,
-            createdAt: row.created_time ?? null,
-            updatedAt: row.updated_time ?? null,
-            source: row,
-        }];
-    });
-}
-
-function createInitialProviderState(
-    provider: ProviderKey,
-    connectionStatus: string | null,
-    account: AccountSummary | null,
-): ProviderCampaignState {
-    const connected = connectionStatus === "connected";
-
-    if (!connected) {
+async function fetchProviderCampaigns(
+    accountId: string | null | undefined,
+    fetchCampaigns: (accountId: string) => Promise<unknown>,
+): Promise<ProviderCampaignResult> {
+    if (!accountId) {
         return {
-            connected: false,
-            status: "not_connected",
-            account,
-            campaigns: [],
-            pagination: EMPTY_PAGINATION,
-            error: {
-                message: `${provider === "googleAds" ? "Google Ads" : "Meta Ads"} is not connected.`,
-            },
-        };
-    }
-
-    if (!account) {
-        return {
-            connected: true,
-            status: "not_selected",
-            account: null,
-            campaigns: [],
-            pagination: EMPTY_PAGINATION,
-            error: null,
-        };
-    }
-
-    return {
-        connected: true,
-        status: "ready",
-        account,
-        campaigns: [],
-        pagination: EMPTY_PAGINATION,
-        error: null,
-    };
-}
-
-function applyGoogleResult(
-    state: ProviderCampaignState,
-    result: PromiseSettledResult<GoogleCampaignListResponse>,
-    accountId: string,
-): void {
-    if (result.status === "rejected") {
-        state.status = "error";
-        state.error = { message: getErrorMessage(result.reason) };
-        return;
-    }
-
-    state.campaigns = normalizeGoogleCampaigns(accountId, result.value.campaigns);
-    state.pagination = result.value.pagination;
-}
-
-function applyMetaResult(
-    state: ProviderCampaignState,
-    result: PromiseSettledResult<MetaCampaignListResponse>,
-    accountId: string,
-): void {
-    if (result.status === "rejected") {
-        state.status = "error";
-        state.error = { message: getErrorMessage(result.reason) };
-        return;
-    }
-
-    state.campaigns = normalizeMetaCampaigns(accountId, result.value.campaigns);
-    state.pagination = result.value.pagination;
-}
-
-/**
- * GET /api/campaigns
- * Aggregates the first page of campaigns from the user's selected Google and
- * Meta ad accounts. Provider cursors are supplied independently through
- * googlePageToken and metaPageToken query parameters.
- */
-router.get("/", async (req: Request, res: Response) => {
-    const userId = req.auth()?.userId;
-
-    if (!userId) {
-        return res.status(401).json({
             success: false,
-            message: "Authentication required.",
-        });
-    }
-
-    const googlePageToken = getOptionalQueryString(req, "googlePageToken");
-    const metaPageToken = getOptionalQueryString(req, "metaPageToken");
-
-    if (googlePageToken.invalid || metaPageToken.invalid) {
-        return res.status(400).json({
-            success: false,
-            message: "Pagination tokens must be non-empty strings.",
-        });
+            accountId: null,
+            data: null,
+            error: "No account selected for this provider.",
+        };
     }
 
     try {
-        // Resolve selected accounts and connection states from MongoDB. No
-        // provider API is called when its account is not selected and active.
-        const [selectedAccounts, providerConnections] = await Promise.all([
-            AdAccountModel.find({
-                userId,
-                isSelected: true,
-                status: "active",
-                provider: { $in: ["googleAds", "metaAds"] },
-            })
-                .select("provider externalAccountId name currency timezone")
-                .lean()
-                .exec(),
-            ProviderConnectionModel.find({
-                userId,
-                provider: { $in: ["googleAds", "metaAds"] },
-            })
-                .select("provider status")
-                .lean()
-                .exec(),
-        ]);
+        const data = await fetchCampaigns(accountId);
 
-        const accountByProvider = new Map<ProviderKey, AccountSummary>();
-        for (const account of selectedAccounts) {
-            accountByProvider.set(account.provider as ProviderKey, {
-                id: account.externalAccountId,
-                name: account.name,
-                currency: account.currency ?? null,
-                timezone: account.timezone ?? null,
+        return {
+            success: true,
+            accountId,
+            data,
+            error: null,
+        };
+    } catch (error) {
+        return {
+            success: false,
+            accountId,
+            data: null,
+            error: getErrorMessage(error),
+        };
+    }
+}
+
+/**
+ * POST /api/campaigns
+ * Creates the unified application campaign record and validates that every
+ * selected provider account belongs to the authenticated user and has an
+ * active provider connection. Provider mutations are added in later phases.
+ */
+router.post("/", async (req: Request, res: Response) => {
+    try {
+        const { userId } = getAuth(req);
+
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Authentication required.",
             });
         }
 
-        const connectionStatusByProvider = new Map<ProviderKey, string>();
-        for (const connection of providerConnections) {
-            connectionStatusByProvider.set(
-                connection.provider as ProviderKey,
-                connection.status,
-            );
-        }
+        const request = parseCreateCampaignRequest(req.body);
 
-        const googleAccount = accountByProvider.get("googleAds") ?? null;
-        const metaAccount = accountByProvider.get("metaAds") ?? null;
+        const accountChecks = await Promise.all(
+            request.platforms.map(async (provider: any) => {
+                const providerRequest = request.providers[provider];
 
-        const googleState = createInitialProviderState(
-            "googleAds",
-            connectionStatusByProvider.get("googleAds") ?? null,
-            googleAccount,
+                if (!providerRequest) {
+                    return {
+                        provider,
+                        valid: false,
+                        accountId: null,
+                        message: "Provider configuration is missing.",
+                    };
+                }
+
+                const account = await AdAccountModel.findOne({
+                    userId,
+                    provider,
+                    externalAccountId: providerRequest.accountId,
+                    status: "active",
+                })
+                    .select("_id connectionId externalAccountId")
+                    .lean();
+
+                if (!account) {
+                    return {
+                        provider,
+                        valid: false,
+                        accountId: providerRequest.accountId,
+                        message:
+                            "The selected advertising account was not found, is inactive, or does not belong to this user.",
+                    };
+                }
+
+                const connection = await ProviderConnectionModel.findOne({
+                    _id: account.connectionId,
+                    userId,
+                    provider,
+                    status: "connected",
+                })
+                    .select("_id")
+                    .lean();
+
+                if (!connection) {
+                    return {
+                        provider,
+                        valid: false,
+                        accountId: providerRequest.accountId,
+                        message:
+                            "The provider connection is not active. Reconnect this provider before creating campaigns.",
+                    };
+                }
+
+                return {
+                    provider,
+                    valid: true,
+                    accountId: account.externalAccountId,
+                    message: null,
+                };
+            }),
         );
-        const metaState = createInitialProviderState(
-            "metaAds",
-            connectionStatusByProvider.get("metaAds") ?? null,
-            metaAccount,
-        );
 
-        const googleRequest =
-            googleState.status === "ready" && googleAccount
-                ? getGoogleCampaigns(userId, googleAccount.id, googlePageToken.value)
-                : null;
-        const metaRequest =
-            metaState.status === "ready" && metaAccount
-                ? getMetaCampaigns(userId, metaAccount.id, metaPageToken.value)
-                : null;
+        const accountErrors = accountChecks.filter((check) => !check.valid);
 
-        // allSettled ensures one provider's outage never discards the other's data.
-        const [googleResult, metaResult] = await Promise.all([
-            googleRequest ? Promise.allSettled([googleRequest]) : Promise.resolve(null),
-            metaRequest ? Promise.allSettled([metaRequest]) : Promise.resolve(null),
-        ]);
-
-        let providersSucceeded = 0;
-        let providersFailed = 0;
-
-        if (googleResult?.[0]) {
-            applyGoogleResult(googleState, googleResult[0], googleAccount!.id);
-            if (googleResult[0].status === "fulfilled") providersSucceeded += 1;
-            else providersFailed += 1;
+        if (accountErrors.length > 0) {
+            return res.status(422).json({
+                success: false,
+                message: "One or more selected advertising accounts are not ready.",
+                providers: accountErrors.map((check) => ({
+                    provider: check.provider,
+                    accountId: check.accountId,
+                    error: check.message,
+                })),
+            });
         }
 
-        if (metaResult?.[0]) {
-            applyMetaResult(metaState, metaResult[0], metaAccount!.id);
-            if (metaResult[0].status === "fulfilled") providersSucceeded += 1;
-            else providersFailed += 1;
+        const providerDocuments: CampaignProviders = {};
+
+        for (const provider of request.platforms) {
+            const providerRequest = request.providers[provider];
+
+            if (!providerRequest) continue;
+
+            providerDocuments[provider as AdvertisingProvider] = {
+                accountId: providerRequest.accountId,
+                providerObjective: providerRequest.providerObjective,
+                providerCampaignType: providerRequest.providerCampaignType,
+                requestedProviderApiTarget:
+                    providerRequest.requestedProviderApiTarget ?? null,
+                configuration: providerRequest.configuration,
+                creationStatus: "pending",
+                deliveryStatus: "PAUSED",
+                resources: [],
+                lastError: null,
+                lastSyncedAt: null,
+            };
         }
 
-        const campaigns = [...googleState.campaigns, ...metaState.campaigns];
+        const campaign: any = await CampaignModel.create({
+            ownerUserId: userId,
+            contractVersion: "1.0",
+            name: request.name,
+            businessName: request.businessName,
+            websiteUrl: request.websiteUrl,
+            description: request.description,
+            objective: request.objective,
+            platforms: request.platforms,
+            providers: providerDocuments,
+        });
 
-        return res.status(200).json({
+        return res.status(201).json({
             success: true,
-            providers: {
-                googleAds: googleState,
-                metaAds: metaState,
-            },
-            campaigns,
-            meta: {
-                total: campaigns.length,
-                providersSucceeded,
-                providersFailed,
+            message:
+                "Campaign request validated and saved. Provider campaign creation will be enabled in the next implementation phase.",
+            campaign: {
+                id: campaign._id.toString(),
+                name: campaign.name,
+                businessName: campaign.businessName,
+                objective: campaign.objective,
+                platforms: campaign.platforms,
+                providers: Object.fromEntries(
+                    request.platforms.map((provider: any) => {
+                        const providerData = campaign.providers[provider];
+
+                        return [
+                            provider,
+                            {
+                                accountId: providerData?.accountId ?? null,
+                                creationStatus: providerData?.creationStatus ?? "pending",
+                                deliveryStatus: providerData?.deliveryStatus ?? "PAUSED",
+                            },
+                        ];
+                    }),
+                ),
+                createdAt: campaign.createdAt,
             },
         });
     } catch (error) {
-        console.error("Get global campaigns error:", error);
+        if (error instanceof CampaignRequestValidationError) {
+            return res.status(400).json({
+                success: false,
+                message: error.message,
+            });
+        }
+
+        console.error("Create campaign request error:", error);
 
         return res.status(500).json({
             success: false,
-            message: "Unable to retrieve campaigns.",
+            message: "Failed to save the campaign request.",
+        });
+    }
+});
+
+router.get("/", async (req: Request, res: Response) => {
+    try {
+        const { userId } = getAuth(req);
+
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Authentication required.",
+            });
+        }
+
+        // Get the user's selected account for each provider.
+        const [googleAccount, metaAccount] = await Promise.all([
+            AdAccountModel.findOne({
+                userId,
+                provider: "googleAds",
+                isSelected: true,
+            })
+                .select("externalAccountId")
+                .lean(),
+
+            AdAccountModel.findOne({
+                userId,
+                provider: "metaAds",
+                isSelected: true,
+            })
+                .select("externalAccountId")
+                .lean(),
+        ]);
+
+        // Fetch both providers independently.
+        const [googleResult, metaResult] = await Promise.all([
+            fetchProviderCampaigns(
+                googleAccount?.externalAccountId,
+                (accountId) => getGoogleCampaigns(userId, accountId),
+            ),
+            fetchProviderCampaigns(
+                metaAccount?.externalAccountId,
+                (accountId) => getMetaCampaigns(userId, accountId),
+            ),
+        ]);
+
+        const providers = {
+            googleAds: googleResult,
+            metaAds: metaResult,
+        };
+
+        const hasSuccess = googleResult.success || metaResult.success;
+
+        if (!hasSuccess) {
+            return res.status(502).json({
+                success: false,
+                message: "Failed to retrieve campaigns from both providers.",
+                providers,
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            providers,
+        });
+    } catch (error) {
+        console.error("Get campaigns error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: getErrorMessage(error),
         });
     }
 });

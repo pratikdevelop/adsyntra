@@ -15,6 +15,8 @@ declare global {
             YOUTUBE_REFRESH_TOKEN: any;
             MONGO_URI: any;
             MONGODB_DB_NAME: any;
+            NVIDIA_API_KEY: any;
+            META_GRAPH_API_VERSION: any;
         }
     }
 }

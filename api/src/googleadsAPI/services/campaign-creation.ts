@@ -1,4 +1,5 @@
 import { getProviderAccessToken } from "../../utils/provider-token.utils.js";
+import type { BuildGoogleAdsSearchAdGroupOperationInput, BuildGoogleAdsSearchCampaignOperationInput, BuildGoogleAdsSearchKeywordOperationsInput, BuildGoogleAdsSearchRSAOperationInput, CreateDemandGenAdInput, CreateGoogleAdsAdGroupInput, CreateGoogleAdsAssetGroupInput, CreateGoogleAdsBudgetInput, CreateGoogleAdsCampaignInput, CreateGoogleAdsCampaignLocationTargetsInput, CreateGoogleAdsCampaignNegativeKeywordsInput, CreateGoogleAdsDemandGenCarouselAdInput, CreateGoogleAdsDemandGenCarouselCardInput, CreateGoogleAdsDemandGenMultiAssetAdInput, CreateGoogleAdsImageAssetInput, CreateGoogleAdsKeywordCriteriaInput, CreateGoogleAdsResponsiveDisplayAdInput, CreateGoogleAdsResponsiveSearchAdInput, CreateGoogleAdsSearchCampaignFlowInput, CreateGoogleAdsTextAssetInput, CreateGoogleAdsYouTubeVideoAssetInput, GoogleAdsBuiltOperation, GoogleAdsBulkMutateResponse, GoogleAdsCampaignConfig, GoogleAdsCampaignType, GoogleAdsCreatedResource, GoogleAdsCreationContext, GoogleAdsKeywordCreationResult, GoogleAdsKeywordInput, GoogleAdsMutateOperation, GoogleAdsMutateResponse, GoogleAdsSearchCampaignFlowResult, PerformanceMaxAssetFieldType } from "../iterface/campign-cretion.js";
 import {
     buildBiddingConfig,
     type BiddingOptions,
@@ -10,20 +11,6 @@ import { randomUUID } from "node:crypto";
 // ==========================================
 
 const DEFAULT_API_VERSION = "v25";
-
-export interface GoogleAdsCreationContext {
-    customerId: string;
-    accessToken: string;
-    developerToken: string;
-    apiVersion: string;
-}
-// Standard Shopping campaign configuration
-export interface GoogleAdsShoppingSettings {
-    merchantId: string;
-    campaignPriority: 0 | 1 | 2;
-    feedLabel?: string;
-    enableLocal?: boolean;
-}
 
 // ==========================================
 // 3. GET GOOGLE ADS CREATION CONTEXT
@@ -72,14 +59,6 @@ export async function getGoogleAdsCreationContext(
 // GOOGLE ADS API MUTATION HELPER
 // ==========================================
 
-export interface GoogleAdsMutateResponse {
-    results?: Array<{
-        resourceName?: string;
-    }>;
-
-    [key: string]: unknown;
-}
-
 export class GoogleAdsCreationError extends Error {
     constructor(
         message: string,
@@ -91,41 +70,9 @@ export class GoogleAdsCreationError extends Error {
     }
 }
 
-// ==========================================
-// GOOGLE ADS BUDGET CREATION
-// ==========================================
-
-export interface CreateGoogleAdsBudgetInput {
-    name: string;
-    amount: number;
-    validateOnly?: boolean;
-    confirm?: boolean;
-}
-
-export interface GoogleAdsCreatedResource {
-    resourceName: string | null;
-    resourceId: string | null;
-    validateOnly: boolean;
-    googleResponse: GoogleAdsMutateResponse;
-}
 
 
 
-// ==========================================
-// GOOGLE ADS CAMPAIGN CONFIGURATION
-// ==========================================
-
-export type GoogleAdsCampaignType =
-    | "SEARCH"
-    | "DISPLAY"
-    | "SHOPPING"
-    | "DEMAND_GEN"
-    | "PERFORMANCE_MAX";
-
-interface GoogleAdsCampaignConfig {
-    apiChannelType: string;
-    biddingStrategies: readonly string[];
-}
 
 const GOOGLE_ADS_CAMPAIGN_CONFIG: Record<
     GoogleAdsCampaignType,
@@ -204,32 +151,189 @@ const GOOGLE_AD_GROUP_TYPES: Partial<
 
 
 // ==========================================
-// AD GROUP CREATION INPUT
+// BUILD SEARCH AD GROUP KEYWORD OPERATIONS
 // ==========================================
 
-export interface CreateGoogleAdsAdGroupInput {
-    name: string;
-    campaignResourceName: string;
-    campaignType: GoogleAdsCampaignType;
+function buildGoogleAdsSearchAdGroupKeywordOperations(
+    context: GoogleAdsCreationContext,
+    input: BuildGoogleAdsSearchKeywordOperationsInput,
+    negative: boolean,
+): GoogleAdsMutateOperation[] {
 
-    validateOnly?: boolean;
-    confirm?: boolean;
+    // 1. Validate Ad Group resource name.
+    // Supports existing IDs and temporary negative IDs.
+
+    const adGroupPrefix =
+        `customers/${context.customerId}/adGroups/`;
+
+    const adGroupId =
+        input.adGroupResourceName?.startsWith(adGroupPrefix)
+            ? input.adGroupResourceName.slice(adGroupPrefix.length)
+            : "";
+
+    if (!/^(?:[1-9]\d*|-[1-9]\d*)$/.test(adGroupId)) {
+        throw new GoogleAdsCreationError(
+            "Invalid Ad Group resource name or account mismatch.",
+            400,
+        );
+    }
+
+    // 2. Reuse the existing keyword validator.
+
+    const keywords = validateGoogleAdsKeywords(
+        input.keywords,
+    );
+
+    // 3. Build one operation for each keyword.
+
+    return keywords.map((keyword) => ({
+        adGroupCriterionOperation: {
+            create: {
+                adGroup: input.adGroupResourceName,
+
+                status: keyword.status,
+
+                negative,
+
+                keyword: {
+                    text: keyword.text,
+                    matchType: keyword.matchType,
+                },
+            },
+        },
+    }));
 }
 // ==========================================
-// CAMPAIGN CREATION INPUT
+// BUILD SEARCH POSITIVE KEYWORD OPERATIONS
 // ==========================================
 
-export interface CreateGoogleAdsCampaignInput {
-    campaignName: string;
-    campaignType: string;
-    budgetResourceName: string;
+export function buildGoogleAdsSearchPositiveKeywordOperations(
+    context: GoogleAdsCreationContext,
+    input: BuildGoogleAdsSearchKeywordOperationsInput,
+): GoogleAdsMutateOperation[] {
 
-    biddingStrategy: string;
-    biddingOptions?: BiddingOptions;
+    return buildGoogleAdsSearchAdGroupKeywordOperations(
+        context,
+        input,
+        false,
+    );
+}
 
-    validateOnly?: boolean;
-    confirm?: boolean;
-    shoppingSettings?: GoogleAdsShoppingSettings;
+// ==========================================
+// BUILD SEARCH NEGATIVE KEYWORD OPERATIONS
+// ==========================================
+
+export function buildGoogleAdsSearchNegativeKeywordOperations(
+    context: GoogleAdsCreationContext,
+    input: BuildGoogleAdsSearchKeywordOperationsInput,
+): GoogleAdsMutateOperation[] {
+
+    return buildGoogleAdsSearchAdGroupKeywordOperations(
+        context,
+        input,
+        true,
+    );
+}
+
+// ==========================================
+// BUILD SEARCH CAMPAIGN LOCATION OPERATIONS
+// ==========================================
+
+export function buildGoogleAdsSearchLocationTargetOperations(
+    context: GoogleAdsCreationContext,
+    input: CreateGoogleAdsCampaignLocationTargetsInput,
+): GoogleAdsMutateOperation[] {
+
+    // 1. Validate Campaign resource name.
+    // Supports existing and temporary Campaign IDs.
+
+    const campaignPrefix =
+        `customers/${context.customerId}/campaigns/`;
+
+    const campaignId =
+        input.campaignResourceName?.startsWith(campaignPrefix)
+            ? input.campaignResourceName.slice(campaignPrefix.length)
+            : "";
+
+    if (!/^(?:[1-9]\d*|-[1-9]\d*)$/.test(campaignId)) {
+        throw new GoogleAdsCreationError(
+            "Invalid Campaign resource name or account mismatch.",
+            400,
+        );
+    }
+
+    // 2. Validate location list.
+
+    if (
+        !Array.isArray(input.locations) ||
+        input.locations.length === 0 ||
+        input.locations.length > 1000
+    ) {
+        throw new GoogleAdsCreationError(
+            "Provide between 1 and 1000 location targets.",
+            400,
+        );
+    }
+
+    // 3. Validate location resource names and duplicates.
+
+    const seen = new Set<string>();
+
+    const locations = input.locations.map((location) => {
+
+        const resourceName =
+            location.geoTargetConstantResourceName?.trim();
+
+        if (
+            !resourceName ||
+            !/^geoTargetConstants\/\d+$/.test(resourceName)
+        ) {
+            throw new GoogleAdsCreationError(
+                `Invalid Geo Target Constant resource name: ${resourceName}`,
+                400,
+            );
+        }
+
+        if (
+            location.negative !== undefined &&
+            typeof location.negative !== "boolean"
+        ) {
+            throw new GoogleAdsCreationError(
+                `Invalid negative targeting value for ${resourceName}.`,
+                400,
+            );
+        }
+
+        if (seen.has(resourceName)) {
+            throw new GoogleAdsCreationError(
+                `Duplicate location target: ${resourceName}`,
+                400,
+            );
+        }
+
+        seen.add(resourceName);
+
+        return {
+            resourceName,
+            negative: location.negative === true,
+        };
+    });
+
+    // 4. Build Campaign Criterion operations.
+
+    return locations.map((location) => ({
+        campaignCriterionOperation: {
+            create: {
+                campaign: input.campaignResourceName,
+
+                negative: location.negative,
+
+                location: {
+                    geoTargetConstant: location.resourceName,
+                },
+            },
+        },
+    }));
 }
 
 // ==========================================
@@ -258,6 +362,198 @@ function isRecord(
         value !== null &&
         !Array.isArray(value)
     );
+}
+
+
+// ==========================================
+// BUILD GOOGLE ADS SEARCH CAMPAIGN OPERATION
+// ==========================================
+
+export function buildGoogleAdsSearchCampaignOperation(
+    context: GoogleAdsCreationContext,
+    input: BuildGoogleAdsSearchCampaignOperationInput,
+    temporaryId: number,
+): GoogleAdsBuiltOperation {
+
+    // 1. Validate campaign name
+
+    const campaignName = input.campaignName?.trim();
+
+    if (!campaignName || campaignName.length > 255) {
+        throw new GoogleAdsCreationError(
+            "A valid campaign name is required.",
+            400,
+        );
+    }
+
+    // 2. Validate budget resource name
+    // Supports both existing and temporary budget resources.
+
+    const budgetPrefix =
+        `customers/${context.customerId}/campaignBudgets/`;
+
+    const budgetResourceName =
+        input.budgetResourceName?.trim();
+
+    const budgetId =
+        budgetResourceName?.startsWith(budgetPrefix)
+            ? budgetResourceName.slice(budgetPrefix.length)
+            : "";
+
+    if (!/^(?:[1-9]\d*|-[1-9]\d*)$/.test(budgetId)) {
+        throw new GoogleAdsCreationError(
+            "Invalid budget resource name or account mismatch.",
+            400,
+        );
+    }
+
+    // 3. Validate Search bidding strategy
+
+    const biddingStrategy =
+        input.biddingStrategy?.trim().toUpperCase();
+
+    const supportedStrategies =
+        GOOGLE_ADS_CAMPAIGN_CONFIG.SEARCH.biddingStrategies;
+
+    if (
+        !biddingStrategy ||
+        !supportedStrategies.includes(biddingStrategy)
+    ) {
+        throw new GoogleAdsCreationError(
+            `Unsupported Search campaign bidding strategy: ${input.biddingStrategy}`,
+            400,
+        );
+    }
+
+    // 4. Build provider-specific bidding configuration
+
+    const biddingConfig = buildBiddingConfig(
+        biddingStrategy,
+        input.biddingOptions ?? {},
+        "SEARCH",
+    );
+
+    // 5. Generate temporary Campaign resource name
+
+    const campaignResourceName =
+        createGoogleAdsTemporaryResourceName(
+            context,
+            "campaigns",
+            temporaryId,
+        );
+
+    // 6. Build Campaign operation
+
+    const operation: GoogleAdsMutateOperation = {
+        campaignOperation: {
+            create: {
+                resourceName: campaignResourceName,
+
+                name: campaignName,
+
+                advertisingChannelType: "SEARCH",
+
+                status: "PAUSED",
+
+                campaignBudget: budgetResourceName,
+
+                containsEuPoliticalAdvertising:
+                    "DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING",
+
+                ...biddingConfig,
+            },
+        },
+    };
+
+    // 7. Return operation and temporary resource name
+
+    return {
+        operation,
+        resourceName: campaignResourceName,
+    };
+}
+
+
+// ==========================================
+// BUILD GOOGLE ADS SEARCH AD GROUP OPERATION
+// ==========================================
+
+export function buildGoogleAdsSearchAdGroupOperation(
+    context: GoogleAdsCreationContext,
+    input: BuildGoogleAdsSearchAdGroupOperationInput,
+    temporaryId: number,
+): GoogleAdsBuiltOperation {
+
+    // 1. Validate Ad Group name
+
+    const name = input.name?.trim();
+
+    if (
+        !name ||
+        name.length > 255 ||
+        /[\0\r\n]/.test(name)
+    ) {
+        throw new GoogleAdsCreationError(
+            "Provide a valid Search Ad Group name.",
+            400,
+        );
+    }
+
+    // 2. Validate parent Campaign resource name
+    // Supports both existing and temporary Campaign resources.
+
+    const campaignPrefix =
+        `customers/${context.customerId}/campaigns/`;
+
+    const campaignId =
+        input.campaignResourceName?.startsWith(campaignPrefix)
+            ? input.campaignResourceName.slice(campaignPrefix.length)
+            : "";
+
+    if (!/^(?:[1-9]\d*|-[1-9]\d*)$/.test(campaignId)) {
+        throw new GoogleAdsCreationError(
+            "Invalid Campaign resource name or account mismatch.",
+            400,
+        );
+    }
+
+    // 3. Generate temporary Ad Group resource name
+
+    const adGroupResourceName =
+        createGoogleAdsTemporaryResourceName(
+            context,
+            "adGroups",
+            temporaryId,
+        );
+
+    // 4. Build Search Ad Group configuration
+
+    const adGroupPayload: Record<string, unknown> = {
+        resourceName: adGroupResourceName,
+
+        name,
+
+        campaign: input.campaignResourceName,
+
+        type: "SEARCH_STANDARD",
+
+        status: "PAUSED",
+    };
+
+    // 5. Build Google Ads mutation operation
+
+    const operation: GoogleAdsMutateOperation = {
+        adGroupOperation: {
+            create: adGroupPayload,
+        },
+    };
+
+    // 6. Return operation and temporary resource name
+
+    return {
+        operation,
+        resourceName: adGroupResourceName,
+    };
 }
 // ==========================================
 // DEMAND GEN VALIDATION HELPERS
@@ -392,19 +688,8 @@ function validateGoogleAdsAdGroupReference(
 // DEMAND GEN AD MUTATION HELPER
 // ==========================================
 
-type DemandGenAdField =
-    | "demandGenMultiAssetAd"
-    | "demandGenVideoResponsiveAd"
-    | "demandGenCarouselAd";
 
-interface CreateDemandGenAdInput {
-    adGroupResourceName: string;
-    adName?: string;
-    finalUrl: string;
-    adField: DemandGenAdField;
-    adConfiguration: Record<string, unknown>;
-    validateOnly: boolean;
-}
+
 
 async function createDemandGenAd(
     context: GoogleAdsCreationContext,
@@ -463,32 +748,6 @@ async function createDemandGenAd(
         validateOnly: input.validateOnly,
         googleResponse,
     };
-}
-// ==========================================
-// DEMAND GEN MULTI ASSET AD
-// ==========================================
-
-export interface CreateGoogleAdsDemandGenMultiAssetAdInput {
-    adGroupResourceName: string;
-    finalUrl: string;
-    businessName: string;
-
-    headlines: string[];
-    descriptions: string[];
-
-    marketingImageAssetResourceNames?: string[];
-    squareMarketingImageAssetResourceNames?: string[];
-    portraitMarketingImageAssetResourceNames?: string[];
-    tallPortraitMarketingImageAssetResourceNames?: string[];
-
-    logoAssetResourceNames: string[];
-    classicDisplayImageAssetResourceNames?: string[];
-
-    callToActionText?: string;
-    adName?: string;
-
-    validateOnly?: boolean;
-    confirm?: boolean;
 }
 
 export async function createGoogleAdsDemandGenMultiAssetAd(
@@ -688,47 +947,6 @@ function resolveAssetValidateOnly(input: {
     return validateOnly;
 }
 
-// ==========================================
-// DEMAND GEN CAROUSEL CARD ASSET
-// ==========================================
-
-export interface CreateGoogleAdsDemandGenCarouselCardInput {
-    headline: string;
-
-    marketingImageAssetResourceName?: string;
-    squareMarketingImageAssetResourceName?: string;
-    portraitMarketingImageAssetResourceName?: string;
-
-    callToActionText?: string;
-
-    validateOnly?: boolean;
-    confirm?: boolean;
-}
-
-
-// ==========================================
-// DEMAND GEN CAROUSEL AD
-// ==========================================
-
-export interface CreateGoogleAdsDemandGenCarouselAdInput {
-    adGroupResourceName: string;
-    finalUrl: string;
-
-    businessName: string;
-    logoAssetResourceName: string;
-
-    headline: string;
-    description: string;
-
-    carouselCardAssetResourceNames: string[];
-
-    callToActionText?: string;
-    adName?: string;
-
-    validateOnly?: boolean;
-    confirm?: boolean;
-}
-
 export async function createGoogleAdsDemandGenCarouselAd(
     context: GoogleAdsCreationContext,
     input: CreateGoogleAdsDemandGenCarouselAdInput,
@@ -791,7 +1009,7 @@ export async function createGoogleAdsDemandGenCarouselAd(
 
     // 7. Prepare carousel configuration
 
-    const adConfiguration: Record<string, unknown> = {
+    const adConfiguration: any = {
         businessName,
 
         logoImage: {
@@ -944,45 +1162,13 @@ export async function createGoogleAdsDemandGenCarouselCardAsset(
         googleResponse,
     };
 }
-// ==========================================
-// GOOGLE ADS IMAGE ASSET CREATION
-// ==========================================
 
-export interface CreateGoogleAdsImageAssetInput {
-    buffer: Buffer;
-    originalName?: string;
-    name?: string;
-    validateOnly?: boolean;
-    confirm?: boolean;
-}
-
-// ==========================================
-// GOOGLE ADS TEXT ASSET CREATION
-// ==========================================
-
-export type GoogleAdsTextAssetType =
-    | "HEADLINE"
-    | "LONG_HEADLINE"
-    | "DESCRIPTION"
-    | "BUSINESS_NAME";
-
-const GOOGLE_ADS_TEXT_LIMITS: Record<
-    GoogleAdsTextAssetType,
-    number
-> = {
+const GOOGLE_ADS_TEXT_LIMITS: Record<string, number> = {
     HEADLINE: 30,
     LONG_HEADLINE: 90,
     DESCRIPTION: 90,
     BUSINESS_NAME: 25,
 };
-
-export interface CreateGoogleAdsTextAssetInput {
-    text: string;
-    fieldType: GoogleAdsTextAssetType;
-    name?: string;
-    validateOnly?: boolean;
-    confirm?: boolean;
-}
 
 export async function createGoogleAdsTextAsset(
     context: GoogleAdsCreationContext,
@@ -1038,71 +1224,6 @@ export async function createGoogleAdsTextAsset(
     };
 }
 
-// ==========================================
-// PERFORMANCE MAX ASSET GROUP CONFIGURATION
-// ==========================================
-
-export type PerformanceMaxAssetFieldType =
-    | "HEADLINE"
-    | "LONG_HEADLINE"
-    | "DESCRIPTION"
-    | "MARKETING_IMAGE"
-    | "SQUARE_MARKETING_IMAGE"
-    | "BUSINESS_NAME"
-    | "LOGO"
-    | "YOUTUBE_VIDEO";
-
-export interface PerformanceMaxAssetInput {
-    assetResourceName: string;
-    fieldType: PerformanceMaxAssetFieldType;
-}
-
-export interface CreateGoogleAdsAssetGroupInput {
-    name: string;
-    campaignResourceName: string;
-    finalUrls: string[];
-
-    assets: PerformanceMaxAssetInput[];
-
-    validateOnly?: boolean;
-    confirm?: boolean;
-}
-
-// ==========================================
-// GOOGLE ADS KEYWORD CONFIGURATION
-// ==========================================
-
-export type GoogleAdsKeywordMatchType =
-    | "BROAD"
-    | "PHRASE"
-    | "EXACT";
-
-export interface GoogleAdsKeywordInput {
-    text: string;
-    matchType: GoogleAdsKeywordMatchType;
-    status?: "ENABLED" | "PAUSED";
-}
-
-export interface CreateGoogleAdsKeywordCriteriaInput {
-    adGroupResourceName: string;
-    keywords: GoogleAdsKeywordInput[];
-    validateOnly?: boolean;
-    confirm?: boolean;
-}
-
-export interface CreateGoogleAdsCampaignNegativeKeywordsInput {
-    campaignResourceName: string;
-    keywords: GoogleAdsKeywordInput[];
-    validateOnly?: boolean;
-    confirm?: boolean;
-}
-
-export interface GoogleAdsKeywordCreationResult {
-    resourceNames: string[];
-    resourceIds: string[];
-    validateOnly: boolean;
-    googleResponse: GoogleAdsMutateResponse;
-}
 
 // ==========================================
 // PERFORMANCE MAX ASSET GROUP CREATION
@@ -1463,36 +1584,6 @@ export async function createGoogleAdsImageAsset(
         validateOnly,
         googleResponse,
     };
-}
-
-// ==========================================
-// RESPONSIVE SEARCH AD INPUT
-// ==========================================
-
-export interface CreateGoogleAdsResponsiveSearchAdInput {
-    adGroupResourceName: string;
-
-    headlines: unknown[];
-    descriptions: unknown[];
-
-    finalUrl: string;
-
-    path1?: string;
-    path2?: string;
-
-    validateOnly?: boolean;
-    confirm?: boolean;
-}
-// ==========================================
-// GOOGLE ADS YOUTUBE VIDEO ASSET
-// ==========================================
-
-export interface CreateGoogleAdsYouTubeVideoAssetInput {
-    videoId: string;
-    videoTitle: string;
-    name?: string;
-    validateOnly?: boolean;
-    confirm?: boolean;
 }
 
 export async function createGoogleAdsYouTubeVideoAsset(
@@ -2153,21 +2244,6 @@ export async function createGoogleAdsCampaignNegativeKeywords(
         googleResponse,
     };
 }
-// ==========================================
-// CAMPAIGN LOCATION TARGETING INPUT
-// ==========================================
-
-export interface GoogleAdsLocationTargetInput {
-    geoTargetConstantResourceName: string;
-    negative?: boolean;
-}
-
-export interface CreateGoogleAdsCampaignLocationTargetsInput {
-    campaignResourceName: string;
-    locations: GoogleAdsLocationTargetInput[];
-    validateOnly?: boolean;
-    confirm?: boolean;
-}
 
 // ==========================================
 // CREATE GOOGLE ADS CAMPAIGN LOCATION TARGETS
@@ -2280,22 +2356,7 @@ export async function createGoogleAdsCampaignLocationTargets(
 // GOOGLE ADS BULK MUTATION TYPES
 // ==========================================
 
-export type GoogleAdsMutateOperation =
-    Record<string, unknown>;
 
-export interface GoogleAdsBulkMutateResponse
-    extends GoogleAdsMutateResponse {
-    mutateOperationResponses?: Array<
-        Record<string, unknown>
-    >;
-
-    partialFailureError?: unknown;
-}
-
-export interface GoogleAdsBuiltOperation {
-    operation: GoogleAdsMutateOperation;
-    resourceName: string;
-}
 // ==========================================
 // GOOGLE ADS BULK MUTATION
 // ==========================================
@@ -2863,31 +2924,6 @@ export async function createGoogleAdsResponsiveSearchAd(
 }
 
 
-// ==========================================
-// RESPONSIVE DISPLAY AD INPUT
-// ==========================================
-
-export interface CreateGoogleAdsResponsiveDisplayAdInput {
-    adGroupResourceName: string;
-
-    finalUrls: string[];
-
-    marketingImageAssetResourceNames: string[];
-    squareMarketingImageAssetResourceNames: string[];
-
-    headlines: string[];
-    longHeadline: string;
-    descriptions: string[];
-
-    businessName: string;
-
-    logoAssetResourceNames?: string[];
-    squareLogoAssetResourceNames?: string[];
-
-    validateOnly?: boolean;
-    confirm?: boolean;
-}
-
 
 // ==========================================
 // GOOGLE ADS RESPONSIVE DISPLAY AD CREATION
@@ -3183,4 +3219,534 @@ export async function createGoogleAdsResponsiveDisplayAd(
     };
 }
 
+// ==========================================
+// BUILD GOOGLE ADS SEARCH RSA OPERATION
+// ==========================================
 
+export function buildGoogleAdsSearchRSAOperation(
+    context: GoogleAdsCreationContext,
+    input: BuildGoogleAdsSearchRSAOperationInput,
+): GoogleAdsMutateOperation {
+
+    // 1. Validate Ad Group resource name.
+    // Supports existing and temporary Ad Group IDs.
+
+    const adGroupPrefix =
+        `customers/${context.customerId}/adGroups/`;
+
+    const adGroupId =
+        input.adGroupResourceName?.startsWith(adGroupPrefix)
+            ? input.adGroupResourceName.slice(adGroupPrefix.length)
+            : "";
+
+    if (!/^(?:[1-9]\d*|-[1-9]\d*)$/.test(adGroupId)) {
+        throw new GoogleAdsCreationError(
+            "Invalid Ad Group resource name or account mismatch.",
+            400,
+        );
+    }
+
+    // 2. Validate headlines.
+
+    if (
+        !Array.isArray(input.headlines) ||
+        input.headlines.length < 3 ||
+        input.headlines.length > 15 ||
+        !input.headlines.every(
+            (item) =>
+                typeof item === "string" &&
+                item.trim().length > 0 &&
+                item.trim().length <= 30
+        )
+    ) {
+        throw new GoogleAdsCreationError(
+            "Provide 3–15 headlines, each containing 1–30 characters.",
+            400,
+        );
+    }
+
+    const headlines = input.headlines.map(
+        (item) => item.trim()
+    );
+
+    if (
+        new Set(headlines.map((item) => item.toLowerCase())).size !==
+        headlines.length
+    ) {
+        throw new GoogleAdsCreationError(
+            "Headlines must be unique.",
+            400,
+        );
+    }
+
+    // 3. Validate descriptions.
+
+    if (
+        !Array.isArray(input.descriptions) ||
+        input.descriptions.length < 2 ||
+        input.descriptions.length > 4 ||
+        !input.descriptions.every(
+            (item) =>
+                typeof item === "string" &&
+                item.trim().length > 0 &&
+                item.trim().length <= 90
+        )
+    ) {
+        throw new GoogleAdsCreationError(
+            "Provide 2–4 descriptions, each containing 1–90 characters.",
+            400,
+        );
+    }
+
+    const descriptions = input.descriptions.map(
+        (item) => item.trim()
+    );
+
+    if (
+        new Set(
+            descriptions.map((item) => item.toLowerCase())
+        ).size !== descriptions.length
+    ) {
+        throw new GoogleAdsCreationError(
+            "Descriptions must be unique.",
+            400,
+        );
+    }
+
+    // 4. Validate final URL.
+
+    let parsedUrl: URL;
+
+    try {
+        parsedUrl = new URL(input.finalUrl.trim());
+    } catch {
+        throw new GoogleAdsCreationError(
+            "Provide a valid final URL.",
+            400,
+        );
+    }
+
+    if (
+        !["http:", "https:"].includes(parsedUrl.protocol) ||
+        !parsedUrl.hostname
+    ) {
+        throw new GoogleAdsCreationError(
+            "Final URL must use HTTP or HTTPS.",
+            400,
+        );
+    }
+
+    // 5. Validate display paths.
+
+    for (const [field, value] of [
+        ["path1", input.path1],
+        ["path2", input.path2],
+    ] as const) {
+
+        if (
+            value !== undefined &&
+            (
+                typeof value !== "string" ||
+                !value.trim() ||
+                value.trim().length > 15
+            )
+        ) {
+            throw new GoogleAdsCreationError(
+                `${field} must contain 1–15 characters.`,
+                400,
+            );
+        }
+    }
+
+    if (input.path2 && !input.path1) {
+        throw new GoogleAdsCreationError(
+            "path1 is required when path2 is provided.",
+            400,
+        );
+    }
+
+    // 6. Prepare Responsive Search Ad configuration.
+
+    const responsiveSearchAd: Record<string, unknown> = {
+        headlines: headlines.map((text) => ({ text })),
+
+        descriptions: descriptions.map((text) => ({ text })),
+    };
+
+    if (input.path1) {
+        responsiveSearchAd.path1 = input.path1.trim();
+    }
+
+    if (input.path2) {
+        responsiveSearchAd.path2 = input.path2.trim();
+    }
+
+    // 7. Build Ad Group Ad operation.
+
+    const operation: GoogleAdsMutateOperation = {
+        adGroupAdOperation: {
+            create: {
+                adGroup: input.adGroupResourceName,
+
+                status: "PAUSED",
+
+                ad: {
+                    finalUrls: [parsedUrl.toString()],
+
+                    responsiveSearchAd,
+                },
+            },
+        },
+    };
+
+    // 8. Return the operation.
+
+    return operation;
+}
+
+
+
+// ==========================================
+// GOOGLE ADS SEARCH CAMPAIGN FLOW
+// ==========================================
+
+export async function createGoogleAdsCampaignFlow(
+    context: GoogleAdsCreationContext,
+    input: CreateGoogleAdsSearchCampaignFlowInput,
+): Promise<GoogleAdsSearchCampaignFlowResult> {
+
+    // ======================================
+    // 1. VALIDATE MUTATION MODE
+    // ======================================
+
+    const validateOnly = input.validateOnly !== false;
+
+    if (!validateOnly && input.confirm !== true) {
+        throw new GoogleAdsCreationError(
+            "Live Search campaign creation requires validateOnly:false and confirm:true.",
+            400,
+        );
+    }
+
+    // ======================================
+    // 2. GENERATE UNIQUE TEMPORARY IDS
+    // ======================================
+
+    let nextTemporaryId = -1;
+
+    const getNextTemporaryId = (): number => {
+        return nextTemporaryId--;
+    };
+
+    // ======================================
+    // 3. BUILD CAMPAIGN BUDGET OPERATION
+    // ======================================
+
+    const budgetBuilt = buildGoogleAdsBudgetOperation(
+        context,
+        input.budget,
+        getNextTemporaryId(),
+    );
+
+    // ======================================
+    // 4. BUILD CAMPAIGN + BIDDING OPERATION
+    // ======================================
+
+    const campaignBuilt =
+        buildGoogleAdsSearchCampaignOperation(
+            context,
+            {
+                campaignName: input.campaign.name,
+
+                budgetResourceName:
+                    budgetBuilt.resourceName,
+
+                biddingStrategy:
+                    input.campaign.biddingStrategy,
+
+                biddingOptions:
+                    input.campaign.biddingOptions,
+            },
+            getNextTemporaryId(),
+        );
+
+    // ======================================
+    // 5. BUILD AD GROUP OPERATION
+    // ======================================
+
+    const adGroupBuilt =
+        buildGoogleAdsSearchAdGroupOperation(
+            context,
+            {
+                name: input.adGroup.name,
+
+                campaignResourceName:
+                    campaignBuilt.resourceName,
+            },
+            getNextTemporaryId(),
+        );
+
+    // ======================================
+    // 6. BUILD LOCATION TARGETING OPERATIONS
+    // ======================================
+
+    const locationOperations =
+        input.locations?.length
+            ? buildGoogleAdsSearchLocationTargetOperations(
+                context,
+                {
+                    campaignResourceName:
+                        campaignBuilt.resourceName,
+
+                    locations: input.locations,
+                },
+            )
+            : [];
+
+    // ======================================
+    // 7. BUILD POSITIVE KEYWORD OPERATIONS
+    // ======================================
+
+    const positiveKeywordOperations =
+        buildGoogleAdsSearchPositiveKeywordOperations(
+            context,
+            {
+                adGroupResourceName:
+                    adGroupBuilt.resourceName,
+
+                keywords: input.keywords.positive,
+            },
+        );
+
+    // ======================================
+    // 8. BUILD NEGATIVE KEYWORD OPERATIONS
+    // ======================================
+
+    const negativeKeywordOperations =
+        input.keywords.negative?.length
+            ? buildGoogleAdsSearchNegativeKeywordOperations(
+                context,
+                {
+                    adGroupResourceName:
+                        adGroupBuilt.resourceName,
+
+                    keywords: input.keywords.negative,
+                },
+            )
+            : [];
+
+    // ======================================
+    // 9. BUILD RESPONSIVE SEARCH AD OPERATION
+    // ======================================
+
+    const rsaOperation =
+        buildGoogleAdsSearchRSAOperation(
+            context,
+            {
+                adGroupResourceName:
+                    adGroupBuilt.resourceName,
+
+                finalUrl: input.ad.finalUrl,
+
+                headlines: input.ad.headlines,
+
+                descriptions: input.ad.descriptions,
+
+                path1: input.ad.path1,
+
+                path2: input.ad.path2,
+            },
+        );
+
+    // ======================================
+    // 10. ASSEMBLE OPERATIONS BY RESOURCE TYPE
+    // ======================================
+
+    const operations: GoogleAdsMutateOperation[] = [];
+
+    const operationIndexes = {
+        budget: -1,
+        campaign: -1,
+        locationCriteria: [] as number[],
+        adGroup: -1,
+        positiveKeywords: [] as number[],
+        negativeKeywords: [] as number[],
+        responsiveSearchAd: -1,
+    };
+
+    // A. Campaign Budget
+
+    operationIndexes.budget = operations.length;
+    operations.push(budgetBuilt.operation);
+
+    // B. Campaign
+
+    operationIndexes.campaign = operations.length;
+    operations.push(campaignBuilt.operation);
+
+    // C. Campaign Criteria (Location Targeting)
+
+    for (const operation of locationOperations) {
+        operationIndexes.locationCriteria.push(
+            operations.length,
+        );
+
+        operations.push(operation);
+    }
+
+    // D. Ad Group
+
+    operationIndexes.adGroup = operations.length;
+    operations.push(adGroupBuilt.operation);
+
+    // E. Ad Group Criteria (Positive Keywords)
+
+    for (const operation of positiveKeywordOperations) {
+        operationIndexes.positiveKeywords.push(
+            operations.length,
+        );
+
+        operations.push(operation);
+    }
+
+    // F. Ad Group Criteria (Negative Keywords)
+
+    for (const operation of negativeKeywordOperations) {
+        operationIndexes.negativeKeywords.push(
+            operations.length,
+        );
+
+        operations.push(operation);
+    }
+
+    // G. Ad Group Ad (Responsive Search Ad)
+
+    operationIndexes.responsiveSearchAd =
+        operations.length;
+
+    operations.push(rsaOperation);
+
+    // ======================================
+    // 11. SUBMIT SINGLE BULK MUTATION
+    // ======================================
+
+    const googleResponse = await googleAdsBulkMutate(
+        context,
+        {
+            operations,
+            validateOnly,
+            confirm: input.confirm,
+        },
+    );
+
+    // ======================================
+    // 12. RETURN VALIDATION RESULT
+    // OR EXTRACT LIVE CREATED RESOURCES
+    // ======================================
+
+    if (validateOnly) {
+        return {
+            validateOnly: true,
+
+            operationCount: operations.length,
+
+            temporaryResourceNames: {
+                budget: budgetBuilt.resourceName,
+                campaign: campaignBuilt.resourceName,
+                adGroup: adGroupBuilt.resourceName,
+            },
+
+            createdResources: null,
+
+            googleResponse,
+        };
+    }
+
+    // Extract a resource name from a specific
+    // operation response.
+
+    const extractResourceName = (
+        operationIndex: number,
+        resourceLabel: string,
+    ): string => {
+
+        const resourceName =
+            getGoogleAdsBulkMutationResourceName(
+                googleResponse,
+                operationIndex,
+            );
+
+        if (!resourceName) {
+            throw new GoogleAdsCreationError(
+                `Google Ads did not return the ${resourceLabel} resource name.`,
+                502,
+                googleResponse,
+            );
+        }
+
+        return resourceName;
+    };
+
+    const extractMultipleResourceNames = (
+        indexes: number[],
+        resourceLabel: string,
+    ): string[] => {
+
+        return indexes.map((index) =>
+            extractResourceName(index, resourceLabel)
+        );
+    };
+
+    const createdResources = {
+        budget: extractResourceName(
+            operationIndexes.budget,
+            "Campaign Budget",
+        ),
+
+        campaign: extractResourceName(
+            operationIndexes.campaign,
+            "Campaign",
+        ),
+
+        adGroup: extractResourceName(
+            operationIndexes.adGroup,
+            "Ad Group",
+        ),
+
+        locationCriteria: extractMultipleResourceNames(
+            operationIndexes.locationCriteria,
+            "Location Criterion",
+        ),
+
+        positiveKeywords: extractMultipleResourceNames(
+            operationIndexes.positiveKeywords,
+            "Positive Keyword",
+        ),
+
+        negativeKeywords: extractMultipleResourceNames(
+            operationIndexes.negativeKeywords,
+            "Negative Keyword",
+        ),
+
+        responsiveSearchAd: extractResourceName(
+            operationIndexes.responsiveSearchAd,
+            "Responsive Search Ad",
+        ),
+    };
+
+    return {
+        validateOnly: false,
+
+        operationCount: operations.length,
+
+        temporaryResourceNames: {
+            budget: budgetBuilt.resourceName,
+            campaign: campaignBuilt.resourceName,
+            adGroup: adGroupBuilt.resourceName,
+        },
+
+        createdResources,
+
+        googleResponse,
+    };
+}

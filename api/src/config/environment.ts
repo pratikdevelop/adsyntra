@@ -17,6 +17,15 @@ declare global {
             MONGODB_DB_NAME: any;
             NVIDIA_API_KEY: any;
             META_GRAPH_API_VERSION: any;
+            GOOGLE_ADS_API_VERSION: any;
+            META_ADS_API_VERSION: any;
+            META_ADS_APP_ID: any;
+            META_ADS_APP_SECRET: any;
+            META_ADS_ACCESS_TOKEN: any;
+            META_ADS_ACCOUNT_ID: any;
+            OAUTH_STATE_SECRET: any;
+            FRONTEND_URL: any;
+            SESSION_SECRET: any;
         }
     }
 }

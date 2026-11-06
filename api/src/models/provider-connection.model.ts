@@ -1,10 +1,4 @@
-
-import {
-  Schema,
-  model,
-  type HydratedDocument,
-  type Model,
-} from "mongoose";
+import { Schema, model, type HydratedDocument } from "mongoose";
 
 export type AdvertisingProvider = "googleAds" | "metaAds";
 
@@ -58,8 +52,7 @@ export interface ProviderConnection {
   updatedAt: Date;
 }
 
-export type ProviderConnectionDocument =
-  HydratedDocument<ProviderConnection>;
+export type ProviderConnectionDocument = HydratedDocument<ProviderConnection>;
 
 const encryptedSecretSchema = new Schema<EncryptedSecret>(
   {
@@ -172,7 +165,7 @@ const providerConnectionSchema = new Schema<ProviderConnection>(
     versionKey: false,
     strict: "throw",
     toJSON: {
-      transform: (_doc, ret) => {
+      transform: (_doc: any, ret: any) => {
         // Defense in depth: never serialize encrypted tokens in API JSON.
         delete ret.credentials;
         return ret;
@@ -212,21 +205,19 @@ providerConnectionSchema.index(
 );
 
 providerConnectionSchema.index(
-    {
-        userId: 1,
-        provider: 1,
-    },
-    {
-        unique: true,
-        name: "one_provider_connection_per_user",
-    }
+  {
+    userId: 1,
+    provider: 1,
+  },
+  {
+    unique: true,
+    name: "one_provider_connection_per_user",
+  },
 );
 
-const ProviderConnectionModel =
- 
-  model<ProviderConnection>(
-    "ProviderConnection",
-    providerConnectionSchema,
-  );
+const ProviderConnectionModel = model<ProviderConnection>(
+  "ProviderConnection",
+  providerConnectionSchema,
+);
 
 export default ProviderConnectionModel;

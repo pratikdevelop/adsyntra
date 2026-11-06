@@ -136,18 +136,18 @@ export function buildAssetCreate(
     input: AssetInput
 ): Record<string, unknown> {
     const name =
-        typeof input.name === "string" && input.name.trim()
-            ? input.name.trim()
+        typeof input[`name`] === "string" && input[`name`].trim()
+            ? input[`name`].trim()
             : undefined;
 
     const create: Record<string, unknown> = {};
 
-    if (name) create.name = name;
+    if (name) create[`name`] = name;
 
     switch (type) {
         case "SITELINK": {
-            const linkText = requiredText(input.linkText, "linkText");
-            const finalUrl = requiredText(input.finalUrl, "finalUrl");
+            const linkText = requiredText(input[`linkText`], "linkText");
+            const finalUrl = requiredText(input[`finalUrl`], "finalUrl");
 
             if (linkText.length > 25) {
                 throw new AssetValidationError(
@@ -166,8 +166,8 @@ export function buildAssetCreate(
                 );
             }
 
-            const description1 = input.description1;
-            const description2 = input.description2;
+            const description1 = input[`description1`];
+            const description2 = input[`description2`];
 
             if (
                 (description1 == null || description1 === "") !==
@@ -190,18 +190,18 @@ export function buildAssetCreate(
                     );
                 }
 
-                sitelinkAsset.description1 = d1;
-                sitelinkAsset.description2 = d2;
+                sitelinkAsset[`description1`] = d1;
+                sitelinkAsset[`description2`] = d2;
             }
 
-            create.finalUrls = [finalUrl];
-            create.sitelinkAsset = sitelinkAsset;
+            create[`finalUrls`] = [finalUrl];
+            create[`sitelinkAsset`] = sitelinkAsset;
             break;
         }
 
         case "CALLOUT": {
             const calloutText = requiredText(
-                input.calloutText,
+                input[`calloutText`],
                 "calloutText"
             );
 
@@ -211,13 +211,13 @@ export function buildAssetCreate(
                 );
             }
 
-            create.calloutAsset = { calloutText };
+            create[`calloutAsset`] = { calloutText };
             break;
         }
 
         case "STRUCTURED_SNIPPET": {
-            const header = requiredText(input.header, "header");
-            const values = input.values;
+            const header = requiredText(input[`header`], "header");
+            const values = input[`values`];
 
             if (
                 !Array.isArray(values) ||
@@ -235,7 +235,7 @@ export function buildAssetCreate(
                 );
             }
 
-            create.structuredSnippetAsset = {
+            create[`structuredSnippetAsset`] = {
                 header,
                 values: values.map((value: string) => value.trim()),
             };
@@ -243,13 +243,13 @@ export function buildAssetCreate(
         }
 
         case "CALL": {
-            create.callAsset = {
+            create[`callAsset`] = {
                 countryCode: requiredText(
-                    input.countryCode,
+                    input[`countryCode`],
                     "countryCode"
                 ).toUpperCase(),
                 phoneNumber: requiredText(
-                    input.phoneNumber,
+                    input[`phoneNumber`],
                     "phoneNumber"
                 ),
             };
@@ -257,9 +257,9 @@ export function buildAssetCreate(
         }
 
         case "IMAGE": {
-            const rawData = requiredText(input.data, "data");
+            const rawData = requiredText(input[`data`], "data");
 
-            create.imageAsset = {
+            create[`imageAsset`] = {
                 data: rawData.replace(
                     /^data:image\/[^;]+;base64,/,
                     ""
@@ -270,7 +270,7 @@ export function buildAssetCreate(
 
         case "BUSINESS_NAME": {
             const businessName = requiredText(
-                input.businessName,
+                input[`businessName`],
                 "businessName"
             );
 
@@ -280,7 +280,7 @@ export function buildAssetCreate(
                 );
             }
 
-            create.textAsset = {
+            create[`textAsset`] = {
                 text: businessName,
             };
 
@@ -288,14 +288,14 @@ export function buildAssetCreate(
         }
 
         case "BUSINESS_LOGO": {
-            const rawData = requiredText(input.data, "data");
+            const rawData = requiredText(input[`data`], "data");
 
             const imageData = rawData.replace(
                 /^data:image\/[^;]+;base64,/,
                 ""
             );
 
-            create.imageAsset = {
+            create[`imageAsset`] = {
                 data: imageData,
             };
 

@@ -1,9 +1,40 @@
 import { getProviderAccessToken } from "../../utils/provider-token.utils.js";
-import type { BuildGoogleAdsSearchAdGroupOperationInput, BuildGoogleAdsSearchCampaignOperationInput, BuildGoogleAdsSearchKeywordOperationsInput, BuildGoogleAdsSearchRSAOperationInput, CreateDemandGenAdInput, CreateGoogleAdsAdGroupInput, CreateGoogleAdsAssetGroupInput, CreateGoogleAdsBudgetInput, CreateGoogleAdsCampaignInput, CreateGoogleAdsCampaignLocationTargetsInput, CreateGoogleAdsCampaignNegativeKeywordsInput, CreateGoogleAdsDemandGenCarouselAdInput, CreateGoogleAdsDemandGenCarouselCardInput, CreateGoogleAdsDemandGenMultiAssetAdInput, CreateGoogleAdsImageAssetInput, CreateGoogleAdsKeywordCriteriaInput, CreateGoogleAdsResponsiveDisplayAdInput, CreateGoogleAdsResponsiveSearchAdInput, CreateGoogleAdsSearchCampaignFlowInput, CreateGoogleAdsTextAssetInput, CreateGoogleAdsYouTubeVideoAssetInput, GoogleAdsBuiltOperation, GoogleAdsBulkMutateResponse, GoogleAdsCampaignConfig, GoogleAdsCampaignType, GoogleAdsCreatedResource, GoogleAdsCreationContext, GoogleAdsKeywordCreationResult, GoogleAdsKeywordInput, GoogleAdsMutateOperation, GoogleAdsMutateResponse, GoogleAdsSearchCampaignFlowResult, PerformanceMaxAssetFieldType } from "../iterface/campign-cretion.js";
-import {
-    buildBiddingConfig,
-    type BiddingOptions,
-} from "../utils/bidding.js";
+import type {
+    BuildGoogleAdsSearchAdGroupOperationInput,
+    BuildGoogleAdsSearchCampaignOperationInput,
+    BuildGoogleAdsSearchKeywordOperationsInput,
+    BuildGoogleAdsSearchRSAOperationInput,
+    CreateDemandGenAdInput,
+    CreateGoogleAdsAdGroupInput,
+    CreateGoogleAdsAssetGroupInput,
+    CreateGoogleAdsBudgetInput,
+    CreateGoogleAdsCampaignInput,
+    CreateGoogleAdsCampaignLocationTargetsInput,
+    CreateGoogleAdsCampaignNegativeKeywordsInput,
+    CreateGoogleAdsDemandGenCarouselAdInput,
+    CreateGoogleAdsDemandGenCarouselCardInput,
+    CreateGoogleAdsDemandGenMultiAssetAdInput,
+    CreateGoogleAdsImageAssetInput,
+    CreateGoogleAdsKeywordCriteriaInput,
+    CreateGoogleAdsResponsiveDisplayAdInput,
+    CreateGoogleAdsResponsiveSearchAdInput,
+    CreateGoogleAdsSearchCampaignFlowInput,
+    CreateGoogleAdsTextAssetInput,
+    CreateGoogleAdsYouTubeVideoAssetInput,
+    GoogleAdsBuiltOperation,
+    GoogleAdsBulkMutateResponse,
+    GoogleAdsCampaignConfig,
+    GoogleAdsCampaignType,
+    GoogleAdsCreatedResource,
+    GoogleAdsCreationContext,
+    GoogleAdsKeywordCreationResult,
+    GoogleAdsKeywordInput,
+    GoogleAdsMutateOperation,
+    GoogleAdsMutateResponse,
+    GoogleAdsSearchCampaignFlowResult,
+    PerformanceMaxAssetFieldType,
+} from "../iterface/campaign-creation.js";
+import { buildBiddingConfig } from "../utils/bidding.js";
 import { imageSize } from "image-size";
 import { randomUUID } from "node:crypto";
 // ==========================================
@@ -18,40 +49,34 @@ const DEFAULT_API_VERSION = "v25";
 
 export async function getGoogleAdsCreationContext(
     userId: string,
-    selectedAccountId: string
+    selectedAccountId: string,
 ): Promise<GoogleAdsCreationContext> {
-
     if (!userId?.trim()) {
         throw new Error("Authenticated user ID is required.");
     }
 
     const customerId = normalizeCustomerId(selectedAccountId);
 
-    const developerToken =
-        process.env.GOOGLE_ADS_DEVELOPER_TOKEN?.trim();
+    const developerToken = process.env.GOOGLE_ADS_DEVELOPER_TOKEN?.trim();
 
     if (!developerToken) {
         throw new Error("Google Ads developer token is missing.");
     }
 
     const apiVersion =
-        process.env[`GOOGLE_ADS_API_VERSION`]?.trim() ||
-        DEFAULT_API_VERSION;
+        process.env[`GOOGLE_ADS_API_VERSION`]?.trim() || DEFAULT_API_VERSION;
 
     if (!/^v\d+$/.test(apiVersion)) {
         throw new Error("Invalid Google Ads API version.");
     }
 
-    const accessToken = await getProviderAccessToken(
-        userId,
-        "googleAds"
-    );
+    const accessToken = await getProviderAccessToken(userId, "googleAds");
 
     return {
         customerId,
         accessToken,
         developerToken,
-        apiVersion
+        apiVersion,
     };
 }
 
@@ -63,16 +88,12 @@ export class GoogleAdsCreationError extends Error {
     constructor(
         message: string,
         public statusCode = 500,
-        public details?: unknown
+        public details?: unknown,
     ) {
         super(message);
         this.name = "GoogleAdsCreationError";
     }
 }
-
-
-
-
 
 const GOOGLE_ADS_CAMPAIGN_CONFIG: Record<
     GoogleAdsCampaignType,
@@ -127,28 +148,21 @@ const GOOGLE_ADS_CAMPAIGN_CONFIG: Record<
 
     PERFORMANCE_MAX: {
         apiChannelType: "PERFORMANCE_MAX",
-        biddingStrategies: [
-            "MAXIMIZE_CONVERSIONS",
-            "MAXIMIZE_CONVERSION_VALUE",
-        ],
+        biddingStrategies: ["MAXIMIZE_CONVERSIONS", "MAXIMIZE_CONVERSION_VALUE"],
     },
 };
-
 
 // ==========================================
 // GOOGLE ADS AD GROUP CONFIGURATION
 // ==========================================
 
-const GOOGLE_AD_GROUP_TYPES: Partial<
-    Record<GoogleAdsCampaignType, string>
-> = {
+const GOOGLE_AD_GROUP_TYPES: Partial<Record<GoogleAdsCampaignType, string>> = {
     SEARCH: "SEARCH_STANDARD",
     DISPLAY: "DISPLAY_STANDARD",
     SHOPPING: "SHOPPING_PRODUCT_ADS",
 
     // Demand Gen does not require an explicit AdGroup type.
 };
-
 
 // ==========================================
 // BUILD SEARCH AD GROUP KEYWORD OPERATIONS
@@ -159,17 +173,14 @@ function buildGoogleAdsSearchAdGroupKeywordOperations(
     input: BuildGoogleAdsSearchKeywordOperationsInput,
     negative: boolean,
 ): GoogleAdsMutateOperation[] {
-
     // 1. Validate Ad Group resource name.
     // Supports existing IDs and temporary negative IDs.
 
-    const adGroupPrefix =
-        `customers/${context.customerId}/adGroups/`;
+    const adGroupPrefix = `customers/${context.customerId}/adGroups/`;
 
-    const adGroupId =
-        input.adGroupResourceName?.startsWith(adGroupPrefix)
-            ? input.adGroupResourceName.slice(adGroupPrefix.length)
-            : "";
+    const adGroupId = input.adGroupResourceName?.startsWith(adGroupPrefix)
+        ? input.adGroupResourceName.slice(adGroupPrefix.length)
+        : "";
 
     if (!/^(?:[1-9]\d*|-[1-9]\d*)$/.test(adGroupId)) {
         throw new GoogleAdsCreationError(
@@ -180,9 +191,7 @@ function buildGoogleAdsSearchAdGroupKeywordOperations(
 
     // 2. Reuse the existing keyword validator.
 
-    const keywords = validateGoogleAdsKeywords(
-        input.keywords,
-    );
+    const keywords = validateGoogleAdsKeywords(input.keywords);
 
     // 3. Build one operation for each keyword.
 
@@ -211,12 +220,7 @@ export function buildGoogleAdsSearchPositiveKeywordOperations(
     context: GoogleAdsCreationContext,
     input: BuildGoogleAdsSearchKeywordOperationsInput,
 ): GoogleAdsMutateOperation[] {
-
-    return buildGoogleAdsSearchAdGroupKeywordOperations(
-        context,
-        input,
-        false,
-    );
+    return buildGoogleAdsSearchAdGroupKeywordOperations(context, input, false);
 }
 
 // ==========================================
@@ -227,12 +231,7 @@ export function buildGoogleAdsSearchNegativeKeywordOperations(
     context: GoogleAdsCreationContext,
     input: BuildGoogleAdsSearchKeywordOperationsInput,
 ): GoogleAdsMutateOperation[] {
-
-    return buildGoogleAdsSearchAdGroupKeywordOperations(
-        context,
-        input,
-        true,
-    );
+    return buildGoogleAdsSearchAdGroupKeywordOperations(context, input, true);
 }
 
 // ==========================================
@@ -243,17 +242,14 @@ export function buildGoogleAdsSearchLocationTargetOperations(
     context: GoogleAdsCreationContext,
     input: CreateGoogleAdsCampaignLocationTargetsInput,
 ): GoogleAdsMutateOperation[] {
-
     // 1. Validate Campaign resource name.
     // Supports existing and temporary Campaign IDs.
 
-    const campaignPrefix =
-        `customers/${context.customerId}/campaigns/`;
+    const campaignPrefix = `customers/${context.customerId}/campaigns/`;
 
-    const campaignId =
-        input.campaignResourceName?.startsWith(campaignPrefix)
-            ? input.campaignResourceName.slice(campaignPrefix.length)
-            : "";
+    const campaignId = input.campaignResourceName?.startsWith(campaignPrefix)
+        ? input.campaignResourceName.slice(campaignPrefix.length)
+        : "";
 
     if (!/^(?:[1-9]\d*|-[1-9]\d*)$/.test(campaignId)) {
         throw new GoogleAdsCreationError(
@@ -280,14 +276,9 @@ export function buildGoogleAdsSearchLocationTargetOperations(
     const seen = new Set<string>();
 
     const locations = input.locations.map((location) => {
+        const resourceName = location.geoTargetConstantResourceName?.trim();
 
-        const resourceName =
-            location.geoTargetConstantResourceName?.trim();
-
-        if (
-            !resourceName ||
-            !/^geoTargetConstants\/\d+$/.test(resourceName)
-        ) {
+        if (!resourceName || !/^geoTargetConstants\/\d+$/.test(resourceName)) {
             throw new GoogleAdsCreationError(
                 `Invalid Geo Target Constant resource name: ${resourceName}`,
                 400,
@@ -353,17 +344,9 @@ function normalizeCustomerId(accountId: string): string {
     return customerId;
 }
 
-
-function isRecord(
-    value: unknown
-): value is Record<string, unknown> {
-    return (
-        typeof value === "object" &&
-        value !== null &&
-        !Array.isArray(value)
-    );
+function isRecord(value: unknown): value is Record<string, unknown> {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-
 
 // ==========================================
 // BUILD GOOGLE ADS SEARCH CAMPAIGN OPERATION
@@ -374,31 +357,24 @@ export function buildGoogleAdsSearchCampaignOperation(
     input: BuildGoogleAdsSearchCampaignOperationInput,
     temporaryId: number,
 ): GoogleAdsBuiltOperation {
-
     // 1. Validate campaign name
 
     const campaignName = input.campaignName?.trim();
 
     if (!campaignName || campaignName.length > 255) {
-        throw new GoogleAdsCreationError(
-            "A valid campaign name is required.",
-            400,
-        );
+        throw new GoogleAdsCreationError("A valid campaign name is required.", 400);
     }
 
     // 2. Validate budget resource name
     // Supports both existing and temporary budget resources.
 
-    const budgetPrefix =
-        `customers/${context.customerId}/campaignBudgets/`;
+    const budgetPrefix = `customers/${context.customerId}/campaignBudgets/`;
 
-    const budgetResourceName =
-        input.budgetResourceName?.trim();
+    const budgetResourceName = input.budgetResourceName?.trim();
 
-    const budgetId =
-        budgetResourceName?.startsWith(budgetPrefix)
-            ? budgetResourceName.slice(budgetPrefix.length)
-            : "";
+    const budgetId = budgetResourceName?.startsWith(budgetPrefix)
+        ? budgetResourceName.slice(budgetPrefix.length)
+        : "";
 
     if (!/^(?:[1-9]\d*|-[1-9]\d*)$/.test(budgetId)) {
         throw new GoogleAdsCreationError(
@@ -409,16 +385,12 @@ export function buildGoogleAdsSearchCampaignOperation(
 
     // 3. Validate Search bidding strategy
 
-    const biddingStrategy =
-        input.biddingStrategy?.trim().toUpperCase();
+    const biddingStrategy = input.biddingStrategy?.trim().toUpperCase();
 
     const supportedStrategies =
         GOOGLE_ADS_CAMPAIGN_CONFIG.SEARCH.biddingStrategies;
 
-    if (
-        !biddingStrategy ||
-        !supportedStrategies.includes(biddingStrategy)
-    ) {
+    if (!biddingStrategy || !supportedStrategies.includes(biddingStrategy)) {
         throw new GoogleAdsCreationError(
             `Unsupported Search campaign bidding strategy: ${input.biddingStrategy}`,
             400,
@@ -435,12 +407,11 @@ export function buildGoogleAdsSearchCampaignOperation(
 
     // 5. Generate temporary Campaign resource name
 
-    const campaignResourceName =
-        createGoogleAdsTemporaryResourceName(
-            context,
-            "campaigns",
-            temporaryId,
-        );
+    const campaignResourceName = createGoogleAdsTemporaryResourceName(
+        context,
+        "campaigns",
+        temporaryId,
+    );
 
     // 6. Build Campaign operation
 
@@ -473,7 +444,6 @@ export function buildGoogleAdsSearchCampaignOperation(
     };
 }
 
-
 // ==========================================
 // BUILD GOOGLE ADS SEARCH AD GROUP OPERATION
 // ==========================================
@@ -483,16 +453,11 @@ export function buildGoogleAdsSearchAdGroupOperation(
     input: BuildGoogleAdsSearchAdGroupOperationInput,
     temporaryId: number,
 ): GoogleAdsBuiltOperation {
-
     // 1. Validate Ad Group name
 
     const name = input.name?.trim();
 
-    if (
-        !name ||
-        name.length > 255 ||
-        /[\0\r\n]/.test(name)
-    ) {
+    if (!name || name.length > 255 || /[\0\r\n]/.test(name)) {
         throw new GoogleAdsCreationError(
             "Provide a valid Search Ad Group name.",
             400,
@@ -502,13 +467,11 @@ export function buildGoogleAdsSearchAdGroupOperation(
     // 2. Validate parent Campaign resource name
     // Supports both existing and temporary Campaign resources.
 
-    const campaignPrefix =
-        `customers/${context.customerId}/campaigns/`;
+    const campaignPrefix = `customers/${context.customerId}/campaigns/`;
 
-    const campaignId =
-        input.campaignResourceName?.startsWith(campaignPrefix)
-            ? input.campaignResourceName.slice(campaignPrefix.length)
-            : "";
+    const campaignId = input.campaignResourceName?.startsWith(campaignPrefix)
+        ? input.campaignResourceName.slice(campaignPrefix.length)
+        : "";
 
     if (!/^(?:[1-9]\d*|-[1-9]\d*)$/.test(campaignId)) {
         throw new GoogleAdsCreationError(
@@ -519,12 +482,11 @@ export function buildGoogleAdsSearchAdGroupOperation(
 
     // 3. Generate temporary Ad Group resource name
 
-    const adGroupResourceName =
-        createGoogleAdsTemporaryResourceName(
-            context,
-            "adGroups",
-            temporaryId,
-        );
+    const adGroupResourceName = createGoogleAdsTemporaryResourceName(
+        context,
+        "adGroups",
+        temporaryId,
+    );
 
     // 4. Build Search Ad Group configuration
 
@@ -564,8 +526,7 @@ function validateGoogleAdsAssetReference(
     resourceName: string,
     fieldName: string,
 ): string {
-    const prefix =
-        `customers/${context.customerId}/assets/`;
+    const prefix = `customers/${context.customerId}/assets/`;
 
     const assetId = resourceName?.startsWith(prefix)
         ? resourceName.slice(prefix.length)
@@ -600,11 +561,7 @@ function validateGoogleAdsAssetList(
     }
 
     return resources.map((resourceName) =>
-        validateGoogleAdsAssetReference(
-            context,
-            resourceName,
-            fieldName,
-        )
+        validateGoogleAdsAssetReference(context, resourceName, fieldName),
     );
 }
 
@@ -641,10 +598,7 @@ function validateDemandGenFinalUrl(value: string): string {
         value.trim().length === 0 ||
         value.trim().length > 2048
     ) {
-        throw new GoogleAdsCreationError(
-            "A valid final URL is required.",
-            400,
-        );
+        throw new GoogleAdsCreationError("A valid final URL is required.", 400);
     }
 
     try {
@@ -667,8 +621,7 @@ function validateGoogleAdsAdGroupReference(
     context: GoogleAdsCreationContext,
     resourceName: string,
 ): string {
-    const prefix =
-        `customers/${context.customerId}/adGroups/`;
+    const prefix = `customers/${context.customerId}/adGroups/`;
 
     const adGroupId = resourceName?.startsWith(prefix)
         ? resourceName.slice(prefix.length)
@@ -688,22 +641,16 @@ function validateGoogleAdsAdGroupReference(
 // DEMAND GEN AD MUTATION HELPER
 // ==========================================
 
-
-
-
 async function createDemandGenAd(
     context: GoogleAdsCreationContext,
     input: CreateDemandGenAdInput,
 ): Promise<GoogleAdsCreatedResource> {
+    const adGroupResourceName = validateGoogleAdsAdGroupReference(
+        context,
+        input.adGroupResourceName,
+    );
 
-    const adGroupResourceName =
-        validateGoogleAdsAdGroupReference(
-            context,
-            input.adGroupResourceName,
-        );
-
-    const finalUrl =
-        validateDemandGenFinalUrl(input.finalUrl);
+    const finalUrl = validateDemandGenFinalUrl(input.finalUrl);
 
     const ad: Record<string, unknown> = {
         finalUrls: [finalUrl],
@@ -711,28 +658,23 @@ async function createDemandGenAd(
     };
 
     if (input.adName) {
-        ad.name = input.adName.trim();
+        ad[`name`] = input.adName.trim();
     }
 
-    const googleResponse = await googleAdsMutate(
-        context,
-        "adGroupAds:mutate",
-        {
-            operations: [
-                {
-                    create: {
-                        adGroup: adGroupResourceName,
-                        status: "PAUSED",
-                        ad,
-                    },
+    const googleResponse = await googleAdsMutate(context, "adGroupAds:mutate", {
+        operations: [
+            {
+                create: {
+                    adGroup: adGroupResourceName,
+                    status: "PAUSED",
+                    ad,
                 },
-            ],
-            validateOnly: input.validateOnly,
-        },
-    );
+            },
+        ],
+        validateOnly: input.validateOnly,
+    });
 
-    const resourceName =
-        googleResponse.results?.[0]?.resourceName ?? null;
+    const resourceName = googleResponse.results?.[0]?.resourceName ?? null;
 
     if (!input.validateOnly && !resourceName) {
         throw new GoogleAdsCreationError(
@@ -754,7 +696,6 @@ export async function createGoogleAdsDemandGenMultiAssetAd(
     context: GoogleAdsCreationContext,
     input: CreateGoogleAdsDemandGenMultiAssetAdInput,
 ): Promise<GoogleAdsCreatedResource> {
-
     // 1. Validate business name
 
     const businessName = input.businessName?.trim();
@@ -824,10 +765,7 @@ export async function createGoogleAdsDemandGenMultiAssetAd(
         portraitImages.length +
         tallPortraitImages.length;
 
-    if (
-        marketingImages.length === 0 &&
-        squareImages.length === 0
-    ) {
+    if (marketingImages.length === 0 && squareImages.length === 0) {
         throw new GoogleAdsCreationError(
             "At least one landscape or square marketing image is required.",
             400,
@@ -903,12 +841,13 @@ export async function createGoogleAdsDemandGenMultiAssetAd(
     };
 
     if (classicDisplayImages.length > 0) {
-        adConfiguration.classicDisplayImages =
-            classicDisplayImages.map((asset) => ({ asset }));
+        adConfiguration[`classicDisplayImages`] = classicDisplayImages.map(
+            (asset) => ({ asset }),
+        );
     }
 
     if (callToActionText) {
-        adConfiguration.callToActionText = callToActionText;
+        adConfiguration[`callToActionText`] = callToActionText;
     }
 
     // 8. Validate mutation mode
@@ -951,7 +890,6 @@ export async function createGoogleAdsDemandGenCarouselAd(
     context: GoogleAdsCreationContext,
     input: CreateGoogleAdsDemandGenCarouselAdInput,
 ): Promise<GoogleAdsCreatedResource> {
-
     // 1. Validate business name
 
     const businessName = input.businessName?.trim();
@@ -1030,8 +968,7 @@ export async function createGoogleAdsDemandGenCarouselAd(
     };
 
     if (input.callToActionText?.trim()) {
-        adConfiguration.callToActionText =
-            input.callToActionText.trim();
+        adConfiguration[`callToActionText`] = input.callToActionText.trim();
     }
 
     // 8. Create Demand Gen Carousel Ad
@@ -1049,7 +986,6 @@ export async function createGoogleAdsDemandGenCarouselCardAsset(
     context: GoogleAdsCreationContext,
     input: CreateGoogleAdsDemandGenCarouselCardInput,
 ): Promise<GoogleAdsCreatedResource> {
-
     // 1. Validate headline
 
     const headline = input.headline?.trim();
@@ -1066,12 +1002,12 @@ export async function createGoogleAdsDemandGenCarouselCardAsset(
     const marketingImage = input.marketingImageAssetResourceName
         ? validateGoogleAdsAssetReference(
             context,
-            input.marketingImageAssetResourceName,
+            input[`marketingImageAssetResourceName`],
             "Carousel marketing image",
         )
         : undefined;
 
-    const squareImage = input.squareMarketingImageAssetResourceName
+    const squareImage = input[`squareMarketingImageAssetResourceName`]
         ? validateGoogleAdsAssetReference(
             context,
             input.squareMarketingImageAssetResourceName,
@@ -1109,43 +1045,37 @@ export async function createGoogleAdsDemandGenCarouselCardAsset(
     };
 
     if (marketingImage) {
-        cardConfiguration.marketingImageAsset = marketingImage;
+        cardConfiguration[`marketingImageAsset`] = marketingImage;
     }
 
     if (squareImage) {
-        cardConfiguration.squareMarketingImageAsset = squareImage;
+        cardConfiguration[`squareMarketingImageAsset`] = squareImage;
     }
 
     if (portraitImage) {
-        cardConfiguration.portraitMarketingImageAsset = portraitImage;
+        cardConfiguration[`portraitMarketingImageAsset`] = portraitImage;
     }
 
     if (callToActionText) {
-        cardConfiguration.callToActionText = callToActionText;
+        cardConfiguration[`callToActionText`] = callToActionText;
     }
 
     // 6. Create Demand Gen Carousel Card Asset
 
-    const googleResponse = await googleAdsMutate(
-        context,
-        "assets:mutate",
-        {
-            operations: [
-                {
-                    create: {
-                        name: createUniqueAssetName(headline),
+    const googleResponse = await googleAdsMutate(context, "assets:mutate", {
+        operations: [
+            {
+                create: {
+                    name: createUniqueAssetName(headline),
 
-                        demandGenCarouselCardAsset:
-                            cardConfiguration,
-                    },
+                    demandGenCarouselCardAsset: cardConfiguration,
                 },
-            ],
-            validateOnly,
-        },
-    );
+            },
+        ],
+        validateOnly,
+    });
 
-    const resourceName =
-        googleResponse.results?.[0]?.resourceName ?? null;
+    const resourceName = googleResponse.results?.[0]?.resourceName ?? null;
 
     if (!validateOnly && !resourceName) {
         throw new GoogleAdsCreationError(
@@ -1174,7 +1104,6 @@ export async function createGoogleAdsTextAsset(
     context: GoogleAdsCreationContext,
     input: CreateGoogleAdsTextAssetInput,
 ): Promise<GoogleAdsCreatedResource> {
-
     const text = input.text?.trim();
     const maxLength = GOOGLE_ADS_TEXT_LIMITS[input.fieldType];
 
@@ -1187,26 +1116,19 @@ export async function createGoogleAdsTextAsset(
 
     const validateOnly = resolveAssetValidateOnly(input);
 
-    const googleResponse = await googleAdsMutate(
-        context,
-        "assets:mutate",
-        {
-            operations: [
-                {
-                    create: {
-                        name: createUniqueAssetName(
-                            input.name || text,
-                        ),
-                        textAsset: { text },
-                    },
+    const googleResponse = await googleAdsMutate(context, "assets:mutate", {
+        operations: [
+            {
+                create: {
+                    name: createUniqueAssetName(input.name || text),
+                    textAsset: { text },
                 },
-            ],
-            validateOnly,
-        },
-    );
+            },
+        ],
+        validateOnly,
+    });
 
-    const resourceName =
-        googleResponse.results?.[0]?.resourceName ?? null;
+    const resourceName = googleResponse.results?.[0]?.resourceName ?? null;
 
     if (!validateOnly && !resourceName) {
         throw new GoogleAdsCreationError(
@@ -1224,7 +1146,6 @@ export async function createGoogleAdsTextAsset(
     };
 }
 
-
 // ==========================================
 // PERFORMANCE MAX ASSET GROUP CREATION
 // ==========================================
@@ -1233,7 +1154,6 @@ export async function createGoogleAdsPerformanceMaxAssetGroup(
     context: GoogleAdsCreationContext,
     input: CreateGoogleAdsAssetGroupInput,
 ): Promise<GoogleAdsCreatedResource> {
-
     // 1. Validate Asset Group name
 
     const name = input.name?.trim();
@@ -1247,13 +1167,11 @@ export async function createGoogleAdsPerformanceMaxAssetGroup(
 
     // 2. Validate parent Campaign
 
-    const campaignPrefix =
-        `customers/${context.customerId}/campaigns/`;
+    const campaignPrefix = `customers/${context.customerId}/campaigns/`;
 
-    const campaignId =
-        input.campaignResourceName?.startsWith(campaignPrefix)
-            ? input.campaignResourceName.slice(campaignPrefix.length)
-            : "";
+    const campaignId = input.campaignResourceName?.startsWith(campaignPrefix)
+        ? input.campaignResourceName.slice(campaignPrefix.length)
+        : "";
 
     if (!/^\d+$/.test(campaignId)) {
         throw new GoogleAdsCreationError(
@@ -1264,10 +1182,7 @@ export async function createGoogleAdsPerformanceMaxAssetGroup(
 
     // 3. Validate final URLs
 
-    if (
-        !Array.isArray(input.finalUrls) ||
-        input.finalUrls.length === 0
-    ) {
+    if (!Array.isArray(input.finalUrls) || input.finalUrls.length === 0) {
         throw new GoogleAdsCreationError(
             "At least one final URL is required.",
             400,
@@ -1280,10 +1195,7 @@ export async function createGoogleAdsPerformanceMaxAssetGroup(
         try {
             url = new URL(value);
         } catch {
-            throw new GoogleAdsCreationError(
-                `Invalid final URL: ${value}`,
-                400,
-            );
+            throw new GoogleAdsCreationError(`Invalid final URL: ${value}`, 400);
         }
 
         if (!["http:", "https:"].includes(url.protocol)) {
@@ -1299,10 +1211,7 @@ export async function createGoogleAdsPerformanceMaxAssetGroup(
     // 4. Validate asset list
 
     if (!Array.isArray(input.assets)) {
-        throw new GoogleAdsCreationError(
-            "Asset list is required.",
-            400,
-        );
+        throw new GoogleAdsCreationError("Asset list is required.", 400);
     }
 
     const allowedTypes: PerformanceMaxAssetFieldType[] = [
@@ -1319,7 +1228,6 @@ export async function createGoogleAdsPerformanceMaxAssetGroup(
     const assetCounts: Record<string, number> = {};
 
     for (const asset of input.assets) {
-
         if (!allowedTypes.includes(asset.fieldType)) {
             throw new GoogleAdsCreationError(
                 `Unsupported PMax asset field type: ${asset.fieldType}`,
@@ -1329,8 +1237,7 @@ export async function createGoogleAdsPerformanceMaxAssetGroup(
 
         // Every Asset must belong to the selected account.
 
-        const assetPrefix =
-            `customers/${context.customerId}/assets/`;
+        const assetPrefix = `customers/${context.customerId}/assets/`;
 
         const assetId = asset.assetResourceName?.startsWith(assetPrefix)
             ? asset.assetResourceName.slice(assetPrefix.length)
@@ -1343,8 +1250,7 @@ export async function createGoogleAdsPerformanceMaxAssetGroup(
             );
         }
 
-        assetCounts[asset.fieldType] =
-            (assetCounts[asset.fieldType] ?? 0) + 1;
+        assetCounts[asset.fieldType] = (assetCounts[asset.fieldType] ?? 0) + 1;
     }
 
     // 5. Check mandatory PMax assets
@@ -1363,15 +1269,10 @@ export async function createGoogleAdsPerformanceMaxAssetGroup(
         YOUTUBE_VIDEO: { min: 0, max: 15 },
     };
 
-    for (const [fieldType, requirement] of Object.entries(
-        requirements,
-    )) {
+    for (const [fieldType, requirement] of Object.entries(requirements)) {
         const count = assetCounts[fieldType] ?? 0;
 
-        if (
-            count < requirement.min ||
-            count > requirement.max
-        ) {
+        if (count < requirement.min || count > requirement.max) {
             throw new GoogleAdsCreationError(
                 `${fieldType} requires ${requirement.min}–${requirement.max} assets. Received ${count}.`,
                 400,
@@ -1385,8 +1286,7 @@ export async function createGoogleAdsPerformanceMaxAssetGroup(
 
     // 7. Create a temporary Asset Group resource name
 
-    const assetGroupResourceName =
-        `customers/${context.customerId}/assetGroups/-1`;
+    const assetGroupResourceName = `customers/${context.customerId}/assetGroups/-1`;
 
     // 8. First operation: create the Asset Group
 
@@ -1420,23 +1320,17 @@ export async function createGoogleAdsPerformanceMaxAssetGroup(
 
     // 10. Submit everything in ONE atomic mutation request
 
-    const googleResponse = await googleAdsMutate(
-        context,
-        "googleAds:mutate",
-        {
-            mutateOperations,
-            partialFailure: false,
-            validateOnly,
-        },
-    );
+    const googleResponse = await googleAdsMutate(context, "googleAds:mutate", {
+        mutateOperations,
+        partialFailure: false,
+        validateOnly,
+    });
 
     // 11. Extract Asset Group resource name
 
-    const responses =
-        googleResponse["mutateOperationResponses"];
+    const responses = googleResponse["mutateOperationResponses"];
 
-    const firstResponse =
-        Array.isArray(responses) ? responses[0] : undefined;
+    const firstResponse = Array.isArray(responses) ? responses[0] : undefined;
 
     const assetGroupResult = isRecord(firstResponse)
         ? firstResponse["assetGroupResult"]
@@ -1463,9 +1357,7 @@ export async function createGoogleAdsPerformanceMaxAssetGroup(
         googleResponse,
     };
 }
-function createUniqueAssetName(
-    inputName?: string,
-): string {
+function createUniqueAssetName(inputName?: string): string {
     const cleanName = (inputName || "Google Ads Asset")
         .replace(/\.[^/.]+$/, "")
         .replace(/[^a-zA-Z0-9 _-]/g, "")
@@ -1479,23 +1371,16 @@ export async function createGoogleAdsImageAsset(
     context: GoogleAdsCreationContext,
     input: CreateGoogleAdsImageAssetInput,
 ): Promise<GoogleAdsCreatedResource> {
-
     // 1. Validate image buffer
 
     if (!Buffer.isBuffer(input.buffer) || input.buffer.length === 0) {
-        throw new GoogleAdsCreationError(
-            "A valid image file is required.",
-            400,
-        );
+        throw new GoogleAdsCreationError("A valid image file is required.", 400);
     }
 
     // Keep the same 5 MB limit as the existing upload route.
 
     if (input.buffer.length > 5 * 1024 * 1024) {
-        throw new GoogleAdsCreationError(
-            "Image size must not exceed 5 MB.",
-            400,
-        );
+        throw new GoogleAdsCreationError("Image size must not exceed 5 MB.", 400);
     }
 
     // 2. Read actual image dimensions and format
@@ -1513,11 +1398,7 @@ export async function createGoogleAdsImageAsset(
 
     const { width, height, type } = dimensions;
 
-    if (
-        !width ||
-        !height ||
-        !["jpg", "png"].includes(type ?? "")
-    ) {
+    if (!width || !height || !["jpg", "png"].includes(type ?? "")) {
         throw new GoogleAdsCreationError(
             "Only valid JPG and PNG images are supported.",
             400,
@@ -1526,14 +1407,11 @@ export async function createGoogleAdsImageAsset(
 
     // 3. Determine Google Ads MIME type
 
-    const mimeType =
-        type === "jpg" ? "IMAGE_JPEG" : "IMAGE_PNG";
+    const mimeType = type === "jpg" ? "IMAGE_JPEG" : "IMAGE_PNG";
 
     // 4. Prepare asset name
 
-    const assetName = createUniqueAssetName(
-        input.name || input.originalName,
-    );
+    const assetName = createUniqueAssetName(input.name || input.originalName);
 
     // 5. Validate mutation mode
 
@@ -1541,34 +1419,29 @@ export async function createGoogleAdsImageAsset(
 
     // 6. Create Google Ads Image Asset
 
-    const googleResponse = await googleAdsMutate(
-        context,
-        "assets:mutate",
-        {
-            operations: [
-                {
-                    create: {
-                        name: assetName,
-                        imageAsset: {
-                            data: input.buffer.toString("base64"),
-                            fileSize: String(input.buffer.length),
-                            mimeType,
-                            fullSize: {
-                                widthPixels: String(width),
-                                heightPixels: String(height),
-                            },
+    const googleResponse = await googleAdsMutate(context, "assets:mutate", {
+        operations: [
+            {
+                create: {
+                    name: assetName,
+                    imageAsset: {
+                        data: input.buffer.toString("base64"),
+                        fileSize: String(input.buffer.length),
+                        mimeType,
+                        fullSize: {
+                            widthPixels: String(width),
+                            heightPixels: String(height),
                         },
                     },
                 },
-            ],
-            validateOnly,
-        },
-    );
+            },
+        ],
+        validateOnly,
+    });
 
     // 7. Extract resource name
 
-    const resourceName =
-        googleResponse.results?.[0]?.resourceName ?? null;
+    const resourceName = googleResponse.results?.[0]?.resourceName ?? null;
 
     if (!validateOnly && !resourceName) {
         throw new GoogleAdsCreationError(
@@ -1590,14 +1463,10 @@ export async function createGoogleAdsYouTubeVideoAsset(
     context: GoogleAdsCreationContext,
     input: CreateGoogleAdsYouTubeVideoAssetInput,
 ): Promise<GoogleAdsCreatedResource> {
-
     // 1. Validate YouTube video ID
 
     if (!/^[A-Za-z0-9_-]{11}$/.test(input.videoId)) {
-        throw new GoogleAdsCreationError(
-            "Invalid YouTube video ID.",
-            400,
-        );
+        throw new GoogleAdsCreationError("Invalid YouTube video ID.", 400);
     }
 
     // 2. Validate video title
@@ -1617,31 +1486,24 @@ export async function createGoogleAdsYouTubeVideoAsset(
 
     // 4. Create YouTube Video Asset
 
-    const googleResponse = await googleAdsMutate(
-        context,
-        "assets:mutate",
-        {
-            operations: [
-                {
-                    create: {
-                        name: createUniqueAssetName(
-                            input.name || videoTitle,
-                        ),
-                        youtubeVideoAsset: {
-                            youtubeVideoId: input.videoId,
-                            youtubeVideoTitle: videoTitle,
-                        },
+    const googleResponse = await googleAdsMutate(context, "assets:mutate", {
+        operations: [
+            {
+                create: {
+                    name: createUniqueAssetName(input.name || videoTitle),
+                    youtubeVideoAsset: {
+                        youtubeVideoId: input.videoId,
+                        youtubeVideoTitle: videoTitle,
                     },
                 },
-            ],
-            validateOnly,
-        },
-    );
+            },
+        ],
+        validateOnly,
+    });
 
     // 5. Extract resource name
 
-    const resourceName =
-        googleResponse.results?.[0]?.resourceName ?? null;
+    const resourceName = googleResponse.results?.[0]?.resourceName ?? null;
 
     if (!validateOnly && !resourceName) {
         throw new GoogleAdsCreationError(
@@ -1662,9 +1524,8 @@ export async function createGoogleAdsYouTubeVideoAsset(
 async function googleAdsMutate(
     context: GoogleAdsCreationContext,
     resource: string,
-    body: Record<string, unknown>
+    body: Record<string, unknown>,
 ): Promise<GoogleAdsMutateResponse> {
-
     const response = await fetch(
         `https://googleads.googleapis.com/${context.apiVersion}/customers/${context.customerId}/${resource}`,
         {
@@ -1676,12 +1537,12 @@ async function googleAdsMutate(
             },
             body: JSON.stringify(body),
             signal: AbortSignal.timeout(30_000),
-        }
+        },
     );
 
     const responseText = await response.text();
 
-    let responseData: unknown = {};
+    let responseData: any = {};
 
     if (responseText) {
         try {
@@ -1692,28 +1553,23 @@ async function googleAdsMutate(
     }
 
     if (!response.ok) {
-        const errorObject = isRecord(responseData)
-            ? responseData.error
+        const errorObject: any = isRecord(responseData)
+            ? responseData[`error`]
             : undefined;
 
         const message =
-            isRecord(errorObject) &&
-                typeof errorObject.message === "string"
-                ? errorObject.message
+            isRecord(errorObject) && typeof errorObject[`message`] === "string"
+                ? errorObject[`message`]
                 : `Google Ads API failed: ${response.status}`;
 
-        throw new GoogleAdsCreationError(
-            message,
-            response.status,
-            responseData
-        );
+        throw new GoogleAdsCreationError(message, response.status, responseData);
     }
 
     if (!isRecord(responseData)) {
         throw new GoogleAdsCreationError(
             "Unexpected response from Google Ads API.",
             502,
-            responseData
+            responseData,
         );
     }
 
@@ -1724,25 +1580,20 @@ async function googleAdsMutate(
 // ASSET MUTATION VALIDATION
 // ==========================================
 
-
 export async function createGoogleAdsBudget(
     context: GoogleAdsCreationContext,
-    input: CreateGoogleAdsBudgetInput
+    input: CreateGoogleAdsBudgetInput,
 ): Promise<GoogleAdsCreatedResource> {
-
     const name = input.name.trim();
 
     if (!name || name.length > 255) {
-        throw new GoogleAdsCreationError(
-            "A valid budget name is required.",
-            400
-        );
+        throw new GoogleAdsCreationError("A valid budget name is required.", 400);
     }
 
     if (!Number.isFinite(input.amount) || input.amount <= 0) {
         throw new GoogleAdsCreationError(
             "Budget amount must be greater than zero.",
-            400
+            400,
         );
     }
 
@@ -1751,20 +1602,18 @@ export async function createGoogleAdsBudget(
 
     if (!validateOnly && input.confirm !== true) {
         throw new GoogleAdsCreationError(
-            'Live creation requires validateOnly:false and confirm:true.',
-            400
+            "Live creation requires validateOnly:false and confirm:true.",
+            400,
         );
     }
 
     // Google Ads uses micros for monetary values.
-    const amountMicrosNumber = Math.round(
-        input.amount * 1_000_000
-    );
+    const amountMicrosNumber = Math.round(input.amount * 1_000_000);
 
     if (!Number.isSafeInteger(amountMicrosNumber)) {
         throw new GoogleAdsCreationError(
             "Budget amount is outside the supported range.",
-            400
+            400,
         );
     }
 
@@ -1784,17 +1633,16 @@ export async function createGoogleAdsBudget(
                 },
             ],
             validateOnly,
-        }
+        },
     );
 
-    const resourceName =
-        googleResponse.results?.[0]?.resourceName ?? null;
+    const resourceName = googleResponse.results?.[0]?.resourceName ?? null;
 
     if (!validateOnly && !resourceName) {
         throw new GoogleAdsCreationError(
             "Budget creation succeeded without returning a resource name.",
             502,
-            googleResponse
+            googleResponse,
         );
     }
 
@@ -1814,7 +1662,6 @@ export async function createGoogleAdsCampaign(
     context: GoogleAdsCreationContext,
     input: CreateGoogleAdsCampaignInput,
 ): Promise<GoogleAdsCreatedResource> {
-
     // 1. Validate campaign name
 
     if (
@@ -1822,10 +1669,7 @@ export async function createGoogleAdsCampaign(
         !input.campaignName.trim() ||
         input.campaignName.trim().length > 255
     ) {
-        throw new GoogleAdsCreationError(
-            "A valid campaign name is required.",
-            400,
-        );
+        throw new GoogleAdsCreationError("A valid campaign name is required.", 400);
     }
 
     const campaignName = input.campaignName.trim();
@@ -1847,8 +1691,7 @@ export async function createGoogleAdsCampaign(
 
     // 3. Validate budget resource name
 
-    const budgetPrefix =
-        `customers/${context.customerId}/campaignBudgets/`;
+    const budgetPrefix = `customers/${context.customerId}/campaignBudgets/`;
 
     const budgetResourceName = input.budgetResourceName;
 
@@ -1869,15 +1712,10 @@ export async function createGoogleAdsCampaign(
         typeof input.biddingStrategy !== "string" ||
         !input.biddingStrategy.trim()
     ) {
-        throw new GoogleAdsCreationError(
-            "A bidding strategy is required.",
-            400,
-        );
+        throw new GoogleAdsCreationError("A bidding strategy is required.", 400);
     }
 
-    const biddingStrategy = input.biddingStrategy
-        .trim()
-        .toUpperCase();
+    const biddingStrategy = input.biddingStrategy.trim().toUpperCase();
 
     if (!setup.biddingStrategies.includes(biddingStrategy)) {
         throw new GoogleAdsCreationError(
@@ -1900,7 +1738,7 @@ export async function createGoogleAdsCampaign(
 
     if (!validateOnly && input.confirm !== true) {
         throw new GoogleAdsCreationError(
-            'Live campaign creation requires validateOnly:false and confirm:true.',
+            "Live campaign creation requires validateOnly:false and confirm:true.",
             400,
         );
     }
@@ -1910,38 +1748,30 @@ export async function createGoogleAdsCampaign(
     const campaignPayload = {
         name: campaignName,
 
-        advertisingChannelType:
-            setup.apiChannelType,
+        advertisingChannelType: setup.apiChannelType,
 
         status: "PAUSED",
 
         campaignBudget: budgetResourceName,
 
-        containsEuPoliticalAdvertising:
-            "DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING",
+        containsEuPoliticalAdvertising: "DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING",
         brandGuidelinesEnabled:
             campaignType === "PERFORMANCE_MAX" ? false : undefined,
         ...biddingConfig,
-
     };
 
     // 8. Create campaign through shared API helper
 
-    const googleResponse = await googleAdsMutate(
-        context,
-        "campaigns:mutate",
-        {
-            operations: [
-                {
-                    create: campaignPayload,
-                },
-            ],
-            validateOnly,
-        },
-    );
+    const googleResponse = await googleAdsMutate(context, "campaigns:mutate", {
+        operations: [
+            {
+                create: campaignPayload,
+            },
+        ],
+        validateOnly,
+    });
 
-    const resourceName =
-        googleResponse.results?.[0]?.resourceName ?? null;
+    const resourceName = googleResponse.results?.[0]?.resourceName ?? null;
 
     if (!validateOnly && !resourceName) {
         throw new GoogleAdsCreationError(
@@ -1968,7 +1798,6 @@ export async function createGoogleAdsCampaign(
 function validateGoogleAdsKeywords(
     keywords: GoogleAdsKeywordInput[],
 ): GoogleAdsKeywordInput[] {
-
     if (
         !Array.isArray(keywords) ||
         keywords.length === 0 ||
@@ -1983,7 +1812,6 @@ function validateGoogleAdsKeywords(
     const seen = new Set<string>();
 
     return keywords.map((keyword) => {
-
         const text = keyword?.text?.trim();
 
         if (
@@ -1998,11 +1826,7 @@ function validateGoogleAdsKeywords(
             );
         }
 
-        if (
-            !["BROAD", "PHRASE", "EXACT"].includes(
-                keyword.matchType,
-            )
-        ) {
+        if (!["BROAD", "PHRASE", "EXACT"].includes(keyword.matchType)) {
             throw new GoogleAdsCreationError(
                 `Unsupported keyword match type for "${text}".`,
                 400,
@@ -2018,8 +1842,7 @@ function validateGoogleAdsKeywords(
             );
         }
 
-        const identity =
-            `${text.toLowerCase()}:${keyword.matchType}`;
+        const identity = `${text.toLowerCase()}:${keyword.matchType}`;
 
         if (seen.has(identity)) {
             throw new GoogleAdsCreationError(
@@ -2046,16 +1869,13 @@ async function mutateGoogleAdsAdGroupKeywords(
     input: CreateGoogleAdsKeywordCriteriaInput,
     negative: boolean,
 ): Promise<GoogleAdsKeywordCreationResult> {
-
     // 1. Validate Ad Group resource name
 
-    const prefix =
-        `customers/${context.customerId}/adGroups/`;
+    const prefix = `customers/${context.customerId}/adGroups/`;
 
-    const adGroupId =
-        input.adGroupResourceName?.startsWith(prefix)
-            ? input.adGroupResourceName.slice(prefix.length)
-            : "";
+    const adGroupId = input.adGroupResourceName?.startsWith(prefix)
+        ? input.adGroupResourceName.slice(prefix.length)
+        : "";
 
     if (!/^\d+$/.test(adGroupId)) {
         throw new GoogleAdsCreationError(
@@ -2066,9 +1886,7 @@ async function mutateGoogleAdsAdGroupKeywords(
 
     // 2. Validate keywords
 
-    const keywords = validateGoogleAdsKeywords(
-        input.keywords,
-    );
+    const keywords = validateGoogleAdsKeywords(input.keywords);
 
     // 3. Validate mutation mode
 
@@ -2103,9 +1921,8 @@ async function mutateGoogleAdsAdGroupKeywords(
 
     // 6. Extract all created resources
 
-    const resourceNames = (
-        googleResponse.results ?? []
-    ).map((result) => result.resourceName)
+    const resourceNames = (googleResponse.results ?? [])
+        .map((result) => result.resourceName)
         .filter((value): value is string => Boolean(value));
 
     if (!validateOnly && resourceNames.length !== keywords.length) {
@@ -2134,12 +1951,7 @@ export async function createGoogleAdsPositiveKeywords(
     context: GoogleAdsCreationContext,
     input: CreateGoogleAdsKeywordCriteriaInput,
 ): Promise<GoogleAdsKeywordCreationResult> {
-
-    return mutateGoogleAdsAdGroupKeywords(
-        context,
-        input,
-        false,
-    );
+    return mutateGoogleAdsAdGroupKeywords(context, input, false);
 }
 
 // ==========================================
@@ -2150,12 +1962,7 @@ export async function createGoogleAdsNegativeKeywords(
     context: GoogleAdsCreationContext,
     input: CreateGoogleAdsKeywordCriteriaInput,
 ): Promise<GoogleAdsKeywordCreationResult> {
-
-    return mutateGoogleAdsAdGroupKeywords(
-        context,
-        input,
-        true,
-    );
+    return mutateGoogleAdsAdGroupKeywords(context, input, true);
 }
 
 // ==========================================
@@ -2166,16 +1973,13 @@ export async function createGoogleAdsCampaignNegativeKeywords(
     context: GoogleAdsCreationContext,
     input: CreateGoogleAdsCampaignNegativeKeywordsInput,
 ): Promise<GoogleAdsKeywordCreationResult> {
-
     // 1. Validate Campaign resource name
 
-    const prefix =
-        `customers/${context.customerId}/campaigns/`;
+    const prefix = `customers/${context.customerId}/campaigns/`;
 
-    const campaignId =
-        input.campaignResourceName?.startsWith(prefix)
-            ? input.campaignResourceName.slice(prefix.length)
-            : "";
+    const campaignId = input.campaignResourceName?.startsWith(prefix)
+        ? input.campaignResourceName.slice(prefix.length)
+        : "";
 
     if (!/^\d+$/.test(campaignId)) {
         throw new GoogleAdsCreationError(
@@ -2186,9 +1990,7 @@ export async function createGoogleAdsCampaignNegativeKeywords(
 
     // 2. Validate keywords
 
-    const keywords = validateGoogleAdsKeywords(
-        input.keywords,
-    );
+    const keywords = validateGoogleAdsKeywords(input.keywords);
 
     // 3. Validate mutation mode
 
@@ -2222,9 +2024,8 @@ export async function createGoogleAdsCampaignNegativeKeywords(
 
     // 6. Extract resources
 
-    const resourceNames = (
-        googleResponse.results ?? []
-    ).map((result) => result.resourceName)
+    const resourceNames = (googleResponse.results ?? [])
+        .map((result) => result.resourceName)
         .filter((value): value is string => Boolean(value));
 
     if (!validateOnly && resourceNames.length !== keywords.length) {
@@ -2253,22 +2054,16 @@ export async function createGoogleAdsCampaignLocationTargets(
     context: GoogleAdsCreationContext,
     input: CreateGoogleAdsCampaignLocationTargetsInput,
 ) {
-
     // 1. Validate Campaign resource name
 
-    const campaignPrefix =
-        `customers/${context.customerId}/campaigns/`;
+    const campaignPrefix = `customers/${context.customerId}/campaigns/`;
 
-    const campaignId =
-        input.campaignResourceName?.startsWith(campaignPrefix)
-            ? input.campaignResourceName.slice(campaignPrefix.length)
-            : "";
+    const campaignId = input.campaignResourceName?.startsWith(campaignPrefix)
+        ? input.campaignResourceName.slice(campaignPrefix.length)
+        : "";
 
     if (!/^\d+$/.test(campaignId)) {
-        throw new GoogleAdsCreationError(
-            "Invalid Campaign resource name.",
-            400,
-        );
+        throw new GoogleAdsCreationError("Invalid Campaign resource name.", 400);
     }
 
     // 2. Validate location list
@@ -2289,13 +2084,9 @@ export async function createGoogleAdsCampaignLocationTargets(
     const seen = new Set<string>();
 
     const operations = input.locations.map((location) => {
+        const resourceName = location.geoTargetConstantResourceName?.trim();
 
-        const resourceName =
-            location.geoTargetConstantResourceName?.trim();
-
-        if (
-            !/^geoTargetConstants\/\d+$/.test(resourceName)
-        ) {
+        if (!/^geoTargetConstants\/\d+$/.test(resourceName)) {
             throw new GoogleAdsCreationError(
                 `Invalid Geo Target Constant resource name: ${resourceName}`,
                 400,
@@ -2343,9 +2134,8 @@ export async function createGoogleAdsCampaignLocationTargets(
     );
 
     return {
-        resourceNames: (
-            googleResponse.results ?? []
-        ).map((result) => result.resourceName)
+        resourceNames: (googleResponse.results ?? [])
+            .map((result) => result.resourceName)
             .filter((value): value is string => Boolean(value)),
 
         validateOnly,
@@ -2355,7 +2145,6 @@ export async function createGoogleAdsCampaignLocationTargets(
 // ==========================================
 // GOOGLE ADS BULK MUTATION TYPES
 // ==========================================
-
 
 // ==========================================
 // GOOGLE ADS BULK MUTATION
@@ -2369,13 +2158,9 @@ export async function googleAdsBulkMutate(
         confirm?: boolean;
     },
 ): Promise<GoogleAdsBulkMutateResponse> {
-
     // 1. Validate operations
 
-    if (
-        !Array.isArray(input.operations) ||
-        input.operations.length === 0
-    ) {
+    if (!Array.isArray(input.operations) || input.operations.length === 0) {
         throw new GoogleAdsCreationError(
             "At least one Google Ads mutation operation is required.",
             400,
@@ -2403,31 +2188,24 @@ export async function googleAdsBulkMutate(
 
     // 3. Submit all supported resource operations
 
-    const googleResponse = await googleAdsMutate(
-        context,
-        "googleAds:mutate",
-        {
-            mutateOperations: input.operations,
+    const googleResponse = await googleAdsMutate(context, "googleAds:mutate", {
+        mutateOperations: input.operations,
 
-            // Keep false for operations that depend on
-            // temporary resource names.
-            partialFailure: false,
+        // Keep false for operations that depend on
+        // temporary resource names.
+        partialFailure: false,
 
-            validateOnly,
-        },
-    );
+        validateOnly,
+    });
 
     // 4. Verify the live mutation response
 
-    const operationResponses =
-        googleResponse["mutateOperationResponses"];
+    const operationResponses = googleResponse["mutateOperationResponses"];
 
     if (
         !validateOnly &&
-        (
-            !Array.isArray(operationResponses) ||
-            operationResponses.length !== input.operations.length
-        )
+        (!Array.isArray(operationResponses) ||
+            operationResponses.length !== input.operations.length)
     ) {
         throw new GoogleAdsCreationError(
             "Google Ads returned an incomplete bulk mutation response.",
@@ -2448,11 +2226,7 @@ export function createGoogleAdsTemporaryResourceName(
     resourceCollection: string,
     temporaryId: number,
 ): string {
-
-    if (
-        !Number.isInteger(temporaryId) ||
-        temporaryId >= 0
-    ) {
+    if (!Number.isInteger(temporaryId) || temporaryId >= 0) {
         throw new GoogleAdsCreationError(
             "Temporary resource ID must be a negative integer.",
             400,
@@ -2467,8 +2241,7 @@ export function createGoogleAdsTemporaryResourceName(
     }
 
     return (
-        `customers/${context.customerId}/` +
-        `${resourceCollection}/${temporaryId}`
+        `customers/${context.customerId}/` + `${resourceCollection}/${temporaryId}`
     );
 }
 // ==========================================
@@ -2479,16 +2252,13 @@ export function getGoogleAdsBulkMutationResourceName(
     response: GoogleAdsBulkMutateResponse,
     operationIndex: number,
 ): string | null {
-
-    const operationResponse =
-        response.mutateOperationResponses?.[operationIndex];
+    const operationResponse = response.mutateOperationResponses?.[operationIndex];
 
     if (!operationResponse) {
         return null;
     }
 
     for (const [key, value] of Object.entries(operationResponse)) {
-
         if (
             key.endsWith("Result") &&
             isRecord(value) &&
@@ -2512,38 +2282,26 @@ export function buildGoogleAdsBudgetOperation(
     },
     temporaryId: number,
 ): GoogleAdsBuiltOperation {
-
     // 1. Validate budget name
 
     const name = input.name?.trim();
 
     if (!name || name.length > 255) {
-        throw new GoogleAdsCreationError(
-            "A valid budget name is required.",
-            400,
-        );
+        throw new GoogleAdsCreationError("A valid budget name is required.", 400);
     }
 
     // 2. Validate budget amount
 
-    if (
-        !Number.isFinite(input.amount) ||
-        input.amount <= 0
-    ) {
+    if (!Number.isFinite(input.amount) || input.amount <= 0) {
         throw new GoogleAdsCreationError(
             "Budget amount must be greater than zero.",
             400,
         );
     }
 
-    const amountMicrosNumber = Math.round(
-        input.amount * 1_000_000,
-    );
+    const amountMicrosNumber = Math.round(input.amount * 1_000_000);
 
-    if (
-        !Number.isSafeInteger(amountMicrosNumber) ||
-        amountMicrosNumber <= 0
-    ) {
+    if (!Number.isSafeInteger(amountMicrosNumber) || amountMicrosNumber <= 0) {
         throw new GoogleAdsCreationError(
             "Budget amount is outside the supported range.",
             400,
@@ -2552,12 +2310,11 @@ export function buildGoogleAdsBudgetOperation(
 
     // 3. Generate temporary budget resource name
 
-    const resourceName =
-        createGoogleAdsTemporaryResourceName(
-            context,
-            "campaignBudgets",
-            temporaryId,
-        );
+    const resourceName = createGoogleAdsTemporaryResourceName(
+        context,
+        "campaignBudgets",
+        temporaryId,
+    );
 
     // 4. Build the Google Ads operation
 
@@ -2585,34 +2342,19 @@ export async function createGoogleAdsAdGroup(
     context: GoogleAdsCreationContext,
     input: CreateGoogleAdsAdGroupInput,
 ): Promise<GoogleAdsCreatedResource> {
-
     // 1. Validate Ad Group name
 
     const name = input.name?.trim();
 
-    if (
-        !name ||
-        [...name].length >= 255 ||
-        /[\0\r\n]/.test(name)
-    ) {
-        throw new GoogleAdsCreationError(
-            "Provide a valid Ad Group name.",
-            400,
-        );
+    if (!name || [...name].length >= 255 || /[\0\r\n]/.test(name)) {
+        throw new GoogleAdsCreationError("Provide a valid Ad Group name.", 400);
     }
 
     // 2. Validate campaign type
 
     const campaignType = input.campaignType;
 
-    if (
-        ![
-            "SEARCH",
-            "DISPLAY",
-            "SHOPPING",
-            "DEMAND_GEN",
-        ].includes(campaignType)
-    ) {
+    if (!["SEARCH", "DISPLAY", "SHOPPING", "DEMAND_GEN"].includes(campaignType)) {
         throw new GoogleAdsCreationError(
             `${campaignType} does not use this Ad Group creation flow.`,
             400,
@@ -2621,13 +2363,11 @@ export async function createGoogleAdsAdGroup(
 
     // 3. Validate parent Campaign resource name
 
-    const campaignPrefix =
-        `customers/${context.customerId}/campaigns/`;
+    const campaignPrefix = `customers/${context.customerId}/campaigns/`;
 
-    const campaignId =
-        input.campaignResourceName?.startsWith(campaignPrefix)
-            ? input.campaignResourceName.slice(campaignPrefix.length)
-            : "";
+    const campaignId = input.campaignResourceName?.startsWith(campaignPrefix)
+        ? input.campaignResourceName.slice(campaignPrefix.length)
+        : "";
 
     if (!/^\d+$/.test(campaignId)) {
         throw new GoogleAdsCreationError(
@@ -2644,12 +2384,11 @@ export async function createGoogleAdsAdGroup(
         status: "PAUSED",
     };
 
-    const adGroupType =
-        GOOGLE_AD_GROUP_TYPES[campaignType];
+    const adGroupType = GOOGLE_AD_GROUP_TYPES[campaignType];
 
     // Demand Gen requires no explicit Ad Group type.
     if (adGroupType) {
-        adGroupPayload.type = adGroupType;
+        adGroupPayload[`type`] = adGroupType;
     }
 
     // 5. Validate mutation mode
@@ -2665,23 +2404,18 @@ export async function createGoogleAdsAdGroup(
 
     // 6. Call Google Ads API
 
-    const googleResponse = await googleAdsMutate(
-        context,
-        "adGroups:mutate",
-        {
-            operations: [
-                {
-                    create: adGroupPayload,
-                },
-            ],
-            validateOnly,
-        },
-    );
+    const googleResponse = await googleAdsMutate(context, "adGroups:mutate", {
+        operations: [
+            {
+                create: adGroupPayload,
+            },
+        ],
+        validateOnly,
+    });
 
     // 7. Extract created resource
 
-    const resourceName =
-        googleResponse.results?.[0]?.resourceName ?? null;
+    const resourceName = googleResponse.results?.[0]?.resourceName ?? null;
 
     if (!validateOnly && !resourceName) {
         throw new GoogleAdsCreationError(
@@ -2707,16 +2441,13 @@ export async function createGoogleAdsResponsiveSearchAd(
     context: GoogleAdsCreationContext,
     input: CreateGoogleAdsResponsiveSearchAdInput,
 ): Promise<GoogleAdsCreatedResource> {
-
     // 1. Validate Ad Group resource name
 
-    const adGroupPrefix =
-        `customers/${context.customerId}/adGroups/`;
+    const adGroupPrefix = `customers/${context.customerId}/adGroups/`;
 
-    const adGroupId =
-        input.adGroupResourceName?.startsWith(adGroupPrefix)
-            ? input.adGroupResourceName.slice(adGroupPrefix.length)
-            : "";
+    const adGroupId = input.adGroupResourceName?.startsWith(adGroupPrefix)
+        ? input.adGroupResourceName.slice(adGroupPrefix.length)
+        : "";
 
     if (!/^\d+$/.test(adGroupId)) {
         throw new GoogleAdsCreationError(
@@ -2728,14 +2459,14 @@ export async function createGoogleAdsResponsiveSearchAd(
     // 2. Validate headlines
 
     if (
-        !Array.isArray(input.headlines) ||
-        input.headlines.length < 3 ||
-        input.headlines.length > 15 ||
-        !input.headlines.every(
+        !Array.isArray(input[`headlines`]) ||
+        input[`headlines`].length < 3 ||
+        input[`headlines`].length > 15 ||
+        !input[`headlines`].every(
             (item) =>
                 typeof item === "string" &&
                 item.trim().length > 0 &&
-                item.trim().length <= 30
+                item.trim().length <= 30,
         )
     ) {
         throw new GoogleAdsCreationError(
@@ -2744,31 +2475,26 @@ export async function createGoogleAdsResponsiveSearchAd(
         );
     }
 
-    const headlines = input.headlines.map(
-        (item) => item.trim()
-    );
+    const headlines = input[`headlines`].map((item: any) => item.trim());
 
     if (
         new Set(headlines.map((item) => item.toLowerCase())).size !==
         headlines.length
     ) {
-        throw new GoogleAdsCreationError(
-            "Headlines must be unique.",
-            400,
-        );
+        throw new GoogleAdsCreationError("Headlines must be unique.", 400);
     }
 
     // 3. Validate descriptions
 
     if (
-        !Array.isArray(input.descriptions) ||
-        input.descriptions.length < 2 ||
-        input.descriptions.length > 4 ||
-        !input.descriptions.every(
+        !Array.isArray(input[`descriptions`]) ||
+        input[`descriptions`].length < 2 ||
+        input[`descriptions`].length > 4 ||
+        !input[`descriptions`].every(
             (item) =>
                 typeof item === "string" &&
                 item.trim().length > 0 &&
-                item.trim().length <= 90
+                item.trim().length <= 90,
         )
     ) {
         throw new GoogleAdsCreationError(
@@ -2777,19 +2503,13 @@ export async function createGoogleAdsResponsiveSearchAd(
         );
     }
 
-    const descriptions = input.descriptions.map(
-        (item) => item.trim()
-    );
+    const descriptions = input.descriptions.map((item: any) => item.trim());
 
     if (
-        new Set(
-            descriptions.map((item) => item.toLowerCase())
-        ).size !== descriptions.length
+        new Set(descriptions.map((item) => item.toLowerCase())).size !==
+        descriptions.length
     ) {
-        throw new GoogleAdsCreationError(
-            "Descriptions must be unique.",
-            400,
-        );
+        throw new GoogleAdsCreationError("Descriptions must be unique.", 400);
     }
 
     // 4. Validate final URL
@@ -2799,20 +2519,14 @@ export async function createGoogleAdsResponsiveSearchAd(
     try {
         parsedUrl = new URL(input.finalUrl.trim());
     } catch {
-        throw new GoogleAdsCreationError(
-            "Provide a valid final URL.",
-            400,
-        );
+        throw new GoogleAdsCreationError("Provide a valid final URL.", 400);
     }
 
     if (
         !["http:", "https:"].includes(parsedUrl.protocol) ||
         !parsedUrl.hostname
     ) {
-        throw new GoogleAdsCreationError(
-            "Final URL must use HTTP or HTTPS.",
-            400,
-        );
+        throw new GoogleAdsCreationError("Final URL must use HTTP or HTTPS.", 400);
     }
 
     // 5. Validate optional display paths
@@ -2823,11 +2537,7 @@ export async function createGoogleAdsResponsiveSearchAd(
     ] as const) {
         if (
             value !== undefined &&
-            (
-                typeof value !== "string" ||
-                !value.trim() ||
-                value.trim().length > 15
-            )
+            (typeof value !== "string" || !value.trim() || value.trim().length > 15)
         ) {
             throw new GoogleAdsCreationError(
                 `${field} must contain 1–15 characters.`,
@@ -2862,39 +2572,34 @@ export async function createGoogleAdsResponsiveSearchAd(
     };
 
     if (input.path1) {
-        responsiveSearchAd.path1 = input.path1.trim();
+        responsiveSearchAd[`path1`] = input.path1.trim();
     }
 
     if (input.path2) {
-        responsiveSearchAd.path2 = input.path2.trim();
+        responsiveSearchAd[`path2`] = input.path2.trim();
     }
 
     // 8. Create Ad Group Ad
 
-    const googleResponse = await googleAdsMutate(
-        context,
-        "adGroupAds:mutate",
-        {
-            operations: [
-                {
-                    create: {
-                        adGroup: input.adGroupResourceName,
-                        status: "PAUSED",
-                        ad: {
-                            finalUrls: [parsedUrl.toString()],
-                            responsiveSearchAd,
-                        },
+    const googleResponse = await googleAdsMutate(context, "adGroupAds:mutate", {
+        operations: [
+            {
+                create: {
+                    adGroup: input[`adGroupResourceName`],
+                    status: "PAUSED",
+                    ad: {
+                        finalUrls: [parsedUrl.toString()],
+                        responsiveSearchAd,
                     },
                 },
-            ],
-            validateOnly,
-        },
-    );
+            },
+        ],
+        validateOnly,
+    });
 
     // 9. Extract created resource
 
-    const resourceName =
-        googleResponse.results?.[0]?.resourceName ?? null;
+    const resourceName = googleResponse.results?.[0]?.resourceName ?? null;
 
     if (!validateOnly && !resourceName) {
         throw new GoogleAdsCreationError(
@@ -2904,14 +2609,12 @@ export async function createGoogleAdsResponsiveSearchAd(
         );
     }
 
-    const resourceKey =
-        resourceName?.split("/").at(-1) ?? null;
+    const resourceKey = resourceName?.split("/").at(-1) ?? null;
 
     // Google AdGroupAd resource format:
     // customers/{customerId}/adGroupAds/{adGroupId}~{adId}
 
-    const resourceId =
-        resourceKey?.split("~").at(-1) ?? null;
+    const resourceId = resourceKey?.split("~").at(-1) ?? null;
 
     // 10. Return created resource
 
@@ -2923,8 +2626,6 @@ export async function createGoogleAdsResponsiveSearchAd(
     };
 }
 
-
-
 // ==========================================
 // GOOGLE ADS RESPONSIVE DISPLAY AD CREATION
 // ==========================================
@@ -2933,16 +2634,13 @@ export async function createGoogleAdsResponsiveDisplayAd(
     context: GoogleAdsCreationContext,
     input: CreateGoogleAdsResponsiveDisplayAdInput,
 ): Promise<GoogleAdsCreatedResource> {
-
     // 1. Validate Ad Group resource name
 
-    const adGroupPrefix =
-        `customers/${context.customerId}/adGroups/`;
+    const adGroupPrefix = `customers/${context.customerId}/adGroups/`;
 
-    const adGroupId =
-        input.adGroupResourceName?.startsWith(adGroupPrefix)
-            ? input.adGroupResourceName.slice(adGroupPrefix.length)
-            : "";
+    const adGroupId = input.adGroupResourceName?.startsWith(adGroupPrefix)
+        ? input.adGroupResourceName.slice(adGroupPrefix.length)
+        : "";
 
     if (!/^\d+$/.test(adGroupId)) {
         throw new GoogleAdsCreationError(
@@ -2953,17 +2651,14 @@ export async function createGoogleAdsResponsiveDisplayAd(
 
     // 2. Validate final URLs
 
-    if (
-        !Array.isArray(input.finalUrls) ||
-        input.finalUrls.length === 0
-    ) {
+    if (!Array.isArray(input.finalUrls) || input.finalUrls.length === 0) {
         throw new GoogleAdsCreationError(
             "At least one final URL is required.",
             400,
         );
     }
 
-    const finalUrls = input.finalUrls.map((value) => {
+    const finalUrls = input[`finalUrls`].map((value) => {
         try {
             const url = new URL(value);
 
@@ -2973,10 +2668,7 @@ export async function createGoogleAdsResponsiveDisplayAd(
 
             return url.toString();
         } catch {
-            throw new GoogleAdsCreationError(
-                `Invalid final URL: ${value}`,
-                400,
-            );
+            throw new GoogleAdsCreationError(`Invalid final URL: ${value}`, 400);
         }
     });
 
@@ -2986,11 +2678,7 @@ export async function createGoogleAdsResponsiveDisplayAd(
         resources: string[],
         fieldName: string,
     ): string[] => {
-
-        if (
-            !Array.isArray(resources) ||
-            resources.length === 0
-        ) {
+        if (!Array.isArray(resources) || resources.length === 0) {
             throw new GoogleAdsCreationError(
                 `${fieldName} requires at least one image asset.`,
                 400,
@@ -2998,8 +2686,7 @@ export async function createGoogleAdsResponsiveDisplayAd(
         }
 
         return resources.map((resourceName) => {
-            const prefix =
-                `customers/${context.customerId}/assets/`;
+            const prefix = `customers/${context.customerId}/assets/`;
 
             const assetId = resourceName?.startsWith(prefix)
                 ? resourceName.slice(prefix.length)
@@ -3026,10 +2713,7 @@ export async function createGoogleAdsResponsiveDisplayAd(
         "Square marketing images",
     );
 
-    if (
-        marketingImages.length +
-        squareMarketingImages.length > 15
-    ) {
+    if (marketingImages.length + squareMarketingImages.length > 15) {
         throw new GoogleAdsCreationError(
             "A Responsive Display Ad supports at most 15 combined marketing images.",
             400,
@@ -3046,7 +2730,7 @@ export async function createGoogleAdsResponsiveDisplayAd(
             (value) =>
                 typeof value === "string" &&
                 value.trim().length > 0 &&
-                value.trim().length <= 30
+                value.trim().length <= 30,
         )
     ) {
         throw new GoogleAdsCreationError(
@@ -3059,10 +2743,7 @@ export async function createGoogleAdsResponsiveDisplayAd(
 
     const longHeadline = input.longHeadline?.trim();
 
-    if (
-        !longHeadline ||
-        longHeadline.length > 90
-    ) {
+    if (!longHeadline || longHeadline.length > 90) {
         throw new GoogleAdsCreationError(
             "Long headline is required and must not exceed 90 characters.",
             400,
@@ -3072,14 +2753,14 @@ export async function createGoogleAdsResponsiveDisplayAd(
     // 6. Validate descriptions
 
     if (
-        !Array.isArray(input.descriptions) ||
-        input.descriptions.length < 1 ||
-        input.descriptions.length > 5 ||
-        !input.descriptions.every(
+        !Array.isArray(input[`descriptions`]) ||
+        input[`descriptions`].length < 1 ||
+        input[`descriptions`].length > 5 ||
+        !input[`descriptions`].every(
             (value) =>
                 typeof value === "string" &&
                 value.trim().length > 0 &&
-                value.trim().length <= 90
+                value.trim().length <= 90,
         )
     ) {
         throw new GoogleAdsCreationError(
@@ -3090,7 +2771,7 @@ export async function createGoogleAdsResponsiveDisplayAd(
 
     // 7. Validate business name
 
-    const businessName = input.businessName?.trim();
+    const businessName = input[`businessName`]?.trim();
 
     if (!businessName || businessName.length > 25) {
         throw new GoogleAdsCreationError(
@@ -3101,18 +2782,12 @@ export async function createGoogleAdsResponsiveDisplayAd(
 
     // 8. Validate optional logo assets
 
-    const logoImages =
-        input.logoAssetResourceNames ?? [];
+    const logoImages = input[`logoAssetResourceNames`] ?? [];
 
-    const squareLogoImages =
-        input.squareLogoAssetResourceNames ?? [];
+    const squareLogoImages = input[`squareLogoAssetResourceNames`] ?? [];
 
-    for (const resourceName of [
-        ...logoImages,
-        ...squareLogoImages,
-    ]) {
-        const prefix =
-            `customers/${context.customerId}/assets/`;
+    for (const resourceName of [...logoImages, ...squareLogoImages]) {
+        const prefix = `customers/${context.customerId}/assets/`;
 
         const assetId = resourceName?.startsWith(prefix)
             ? resourceName.slice(prefix.length)
@@ -3126,10 +2801,7 @@ export async function createGoogleAdsResponsiveDisplayAd(
         }
     }
 
-    if (
-        logoImages.length > 5 ||
-        squareLogoImages.length > 5
-    ) {
+    if (logoImages.length > 5 || squareLogoImages.length > 5) {
         throw new GoogleAdsCreationError(
             "At most 5 logo assets of each type can be provided.",
             400,
@@ -3151,7 +2823,7 @@ export async function createGoogleAdsResponsiveDisplayAd(
             asset,
         })),
 
-        headlines: input.headlines.map((text) => ({
+        headlines: input[`headlines`].map((text) => ({
             text: text.trim(),
         })),
 
@@ -3159,7 +2831,7 @@ export async function createGoogleAdsResponsiveDisplayAd(
             text: longHeadline,
         },
 
-        descriptions: input.descriptions.map((text) => ({
+        descriptions: input[`descriptions`].map((text) => ({
             text: text.trim(),
         })),
 
@@ -3167,41 +2839,36 @@ export async function createGoogleAdsResponsiveDisplayAd(
     };
 
     if (logoImages.length > 0) {
-        responsiveDisplayAd.logoImages =
-            logoImages.map((asset) => ({ asset }));
+        responsiveDisplayAd[`logoImages`] = logoImages.map((asset) => ({ asset }));
     }
 
     if (squareLogoImages.length > 0) {
-        responsiveDisplayAd.squareLogoImages =
-            squareLogoImages.map((asset) => ({ asset }));
+        responsiveDisplayAd[`squareLogoImages`] = squareLogoImages.map((asset) => ({
+            asset,
+        }));
     }
 
     // 11. Create Ad Group Ad
 
-    const googleResponse = await googleAdsMutate(
-        context,
-        "adGroupAds:mutate",
-        {
-            operations: [
-                {
-                    create: {
-                        adGroup: input.adGroupResourceName,
-                        status: "PAUSED",
-                        ad: {
-                            finalUrls,
-                            responsiveDisplayAd,
-                        },
+    const googleResponse = await googleAdsMutate(context, "adGroupAds:mutate", {
+        operations: [
+            {
+                create: {
+                    adGroup: input.adGroupResourceName,
+                    status: "PAUSED",
+                    ad: {
+                        finalUrls,
+                        responsiveDisplayAd,
                     },
                 },
-            ],
-            validateOnly,
-        },
-    );
+            },
+        ],
+        validateOnly,
+    });
 
     // 12. Extract created resource
 
-    const resourceName =
-        googleResponse.results?.[0]?.resourceName ?? null;
+    const resourceName = googleResponse.results?.[0]?.resourceName ?? null;
 
     if (!validateOnly && !resourceName) {
         throw new GoogleAdsCreationError(
@@ -3227,17 +2894,14 @@ export function buildGoogleAdsSearchRSAOperation(
     context: GoogleAdsCreationContext,
     input: BuildGoogleAdsSearchRSAOperationInput,
 ): GoogleAdsMutateOperation {
-
     // 1. Validate Ad Group resource name.
     // Supports existing and temporary Ad Group IDs.
 
-    const adGroupPrefix =
-        `customers/${context.customerId}/adGroups/`;
+    const adGroupPrefix = `customers/${context.customerId}/adGroups/`;
 
-    const adGroupId =
-        input.adGroupResourceName?.startsWith(adGroupPrefix)
-            ? input.adGroupResourceName.slice(adGroupPrefix.length)
-            : "";
+    const adGroupId = input.adGroupResourceName?.startsWith(adGroupPrefix)
+        ? input.adGroupResourceName.slice(adGroupPrefix.length)
+        : "";
 
     if (!/^(?:[1-9]\d*|-[1-9]\d*)$/.test(adGroupId)) {
         throw new GoogleAdsCreationError(
@@ -3256,7 +2920,7 @@ export function buildGoogleAdsSearchRSAOperation(
             (item) =>
                 typeof item === "string" &&
                 item.trim().length > 0 &&
-                item.trim().length <= 30
+                item.trim().length <= 30,
         )
     ) {
         throw new GoogleAdsCreationError(
@@ -3265,31 +2929,26 @@ export function buildGoogleAdsSearchRSAOperation(
         );
     }
 
-    const headlines = input.headlines.map(
-        (item) => item.trim()
-    );
+    const headlines = input.headlines.map((item) => item.trim());
 
     if (
         new Set(headlines.map((item) => item.toLowerCase())).size !==
         headlines.length
     ) {
-        throw new GoogleAdsCreationError(
-            "Headlines must be unique.",
-            400,
-        );
+        throw new GoogleAdsCreationError("Headlines must be unique.", 400);
     }
 
     // 3. Validate descriptions.
 
     if (
-        !Array.isArray(input.descriptions) ||
-        input.descriptions.length < 2 ||
-        input.descriptions.length > 4 ||
-        !input.descriptions.every(
+        !Array.isArray(input[`descriptions`]) ||
+        input[`descriptions`].length < 2 ||
+        input[`descriptions`].length > 4 ||
+        !input[`descriptions`].every(
             (item) =>
                 typeof item === "string" &&
                 item.trim().length > 0 &&
-                item.trim().length <= 90
+                item.trim().length <= 90,
         )
     ) {
         throw new GoogleAdsCreationError(
@@ -3298,19 +2957,13 @@ export function buildGoogleAdsSearchRSAOperation(
         );
     }
 
-    const descriptions = input.descriptions.map(
-        (item) => item.trim()
-    );
+    const descriptions = input.descriptions.map((item) => item.trim());
 
     if (
-        new Set(
-            descriptions.map((item) => item.toLowerCase())
-        ).size !== descriptions.length
+        new Set(descriptions.map((item) => item.toLowerCase())).size !==
+        descriptions.length
     ) {
-        throw new GoogleAdsCreationError(
-            "Descriptions must be unique.",
-            400,
-        );
+        throw new GoogleAdsCreationError("Descriptions must be unique.", 400);
     }
 
     // 4. Validate final URL.
@@ -3320,36 +2973,25 @@ export function buildGoogleAdsSearchRSAOperation(
     try {
         parsedUrl = new URL(input.finalUrl.trim());
     } catch {
-        throw new GoogleAdsCreationError(
-            "Provide a valid final URL.",
-            400,
-        );
+        throw new GoogleAdsCreationError("Provide a valid final URL.", 400);
     }
 
     if (
         !["http:", "https:"].includes(parsedUrl.protocol) ||
         !parsedUrl.hostname
     ) {
-        throw new GoogleAdsCreationError(
-            "Final URL must use HTTP or HTTPS.",
-            400,
-        );
+        throw new GoogleAdsCreationError("Final URL must use HTTP or HTTPS.", 400);
     }
 
     // 5. Validate display paths.
 
     for (const [field, value] of [
-        ["path1", input.path1],
-        ["path2", input.path2],
+        ["path1", input[`path1`]],
+        ["path2", input[`path2`]],
     ] as const) {
-
         if (
             value !== undefined &&
-            (
-                typeof value !== "string" ||
-                !value.trim() ||
-                value.trim().length > 15
-            )
+            (typeof value !== "string" || !value.trim() || value.trim().length > 15)
         ) {
             throw new GoogleAdsCreationError(
                 `${field} must contain 1–15 characters.`,
@@ -3373,12 +3015,12 @@ export function buildGoogleAdsSearchRSAOperation(
         descriptions: descriptions.map((text) => ({ text })),
     };
 
-    if (input.path1) {
-        responsiveSearchAd.path1 = input.path1.trim();
+    if (input[`path1`]) {
+        responsiveSearchAd[`path1`] = input[`path1`].trim();
     }
 
-    if (input.path2) {
-        responsiveSearchAd.path2 = input.path2.trim();
+    if (input[`path2`]) {
+        responsiveSearchAd[`path2`] = input[`path2`].trim();
     }
 
     // 7. Build Ad Group Ad operation.
@@ -3404,8 +3046,6 @@ export function buildGoogleAdsSearchRSAOperation(
     return operation;
 }
 
-
-
 // ==========================================
 // GOOGLE ADS SEARCH CAMPAIGN FLOW
 // ==========================================
@@ -3414,7 +3054,6 @@ export async function createGoogleAdsCampaignFlow(
     context: GoogleAdsCreationContext,
     input: CreateGoogleAdsSearchCampaignFlowInput,
 ): Promise<GoogleAdsSearchCampaignFlowResult> {
-
     // ======================================
     // 1. VALIDATE MUTATION MODE
     // ======================================
@@ -3452,111 +3091,86 @@ export async function createGoogleAdsCampaignFlow(
     // 4. BUILD CAMPAIGN + BIDDING OPERATION
     // ======================================
 
-    const campaignBuilt =
-        buildGoogleAdsSearchCampaignOperation(
-            context,
-            {
-                campaignName: input.campaign.name,
+    const campaignBuilt = buildGoogleAdsSearchCampaignOperation(
+        context,
+        {
+            campaignName: input.campaign.name,
 
-                budgetResourceName:
-                    budgetBuilt.resourceName,
+            budgetResourceName: budgetBuilt.resourceName,
 
-                biddingStrategy:
-                    input.campaign.biddingStrategy,
+            biddingStrategy: input.campaign.biddingStrategy,
 
-                biddingOptions:
-                    input.campaign.biddingOptions,
-            },
-            getNextTemporaryId(),
-        );
+            biddingOptions: input.campaign.biddingOptions,
+        },
+        getNextTemporaryId(),
+    );
 
     // ======================================
     // 5. BUILD AD GROUP OPERATION
     // ======================================
 
-    const adGroupBuilt =
-        buildGoogleAdsSearchAdGroupOperation(
-            context,
-            {
-                name: input.adGroup.name,
+    const adGroupBuilt = buildGoogleAdsSearchAdGroupOperation(
+        context,
+        {
+            name: input.adGroup.name,
 
-                campaignResourceName:
-                    campaignBuilt.resourceName,
-            },
-            getNextTemporaryId(),
-        );
+            campaignResourceName: campaignBuilt.resourceName,
+        },
+        getNextTemporaryId(),
+    );
 
     // ======================================
     // 6. BUILD LOCATION TARGETING OPERATIONS
     // ======================================
 
-    const locationOperations =
-        input.locations?.length
-            ? buildGoogleAdsSearchLocationTargetOperations(
-                context,
-                {
-                    campaignResourceName:
-                        campaignBuilt.resourceName,
+    const locationOperations = input.locations?.length
+        ? buildGoogleAdsSearchLocationTargetOperations(context, {
+            campaignResourceName: campaignBuilt.resourceName,
 
-                    locations: input.locations,
-                },
-            )
-            : [];
+            locations: input.locations,
+        })
+        : [];
 
     // ======================================
     // 7. BUILD POSITIVE KEYWORD OPERATIONS
     // ======================================
 
     const positiveKeywordOperations =
-        buildGoogleAdsSearchPositiveKeywordOperations(
-            context,
-            {
-                adGroupResourceName:
-                    adGroupBuilt.resourceName,
+        buildGoogleAdsSearchPositiveKeywordOperations(context, {
+            adGroupResourceName: adGroupBuilt.resourceName,
 
-                keywords: input.keywords.positive,
-            },
-        );
+            keywords: input.keywords.positive,
+        });
 
     // ======================================
     // 8. BUILD NEGATIVE KEYWORD OPERATIONS
     // ======================================
 
-    const negativeKeywordOperations =
-        input.keywords.negative?.length
-            ? buildGoogleAdsSearchNegativeKeywordOperations(
-                context,
-                {
-                    adGroupResourceName:
-                        adGroupBuilt.resourceName,
+    const negativeKeywordOperations = input.keywords.negative?.length
+        ? buildGoogleAdsSearchNegativeKeywordOperations(context, {
+            adGroupResourceName: adGroupBuilt.resourceName,
 
-                    keywords: input.keywords.negative,
-                },
-            )
-            : [];
+            keywords: input.keywords.negative,
+        })
+        : [];
 
     // ======================================
     // 9. BUILD RESPONSIVE SEARCH AD OPERATION
     // ======================================
 
-    const rsaOperation =
-        buildGoogleAdsSearchRSAOperation(
-            context,
-            {
-                adGroupResourceName:
-                    adGroupBuilt.resourceName,
+    const rsaOperation = buildGoogleAdsSearchRSAOperation(context, {
+        adGroupResourceName: adGroupBuilt.resourceName,
 
-                finalUrl: input.ad.finalUrl,
+        finalUrl: input.ad.finalUrl,
 
-                headlines: input.ad.headlines,
+        headlines: input.ad.headlines,
 
-                descriptions: input.ad.descriptions,
+        descriptions: input.ad.descriptions,
 
-                path1: input.ad.path1,
+        path1: input.ad.path1,
 
-                path2: input.ad.path2,
-            },
-        );
+        path2: input.ad.path2,
+    });
 
     // ======================================
     // 10. ASSEMBLE OPERATIONS BY RESOURCE TYPE
@@ -3587,9 +3201,7 @@ export async function createGoogleAdsCampaignFlow(
     // C. Campaign Criteria (Location Targeting)
 
     for (const operation of locationOperations) {
-        operationIndexes.locationCriteria.push(
-            operations.length,
-        );
+        operationIndexes.locationCriteria.push(operations.length);
 
         operations.push(operation);
     }
@@ -3602,9 +3214,7 @@ export async function createGoogleAdsCampaignFlow(
     // E. Ad Group Criteria (Positive Keywords)
 
     for (const operation of positiveKeywordOperations) {
-        operationIndexes.positiveKeywords.push(
-            operations.length,
-        );
+        operationIndexes.positiveKeywords.push(operations.length);
 
         operations.push(operation);
     }
@@ -3612,17 +3222,14 @@ export async function createGoogleAdsCampaignFlow(
     // F. Ad Group Criteria (Negative Keywords)
 
     for (const operation of negativeKeywordOperations) {
-        operationIndexes.negativeKeywords.push(
-            operations.length,
-        );
+        operationIndexes.negativeKeywords.push(operations.length);
 
         operations.push(operation);
     }
 
     // G. Ad Group Ad (Responsive Search Ad)
 
-    operationIndexes.responsiveSearchAd =
-        operations.length;
+    operationIndexes.responsiveSearchAd = operations.length;
 
     operations.push(rsaOperation);
 
@@ -3630,14 +3237,11 @@ export async function createGoogleAdsCampaignFlow(
     // 11. SUBMIT SINGLE BULK MUTATION
     // ======================================
 
-    const googleResponse = await googleAdsBulkMutate(
-        context,
-        {
-            operations,
-            validateOnly,
-            confirm: input.confirm,
-        },
-    );
+    const googleResponse = await googleAdsBulkMutate(context, {
+        operations,
+        validateOnly,
+        confirm: input.confirm,
+    });
 
     // ======================================
     // 12. RETURN VALIDATION RESULT
@@ -3669,12 +3273,10 @@ export async function createGoogleAdsCampaignFlow(
         operationIndex: number,
         resourceLabel: string,
     ): string => {
-
-        const resourceName =
-            getGoogleAdsBulkMutationResourceName(
-                googleResponse,
-                operationIndex,
-            );
+        const resourceName = getGoogleAdsBulkMutationResourceName(
+            googleResponse,
+            operationIndex,
+        );
 
         if (!resourceName) {
             throw new GoogleAdsCreationError(
@@ -3691,27 +3293,15 @@ export async function createGoogleAdsCampaignFlow(
         indexes: number[],
         resourceLabel: string,
     ): string[] => {
-
-        return indexes.map((index) =>
-            extractResourceName(index, resourceLabel)
-        );
+        return indexes.map((index) => extractResourceName(index, resourceLabel));
     };
 
     const createdResources = {
-        budget: extractResourceName(
-            operationIndexes.budget,
-            "Campaign Budget",
-        ),
+        budget: extractResourceName(operationIndexes.budget, "Campaign Budget"),
 
-        campaign: extractResourceName(
-            operationIndexes.campaign,
-            "Campaign",
-        ),
+        campaign: extractResourceName(operationIndexes.campaign, "Campaign"),
 
-        adGroup: extractResourceName(
-            operationIndexes.adGroup,
-            "Ad Group",
-        ),
+        adGroup: extractResourceName(operationIndexes.adGroup, "Ad Group"),
 
         locationCriteria: extractMultipleResourceNames(
             operationIndexes.locationCriteria,

@@ -12,10 +12,10 @@ export type MutationMode = {
 };
 
 export function parseMutationMode(body: unknown): MutationMode {
-    const input = (body ?? {}) as Record<string, unknown>;
+    const input: Record<string, unknown> = (body ?? {}) as Record<string, unknown>;
 
-    if (input.validateOnly === false) {
-        if (input.confirm === true) {
+    if (input["validateOnly"] === false) {
+        if (input["confirm"] === true) {
             return { validateOnly: false };
         }
 

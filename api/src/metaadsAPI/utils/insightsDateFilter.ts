@@ -20,30 +20,63 @@ type DateFilterResult =
         message: string;
     };
 
+// ==========================================
+// DATE VALIDATION
+// ==========================================
+
 function isValidDate(value: string): boolean {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
         return false;
     }
 
-    const [year, month, day] = value.split("-").map(Number);
+    const year = Number(value.slice(0, 4));
+    const month = Number(value.slice(5, 7));
+    const day = Number(value.slice(8, 10));
 
-    const date = new Date(Date.UTC(year, month - 1, day));
+    if (year < 1 || month < 1 || month > 12 || day < 1) {
+        return false;
+    }
 
-    return (
-        date.getUTCFullYear() === year &&
-        date.getUTCMonth() === month - 1 &&
-        date.getUTCDate() === day
-    );
+    const isLeapYear =
+        year % 4 === 0 &&
+        (year % 100 !== 0 || year % 400 === 0);
+
+    const daysInMonth = [
+        31,
+        isLeapYear ? 29 : 28,
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    const maxDays = daysInMonth[month - 1];
+
+    return maxDays !== undefined && day <= maxDays;
+
+    // return day <= daysInMonth[month - 1] ?? false;
 }
+
+// ==========================================
+// BUILD INSIGHTS DATE FILTER
+// ==========================================
 
 export function buildInsightsDateFilter(
     input: DateFilterInput
 ): DateFilterResult {
+
     const { datePreset, since, until } = input;
 
     const hasPreset = datePreset !== undefined;
     const hasSince = since !== undefined;
     const hasUntil = until !== undefined;
+
+    // Do not allow preset and custom dates together.
 
     if (hasPreset && (hasSince || hasUntil)) {
         return {
@@ -52,6 +85,10 @@ export function buildInsightsDateFilter(
                 "Use either datePreset or since/until, not both",
         };
     }
+
+    // ======================================
+    // CUSTOM DATE RANGE
+    // ======================================
 
     if (hasSince || hasUntil) {
         if (
@@ -92,7 +129,14 @@ export function buildInsightsDateFilter(
         };
     }
 
-    if (hasPreset && typeof datePreset !== "string") {
+    // ======================================
+    // PRESET DATE RANGE
+    // ======================================
+
+    if (
+        datePreset !== undefined &&
+        typeof datePreset !== "string"
+    ) {
         return {
             success: false,
             message: "datePreset must be a string",
@@ -100,8 +144,9 @@ export function buildInsightsDateFilter(
     }
 
     const selectedPreset =
-        (datePreset as string | undefined) ??
-        META_DATE_PRESETS.LAST_30D;
+        typeof datePreset === "string"
+            ? datePreset
+            : META_DATE_PRESETS.LAST_30D;
 
     const allowedPresets: string[] =
         Object.values(META_DATE_PRESETS);
@@ -114,6 +159,7 @@ export function buildInsightsDateFilter(
     }
 
     const params = new URLSearchParams();
+
     params.set("date_preset", selectedPreset);
 
     return {

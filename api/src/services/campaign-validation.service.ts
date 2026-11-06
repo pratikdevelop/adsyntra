@@ -12,6 +12,10 @@ export interface CampaignProviderLaunchInput {
     configuration: ProviderCampaignConfiguration;
 }
 
+export interface CampaignExecutionOptions {
+    validateOnly: boolean;
+    confirm: boolean;
+}
 export interface CreateCampaignRequest {
     name: string;
     businessName: string;
@@ -20,6 +24,8 @@ export interface CreateCampaignRequest {
     objective: string;
     platforms: AdvertisingProvider[];
     providers: Partial<Record<AdvertisingProvider, CampaignProviderLaunchInput>>;
+    execution: CampaignExecutionOptions;
+
 }
 
 export class CampaignRequestValidationError extends Error {
@@ -129,6 +135,57 @@ export function parseCreateCampaignRequest(
     );
     const description = optionalString(value["description"], "description", 5000);
 
+    // ==========================================
+    // CAMPAIGN EXECUTION OPTIONS
+    // ==========================================
+
+    // Default to validation-only for safety.
+
+    const rawExecution = value["execution"];
+
+    let execution: CampaignExecutionOptions = {
+        validateOnly: true,
+        confirm: false,
+    };
+
+    if (rawExecution !== undefined) {
+        if (!isRecord(rawExecution)) {
+            throw new CampaignRequestValidationError(
+                "execution must be an object.",
+            );
+        }
+
+        const validateOnly =
+            rawExecution["validateOnly"] === undefined
+                ? true
+                : rawExecution["validateOnly"];
+
+        const confirm =
+            rawExecution["confirm"] === undefined
+                ? false
+                : rawExecution["confirm"];
+
+        if (
+            typeof validateOnly !== "boolean" ||
+            typeof confirm !== "boolean"
+        ) {
+            throw new CampaignRequestValidationError(
+                "execution.validateOnly and execution.confirm must be boolean values.",
+            );
+        }
+
+        if (!validateOnly && !confirm) {
+            throw new CampaignRequestValidationError(
+                "Live campaign creation requires execution.confirm to be true.",
+            );
+        }
+
+        execution = {
+            validateOnly,
+            confirm,
+        };
+    }
+
     if (!Array.isArray(value["platforms"]) || value["platforms"].length === 0) {
         throw new CampaignRequestValidationError(
             "platforms must contain at least one provider.",
@@ -231,5 +288,6 @@ export function parseCreateCampaignRequest(
         objective,
         platforms,
         providers,
+        execution,
     };
 }

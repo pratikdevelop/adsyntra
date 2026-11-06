@@ -109,7 +109,7 @@ export function buildBiddingConfig(
             "cpcBidCeiling must be a positive number in the account currency"
           );
         }
-        targetSpend.cpcBidCeilingMicros = currencyToMicros(
+        targetSpend[`cpcBidCeilingMicros`] = currencyToMicros(
           options.cpcBidCeiling
         );
       }
@@ -122,7 +122,7 @@ export function buildBiddingConfig(
       const maximizeConversions: Record<string, unknown> = {};
       if (options.targetCpa !== undefined) {
         validateTargetCpa(options.targetCpa);
-        maximizeConversions.targetCpaMicros = currencyToMicros(
+        maximizeConversions[`targetCpaMicros`] = currencyToMicros(
           options.targetCpa
         );
       }
@@ -134,7 +134,7 @@ export function buildBiddingConfig(
       validateTargetCpa(options.targetCpa);
       return {
         maximizeConversions: {
-          targetCpaMicros: currencyToMicros(options.targetCpa),
+          [`targetCpaMicros`]: currencyToMicros(options.targetCpa),
         },
       };
     }
@@ -143,7 +143,7 @@ export function buildBiddingConfig(
       const maximizeConversionValue: Record<string, unknown> = {};
       if (options.targetRoas !== undefined) {
         validateTargetRoas(options.targetRoas);
-        maximizeConversionValue.targetRoas = options.targetRoas;
+        maximizeConversionValue[`targetRoas`] = options.targetRoas;
       }
       return { maximizeConversionValue };
     }
@@ -186,7 +186,7 @@ export function buildBiddingConfig(
 /** Returns the root bidding field for the Google Ads updateMask. */
 export function getBiddingUpdateMask(
   biddingConfig: Record<string, unknown>
-): string {
+): any {
   const fields = Object.keys(biddingConfig);
   if (fields.length !== 1) {
     throw new BiddingConfigurationError(

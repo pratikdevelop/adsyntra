@@ -48,8 +48,13 @@ interface ProviderPagination {
 }
 
 interface ProviderResult {
+  success?: boolean;
   connected?: boolean;
   status?: string;
+  accountId?: string | null;
+  data?: unknown;
+  error?: unknown;
+  campaigns?: GlobalCampaign[];
   account?: {
     id?: string;
     name?: string;
@@ -57,7 +62,6 @@ interface ProviderResult {
     timezone?: string | null;
   } | null;
   pagination?: ProviderPagination;
-  error?: unknown;
 }
 
 interface GlobalCampaignsApiResponse {
@@ -81,11 +85,34 @@ interface CampaignsPageProps {
 
 const DEFAULT_DESCRIPTION =
   "View Google Ads and Meta Ads campaigns together in one table.";
-
 function asRecord(value: unknown): JsonRecord | null {
   return value !== null && typeof value === "object"
     ? (value as JsonRecord)
     : null;
+}
+
+function extractProviderCampaigns(
+  providerResult: ProviderResult | undefined,
+): GlobalCampaign[] {
+  if (!providerResult) return [];
+
+  const data = providerResult.data;
+
+  if (Array.isArray(data)) {
+    return data as GlobalCampaign[];
+  }
+
+  const dataRecord = asRecord(data);
+
+  if (Array.isArray(dataRecord?.campaigns)) {
+    return dataRecord.campaigns as GlobalCampaign[];
+  }
+
+  if (Array.isArray(providerResult.campaigns)) {
+    return providerResult.campaigns;
+  }
+
+  return [];
 }
 
 function readNumber(value: unknown): number | null {
@@ -96,7 +123,6 @@ function readNumber(value: unknown): number | null {
   }
   return null;
 }
-
 
 function getCampaignCurrency(
   campaign: GlobalCampaign,
@@ -229,54 +255,88 @@ export default function CampaignsPage({
   const [error, setError] = useState<string | null>(null);
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
 
-  const loadCampaigns = useCallback(
-    async (append = false) => {
-      if (append) setLoadingMore(true);
-      else setLoading(true);
+  const loadCampaigns = useCallback(async (append = false) => {
+    if (append) setLoadingMore(true);
+    else setLoading(true);
 
-      try {
-        const params: Record<string, string> = {};
-        if (append) {
-          const googleToken = providersRef.current.googleAds?.pagination?.nextToken;
-          const metaToken = providersRef.current.metaAds?.pagination?.nextToken;
-          if (googleToken) params.googlePageToken = googleToken;
-          if (metaToken) params.metaPageToken = metaToken;
-        }
-
-        const response = await axios.get<GlobalCampaignsApiResponse>(
-          "/api/campaigns",
-          { params },
-        );
-        const payload = response.data;
-
-        if (!payload?.success) {
-          throw new Error(payload?.message || "Campaign API returned an unsuccessful response.");
-        }
-
-        const incomingCampaigns = Array.isArray(payload.campaigns)
-          ? payload.campaigns
-          : [];
-
-        setCampaigns((current) => {
-          if (!append) return incomingCampaigns;
-          const merged = new Map<string, GlobalCampaign>();
-          [...current, ...incomingCampaigns].forEach((campaign) => {
-            merged.set(`${campaign.provider}:${campaign.id}`, campaign);
-          });
-          return [...merged.values()];
-        });
-        providersRef.current = payload.providers ?? {};
-        setProviders(payload.providers ?? {});
-        setError(null);
-      } catch (requestError) {
-        setError(getErrorMessage(requestError));
-      } finally {
-        setLoading(false);
-        setLoadingMore(false);
+    try {
+      const params: Record<string, string> = {};
+      if (append) {
+        const googleToken =
+          providersRef.current.googleAds?.pagination?.nextToken;
+        const metaToken = providersRef.current.metaAds?.pagination?.nextToken;
+        if (googleToken) params.googlePageToken = googleToken;
+        if (metaToken) params.metaPageToken = metaToken;
       }
-    },
-    [],
-  );
+
+      const response = await axios.get<GlobalCampaignsApiResponse>(
+        "/api/campaigns",
+        { params },
+      );
+      const payload = response.data;
+
+      console.log("Campaigns response:", payload);
+
+      if (!payload?.success) {
+        throw new Error(
+          payload?.message || "Campaign API returned an unsuccessful response.",
+        );
+      }
+
+      const providerResults = payload.providers ?? {};
+
+      const googleResult = providerResults.googleAds;
+      const metaResult = providerResults.metaAds;
+
+      const googleCampaigns = extractProviderCampaigns(googleResult);
+      const metaCampaigns = extractProviderCampaigns(metaResult);
+
+      const incomingCampaigns: GlobalCampaign[] = [
+        ...googleCampaigns.map((campaign) => ({
+          ...campaign,
+          provider: "googleAds" as const,
+          accountId: campaign.accountId ?? googleResult?.accountId ?? null,
+        })),
+
+        ...metaCampaigns.map((campaign) => ({
+          ...campaign,
+          provider: "metaAds" as const,
+          accountId: campaign.accountId ?? metaResult?.accountId ?? null,
+        })),
+      ];
+
+      setCampaigns((current) => {
+        if (!append) return incomingCampaigns;
+
+        const merged = new Map<string, GlobalCampaign>();
+
+        [...current, ...incomingCampaigns].forEach((campaign) => {
+          merged.set(`${campaign.provider}:${campaign.id}`, campaign);
+        });
+
+        return [...merged.values()];
+      });
+      setProviders({
+        googleAds: {
+          ...googleResult,
+          connected: googleResult?.success === true,
+          status: googleResult?.success ? "connected" : "disconnected",
+        },
+
+        metaAds: {
+          ...metaResult,
+          connected: metaResult?.success === true,
+          status: metaResult?.success ? "connected" : "disconnected",
+        },
+      });
+      setError(null);
+    } catch (requestError) {
+      setError(getErrorMessage(requestError));
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
+  }, []);
 
   useEffect(() => {
     void loadCampaigns(false);
@@ -328,15 +388,15 @@ export default function CampaignsPage({
 
   const hasMore = Boolean(
     providers.googleAds?.pagination?.hasMore ||
-      providers.metaAds?.pagination?.hasMore,
+    providers.metaAds?.pagination?.hasMore,
   );
 
   return (
     <Box sx={{ width: "100%", maxWidth: 1600, mx: "auto" }}>
       <Stack
         direction={{ xs: "column", sm: "row" }}
-        justifyContent="space-between"
-        alignItems={{ xs: "stretch", sm: "center" }}
+        // justifyContent="space-between"
+        // alignItems={{ xs: "stretch", sm: "center" }}
         spacing={2}
         sx={{ mb: 3 }}
       >
@@ -371,10 +431,32 @@ export default function CampaignsPage({
           mb: 3,
         }}
       >
-        <MetricCard label="Total campaigns" value={campaigns.length} detail="Across all connected platforms" />
-        <MetricCard label="Google Ads" value={googleCount} detail={providers.googleAds?.connected ? "Account connected" : "Not connected"} />
-        <MetricCard label="Meta Ads" value={metaCount} detail={providers.metaAds?.connected ? "Account connected" : "Not connected"} />
-        <MetricCard label="Total spend" value={totalSpend} detail="Based on metrics returned by providers" />
+        <MetricCard
+          label="Total campaigns"
+          value={campaigns.length}
+          detail="Across all connected platforms"
+        />
+        <MetricCard
+          label="Google Ads"
+          value={googleCount}
+          detail={
+            providers.googleAds?.connected
+              ? "Account connected"
+              : "Not connected"
+          }
+        />
+        <MetricCard
+          label="Meta Ads"
+          value={metaCount}
+          detail={
+            providers.metaAds?.connected ? "Account connected" : "Not connected"
+          }
+        />
+        <MetricCard
+          label="Total spend"
+          value={totalSpend}
+          detail="Based on metrics returned by providers"
+        />
       </Box>
 
       {error && (
@@ -382,7 +464,11 @@ export default function CampaignsPage({
           severity="error"
           sx={{ mb: 2 }}
           action={
-            <Button color="inherit" size="small" onClick={() => void loadCampaigns(false)}>
+            <Button
+              color="inherit"
+              size="small"
+              onClick={() => void loadCampaigns(false)}
+            >
               Retry
             </Button>
           }
@@ -404,7 +490,8 @@ export default function CampaignsPage({
               All campaigns
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              {campaigns.length} campaigns · {connectedProviders} of 2 providers connected
+              {campaigns.length} campaigns · {connectedProviders} of 2 providers
+              connected
             </Typography>
           </Box>
           <Stack direction="row" spacing={1}>
@@ -424,7 +511,12 @@ export default function CampaignsPage({
         </Stack>
 
         {loading ? (
-          <Stack alignItems="center" justifyContent="center" spacing={2} sx={{ py: 9 }}>
+          <Stack
+            alignItems="center"
+            justifyContent="center"
+            spacing={2}
+            sx={{ py: 9 }}
+          >
             <CircularProgress />
             <Typography variant="body2" color="text.secondary">
               Loading campaigns from Google Ads and Meta Ads…
@@ -436,7 +528,11 @@ export default function CampaignsPage({
           </Alert>
         ) : (
           <TableContainer sx={{ width: "100%" }}>
-            <Table size="medium" sx={{ minWidth: 1900 }} aria-label="Global advertising campaigns">
+            <Table
+              size="medium"
+              sx={{ minWidth: 1900 }}
+              aria-label="Global advertising campaigns"
+            >
               <TableHead>
                 <TableRow sx={{ backgroundColor: "action.hover" }}>
                   <TableCell sx={{ fontWeight: 700 }}>Campaign</TableCell>
@@ -444,38 +540,73 @@ export default function CampaignsPage({
                   <TableCell sx={{ fontWeight: 700 }}>Objective</TableCell>
                   <TableCell sx={{ fontWeight: 700 }}>Campaign type</TableCell>
                   <TableCell sx={{ fontWeight: 700 }}>Bid strategy</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>Budget</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>Spend</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>Impressions</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>Reach</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>Clicks</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>CTR</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>CPC</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>CPM</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>Conversions</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>Conv. rate</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>Cost / conv.</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>Conv. value</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>ROAS</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    Budget
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    Spend
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    Impressions
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    Reach
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    Clicks
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    CTR
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    CPC
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    CPM
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    Conversions
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    Conv. rate
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    Cost / conv.
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    Conv. value
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    ROAS
+                  </TableCell>
                   <TableCell sx={{ fontWeight: 700 }}>Status</TableCell>
-                  <TableCell align="center" sx={{ fontWeight: 700 }}>Details</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>Action</TableCell>
+                  <TableCell align="center" sx={{ fontWeight: 700 }}>
+                    Details
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    Action
+                  </TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {campaigns.map((campaign) => {
                   const currency = getCampaignCurrency(campaign, providers);
-                  const status = campaign.effectiveStatus || campaign.status || "UNKNOWN";
+                  const status =
+                    campaign.effectiveStatus || campaign.status || "UNKNOWN";
                   const rowKey = `${campaign.provider}:${campaign.id}`;
                   const isExpanded = Boolean(expandedRows[rowKey]);
                   const source = asRecord(campaign.source);
                   const rawCampaign = asRecord(source?.campaign);
-                  const budget = asRecord(source?.budget) ?? asRecord(source?.campaignBudget);
+                  const budget =
+                    asRecord(source?.budget) ??
+                    asRecord(source?.campaignBudget);
                   const bidding = asRecord(source?.bidding);
                   const specialCategories = source?.special_ad_categories;
                   const startTime = source?.start_time;
-                  const createdTime = source?.created_time ?? campaign.createdAt;
-                  const updatedTime = source?.updated_time ?? campaign.updatedAt;
+                  const createdTime =
+                    source?.created_time ?? campaign.createdAt;
+                  const updatedTime =
+                    source?.updated_time ?? campaign.updatedAt;
 
                   const metricCurrency = currency;
                   const formatPercent = (value: unknown) => {
@@ -494,7 +625,9 @@ export default function CampaignsPage({
                     value === null || value === undefined || value === ""
                       ? "—"
                       : Array.isArray(value)
-                        ? value.length ? value.join(", ") : "None"
+                        ? value.length
+                          ? value.join(", ")
+                          : "None"
                         : String(value);
 
                   return (
@@ -504,10 +637,18 @@ export default function CampaignsPage({
                           <Typography variant="body2" fontWeight={600}>
                             {campaign.name || "Untitled campaign"}
                           </Typography>
-                          <Typography variant="caption" color="text.secondary" display="block">
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            display="block"
+                          >
                             ID: {campaign.id}
                           </Typography>
-                          <Typography variant="caption" color="text.secondary" display="block">
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            display="block"
+                          >
                             Account: {campaign.accountId || "—"}
                           </Typography>
                         </TableCell>
@@ -522,36 +663,74 @@ export default function CampaignsPage({
                         <TableCell>{campaign.objective || "—"}</TableCell>
                         <TableCell>{getCampaignType(campaign)}</TableCell>
                         <TableCell>
-                          {displayValue(bidding?.strategy ?? rawCampaign?.biddingStrategyType)}
+                          {displayValue(
+                            bidding?.strategy ??
+                              rawCampaign?.biddingStrategyType,
+                          )}
                         </TableCell>
                         <TableCell align="right">
-                          {formatCurrency(getCampaignBudget(campaign), currency)}
-                          <Typography variant="caption" color="text.secondary" display="block">
+                          {formatCurrency(
+                            getCampaignBudget(campaign),
+                            currency,
+                          )}
+                          <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            display="block"
+                          >
                             {displayValue(budget?.period ?? budget?.type)}
                           </Typography>
                         </TableCell>
                         <TableCell align="right">
                           {formatCurrency(getCampaignSpend(campaign), currency)}
                         </TableCell>
-                        <TableCell align="right">{formatMetric(getMetric(campaign, "impressions"))}</TableCell>
-                        <TableCell align="right">{formatMetric(getMetric(campaign, "reach"))}</TableCell>
-                        <TableCell align="right">{formatMetric(getMetric(campaign, "clicks"))}</TableCell>
-                        <TableCell align="right">{formatPercent(getMetric(campaign, "ctr"))}</TableCell>
                         <TableCell align="right">
-                          {formatCurrency(readNumber(getMetric(campaign, "cpc")), metricCurrency)}
+                          {formatMetric(getMetric(campaign, "impressions"))}
                         </TableCell>
                         <TableCell align="right">
-                          {formatCurrency(readNumber(getMetric(campaign, "cpm")), metricCurrency)}
-                        </TableCell>
-                        <TableCell align="right">{formatMetric(getMetric(campaign, "conversions"))}</TableCell>
-                        <TableCell align="right">{formatPercent(getMetric(campaign, "conversionRate"))}</TableCell>
-                        <TableCell align="right">
-                          {formatCurrency(readNumber(getMetric(campaign, "costPerConversion")), metricCurrency)}
+                          {formatMetric(getMetric(campaign, "reach"))}
                         </TableCell>
                         <TableCell align="right">
-                          {formatCurrency(readNumber(getMetric(campaign, "conversionValue")), metricCurrency)}
+                          {formatMetric(getMetric(campaign, "clicks"))}
                         </TableCell>
-                        <TableCell align="right">{formatRatio(getMetric(campaign, "roas"))}</TableCell>
+                        <TableCell align="right">
+                          {formatPercent(getMetric(campaign, "ctr"))}
+                        </TableCell>
+                        <TableCell align="right">
+                          {formatCurrency(
+                            readNumber(getMetric(campaign, "cpc")),
+                            metricCurrency,
+                          )}
+                        </TableCell>
+                        <TableCell align="right">
+                          {formatCurrency(
+                            readNumber(getMetric(campaign, "cpm")),
+                            metricCurrency,
+                          )}
+                        </TableCell>
+                        <TableCell align="right">
+                          {formatMetric(getMetric(campaign, "conversions"))}
+                        </TableCell>
+                        <TableCell align="right">
+                          {formatPercent(getMetric(campaign, "conversionRate"))}
+                        </TableCell>
+                        <TableCell align="right">
+                          {formatCurrency(
+                            readNumber(
+                              getMetric(campaign, "costPerConversion"),
+                            ),
+                            metricCurrency,
+                          )}
+                        </TableCell>
+                        <TableCell align="right">
+                          {formatCurrency(
+                            readNumber(getMetric(campaign, "conversionValue")),
+                            metricCurrency,
+                          )}
+                        </TableCell>
+                        <TableCell align="right">
+                          {formatRatio(getMetric(campaign, "roas"))}
+                        </TableCell>
                         <TableCell>
                           <Chip
                             label={status}
@@ -585,10 +764,24 @@ export default function CampaignsPage({
                         </TableCell>
                       </TableRow>
                       <TableRow key={`${rowKey}:details`}>
-                        <TableCell colSpan={21} sx={{ py: 0, borderBottom: isExpanded ? undefined : 0 }}>
-                          <Collapse in={isExpanded} timeout="auto" unmountOnExit>
+                        <TableCell
+                          colSpan={21}
+                          sx={{
+                            py: 0,
+                            borderBottom: isExpanded ? undefined : 0,
+                          }}
+                        >
+                          <Collapse
+                            in={isExpanded}
+                            timeout="auto"
+                            unmountOnExit
+                          >
                             <Box sx={{ py: 2.5 }}>
-                              <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1.5 }}>
+                              <Typography
+                                variant="subtitle2"
+                                fontWeight={700}
+                                sx={{ mb: 1.5 }}
+                              >
                                 Campaign details
                               </Typography>
                               <Box
@@ -602,21 +795,75 @@ export default function CampaignsPage({
                                   gap: 2,
                                 }}
                               >
-                                <DetailItem label="Campaign ID" value={campaign.id} />
-                                <DetailItem label="Account ID" value={campaign.accountId} />
-                                <DetailItem label="Effective status" value={campaign.effectiveStatus} />
-                                <DetailItem label="Campaign objective" value={campaign.objective} />
-                                <DetailItem label="Channel / campaign type" value={getCampaignType(campaign)} />
-                                <DetailItem label="Bidding strategy" value={bidding?.strategy ?? rawCampaign?.biddingStrategyType} />
-                                <DetailItem label="Bidding system status" value={bidding?.systemStatus ?? rawCampaign?.biddingStrategySystemStatus} />
-                                <DetailItem label="Budget name" value={budget?.name} />
-                                <DetailItem label="Budget amount" value={formatCurrency(getCampaignBudget(campaign), currency)} />
-                                <DetailItem label="Budget period" value={budget?.period ?? budget?.type} />
-                                <DetailItem label="Budget delivery" value={budget?.deliveryMethod} />
-                                <DetailItem label="Buying type" value={source?.buying_type} />
-                                <DetailItem label="Start time" value={startTime} />
-                                <DetailItem label="Created" value={createdTime} />
-                                <DetailItem label="Last updated" value={updatedTime} />
+                                <DetailItem
+                                  label="Campaign ID"
+                                  value={campaign.id}
+                                />
+                                <DetailItem
+                                  label="Account ID"
+                                  value={campaign.accountId}
+                                />
+                                <DetailItem
+                                  label="Effective status"
+                                  value={campaign.effectiveStatus}
+                                />
+                                <DetailItem
+                                  label="Campaign objective"
+                                  value={campaign.objective}
+                                />
+                                <DetailItem
+                                  label="Channel / campaign type"
+                                  value={getCampaignType(campaign)}
+                                />
+                                <DetailItem
+                                  label="Bidding strategy"
+                                  value={
+                                    bidding?.strategy ??
+                                    rawCampaign?.biddingStrategyType
+                                  }
+                                />
+                                <DetailItem
+                                  label="Bidding system status"
+                                  value={
+                                    bidding?.systemStatus ??
+                                    rawCampaign?.biddingStrategySystemStatus
+                                  }
+                                />
+                                <DetailItem
+                                  label="Budget name"
+                                  value={budget?.name}
+                                />
+                                <DetailItem
+                                  label="Budget amount"
+                                  value={formatCurrency(
+                                    getCampaignBudget(campaign),
+                                    currency,
+                                  )}
+                                />
+                                <DetailItem
+                                  label="Budget period"
+                                  value={budget?.period ?? budget?.type}
+                                />
+                                <DetailItem
+                                  label="Budget delivery"
+                                  value={budget?.deliveryMethod}
+                                />
+                                <DetailItem
+                                  label="Buying type"
+                                  value={source?.buying_type}
+                                />
+                                <DetailItem
+                                  label="Start time"
+                                  value={startTime}
+                                />
+                                <DetailItem
+                                  label="Created"
+                                  value={createdTime}
+                                />
+                                <DetailItem
+                                  label="Last updated"
+                                  value={updatedTime}
+                                />
                                 <DetailItem
                                   label="Special ad categories"
                                   value={specialCategories}
@@ -635,9 +882,22 @@ export default function CampaignsPage({
         )}
 
         {!loading && hasMore && (
-          <Box sx={{ display: "flex", justifyContent: "center", p: 2, borderTop: 1, borderColor: "divider" }}>
-            <Button onClick={() => void loadCampaigns(true)} disabled={loadingMore}>
-              {loadingMore ? <CircularProgress size={18} sx={{ mr: 1 }} /> : null}
+          <Box
+            sx={{
+              display: "flex",
+              justifyContent: "center",
+              p: 2,
+              borderTop: 1,
+              borderColor: "divider",
+            }}
+          >
+            <Button
+              onClick={() => void loadCampaigns(true)}
+              disabled={loadingMore}
+            >
+              {loadingMore ? (
+                <CircularProgress size={18} sx={{ mr: 1 }} />
+              ) : null}
               Load more campaigns
             </Button>
           </Box>
@@ -647,13 +907,7 @@ export default function CampaignsPage({
   );
 }
 
-function DetailItem({
-  label,
-  value,
-}: {
-  label: string;
-  value: unknown;
-}) {
+function DetailItem({ label, value }: { label: string; value: unknown }) {
   const display =
     value === null || value === undefined || value === ""
       ? "—"
@@ -694,10 +948,19 @@ function MetricCard({
         <Typography variant="body2" color="text.secondary" fontWeight={500}>
           {label}
         </Typography>
-        <Typography variant="h4" component="p" fontWeight={700} sx={{ mt: 1.25 }}>
+        <Typography
+          variant="h4"
+          component="p"
+          fontWeight={700}
+          sx={{ mt: 1.25 }}
+        >
           {value}
         </Typography>
-        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.75, display: "block" }}>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ mt: 0.75, display: "block" }}
+        >
           {detail}
         </Typography>
       </CardContent>

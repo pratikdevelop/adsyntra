@@ -1,4 +1,4 @@
-import { Schema, model, type HydratedDocument, type Model } from "mongoose";
+import { Schema, model, type HydratedDocument } from "mongoose";
 
 export const ADVERTISING_PROVIDERS = ["googleAds", "metaAds"] as const;
 

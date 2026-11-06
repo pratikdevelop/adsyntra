@@ -84,7 +84,7 @@ function isEncryptedToken(
         return false;
     }
 
-    const token = value as Record<string, unknown>;
+    const token: any = value as Record<string, unknown>;
 
     return (
         token.version === 1 &&
@@ -101,17 +101,17 @@ function validateStoredTokens(
         return false;
     }
 
-    const value = tokens as Record<string, unknown>;
+    const value: Record<string, unknown> = tokens as Record<string, unknown>;
 
     return (
-        isEncryptedToken(value.accessToken) &&
+        isEncryptedToken(value[`accessToken`]) &&
         (
-            value.refreshToken === null ||
-            isEncryptedToken(value.refreshToken)
+            value[`refreshToken`] === null ||
+            isEncryptedToken(value[`refreshToken`])
         ) &&
         (
-            value.expiryDate === null ||
-            typeof value.expiryDate === "number"
+            value[`expiryDate`] === null ||
+            typeof value[`expiryDate`] === "number"
         )
     );
 }
@@ -128,12 +128,12 @@ function getAccountId(account: unknown): string | null {
     const item = account as Record<string, unknown>;
 
     const id =
-        item.resourceName ??
-        item.resource_name ??
-        item.customerId ??
-        item.customer_id ??
-        item.account_id ??
-        item.id;
+        item[`resourceName`] ??
+        item[`resource_name`] ??
+        item[`customerId`] ??
+        item[`customer_id`] ??
+        item[`account_id`] ??
+        item[`id`];
 
     return typeof id === "string" || typeof id === "number"
         ? String(id)
@@ -151,12 +151,12 @@ function getAccountName(
     const item = account as Record<string, unknown>;
 
     const name =
-        item.name ??
-        item.accountName ??
-        item.account_name ??
-        item.displayName ??
-        item.customerName ??
-        item.customer_name;
+        item[`name`] ??
+        item[`accountName`] ??
+        item[`account_name`] ??
+        item[`displayName`] ??
+        item[`customerName`] ??
+        item[`customer_name`];
 
     return typeof name === "string" && name.trim()
         ? name.trim()
@@ -171,7 +171,7 @@ function getOptionalString(
         return undefined;
     }
 
-    const item = account as Record<string, unknown>;
+    const item: Record<string, unknown> = account as Record<string, unknown>;
 
     for (const key of keys) {
         const value = item[key];
@@ -244,7 +244,7 @@ async function migrateUser(
         const userFields: Record<string, unknown> = {};
 
         if (legacyUser.clerk.email) {
-            userFields.email = legacyUser.clerk.email;
+            userFields[`email`] = legacyUser.clerk.email;
         }
 
         await UserModel.updateOne(
@@ -444,8 +444,8 @@ async function migrateAccounts(
             "time_zone"
         );
 
-        if (currency) fieldsToSet.currency = currency;
-        if (timezone) fieldsToSet.timezone = timezone;
+        if (currency) fieldsToSet[`currency`] = currency;
+        if (timezone) fieldsToSet[`timezone`] = timezone;
 
         await AdAccountModel.updateOne(
             {

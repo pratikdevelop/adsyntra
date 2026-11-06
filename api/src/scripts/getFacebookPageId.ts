@@ -7,28 +7,28 @@ async function getMyPageIDs() {
 
     try {
         const response = await fetch(url);
-         if (!response.ok) {
-      const rawText = await response.text();
-      console.error(`❌ Server returned HTTP ${response.status}`);
-      console.error(`📄 Raw Response Content: "${rawText}"`);
-      return;
-    }
+        if (!response.ok) {
+            const rawText = await response.text();
+            console.error(`❌ Server returned HTTP ${response.status}`);
+            console.error(`📄 Raw Response Content: "${rawText}"`);
+            return;
+        }
 
-    // If it's a valid 200 response, we can safely parse the JSON
-    const result = await response.json();
+        // If it's a valid 200 response, we can safely parse the JSON
+        const result: any = await response.json();
 
-    console.log('📋 Your Managed Facebook Pages:');
-    result.data.forEach(page => {
-      console.log(`- 🏷️  Name: ${page.name}`);
-      console.log(`  🆔 Page ID: ${page.id}`);
-      console.log(`  🛠️ Permitted Tasks: ${page.tasks.join(', ')}\n`);
-    });
-        
+        console.log('📋 Your Managed Facebook Pages:');
+        result.data.forEach((page: any) => {
+            console.log(`- 🏷️  Name: ${page.name}`);
+            console.log(`  🆔 Page ID: ${page.id}`);
+            console.log(`  🛠️ Permitted Tasks: ${page.tasks.join(', ')}\n`);
+        });
+
 
     } catch (error) {
         console.error('Network error:', error);
     }
 }
 
-getMyPageIDs().then(res => console.log('✅ Finished fetching pages.')).catch(err => console.error('❌ Error in getMyPageIDs:', err))
+getMyPageIDs().then(() => console.log('✅ Finished fetching pages.')).catch(err => console.error('❌ Error in getMyPageIDs:', err))
     ;

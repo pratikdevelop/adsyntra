@@ -1,4 +1,4 @@
-import express, { type Request } from "express";
+import express, { type Request, type Response } from "express";
 import crypto from "node:crypto";
 import { getAuth } from "@clerk/express";
 
@@ -301,11 +301,11 @@ router.get("/google", (req, res) => {
 });
 
 // GET /auth/google/callback
-router.get("/google/callback", async (req, res) => {
+router.get("/google/callback", async (req: Request, res: Response) => {
   try {
-    const state = req.query.state;
-    const googleError = req.query.error;
-    const code = req.query.code;
+    const state = req.query[`state`];
+    const googleError = req.query[`error`];
+    const code = req.query[`code`];
 
     if (typeof state !== "string") {
       return res.redirect(getFrontendProviderUrl("google", "error"));
@@ -621,11 +621,11 @@ async function fetchAllMetaAdAccounts(
 }
 
 // GET /auth/meta/callback
-router.get("/meta/callback", async (req, res) => {
+router.get("/meta/callback", async (req: any, res: any) => {
   try {
-    const state = req.query.state;
-    const metaError = req.query.error;
-    const code = req.query.code;
+    const state = req.query[`state`];
+    const metaError = req.query[`error`];
+    const code = req.query[`code`];
 
     if (typeof state !== "string") {
       return res.redirect(getFrontendProviderUrl("meta", "error"));

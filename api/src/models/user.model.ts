@@ -2,7 +2,6 @@ import {
     Schema,
     model,
     type HydratedDocument,
-    type Model,
 } from "mongoose";
 
 export interface UserPreferences {

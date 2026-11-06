@@ -1,7 +1,4 @@
-import {
-    buildBiddingConfig,
-    type BiddingOptions,
-} from "../utils/bidding.js";
+import { type BiddingOptions } from "../utils/bidding.js";
 export interface GoogleAdsCreationContext {
     customerId: string;
     accessToken: string;
@@ -469,16 +466,6 @@ export type GoogleAdsTextAssetType =
     | "LONG_HEADLINE"
     | "DESCRIPTION"
     | "BUSINESS_NAME";
-
-const GOOGLE_ADS_TEXT_LIMITS: Record<
-    GoogleAdsTextAssetType,
-    number
-> = {
-    HEADLINE: 30,
-    LONG_HEADLINE: 90,
-    DESCRIPTION: 90,
-    BUSINESS_NAME: 25,
-};
 
 export interface CreateGoogleAdsTextAssetInput {
     text: string;

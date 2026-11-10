@@ -21,11 +21,11 @@ const navigation = [
     href: "/dashboard/campaigns",
     icon: "◫",
   },
-  // {
-  //   label: "Create Campaign",
-  //   href: "/dashboard/create-campaign",
-  //   icon: "+",
-  // },
+  {
+    label: "Provider Settings",
+    href: "/dashboard/provider",
+    icon: "⚙",
+  },
   // {
   //   label: "Ad Accounts",
   //   href: "/dashboard/accounts",
@@ -63,7 +63,10 @@ export default function DashboardLayout({
     if (href === "/dashboard/campaigns") {
       if (pathname === "/dashboard/create-campaign") return true;
       // Keep the dedicated Drafts item active on the drafts screen.
-      if (pathname === "/dashboard/campaigns/drafts" || pathname.startsWith("/dashboard/campaigns/drafts/")) {
+      if (
+        pathname === "/dashboard/campaigns/drafts" ||
+        pathname.startsWith("/dashboard/campaigns/drafts/")
+      ) {
         return false;
       }
     }
@@ -156,7 +159,9 @@ export default function DashboardLayout({
         </div>
 
         <div className="border-t border-slate-200 p-4">
-          <p className="text-xs text-slate-400">adsyntra - Unified Ads Platform</p>
+          <p className="text-xs text-slate-400">
+            adsyntra - Unified Ads Platform
+          </p>
           <p className="mt-1 text-xs text-slate-500">
             Manage multiple ad platforms in one place.
           </p>
@@ -190,7 +195,7 @@ export default function DashboardLayout({
             ))}
 
             <Link
-              href="/provider"
+              href="/dashboard/provider"
               className="shrink-0 rounded-lg bg-slate-100 px-3 py-2 text-xs font-medium text-slate-600"
             >
               Connections
@@ -202,18 +207,21 @@ export default function DashboardLayout({
         <header className="hidden h-16 items-center justify-between border-b border-slate-200 bg-white px-8 md:flex">
           <div>
             <p className="text-sm font-semibold">
-              {pathname === "/dashboard/create-campaign" || pathname === "/dashboard/campaigns/new"
+              {pathname === "/dashboard/create-campaign" ||
+              pathname === "/dashboard/campaigns/new"
                 ? "Create campaign"
-                : [...navigation]
+                : ([...navigation]
                     .filter((item) => isActive(item.href))
                     .sort((a, b) => b.href.length - a.href.length)[0]?.label ??
-                  (pathname === "/dashboard/settings" ? "Settings" : "Workspace")}
+                  (pathname === "/dashboard/settings"
+                    ? "Settings"
+                    : "Workspace"))}
             </p>
           </div>
 
           <div className="flex items-center justify-end space-x-6">
             <Link
-              href="/provider"
+              href="/dashboard/provider"
               className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
             >
               Manage Connections

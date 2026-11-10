@@ -1,8 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import axios from "axios";
 import {
   Alert,
@@ -13,6 +12,9 @@ import {
   Chip,
   CircularProgress,
   Collapse,
+  IconButton,
+  InputAdornment,
+  MenuItem,
   Paper,
   Stack,
   Table,
@@ -21,6 +23,8 @@ import {
   TableContainer,
   TableHead,
   TableRow,
+  TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
 
@@ -79,12 +83,12 @@ interface GlobalCampaignsApiResponse {
 interface CampaignsPageProps {
   pageTitle?: string;
   pageDescription?: string;
-  /** Kept so existing route wrappers remain type-compatible. The global table no longer filters by status. */
   initialStatusFilter?: string;
 }
 
 const DEFAULT_DESCRIPTION =
   "View Google Ads and Meta Ads campaigns together in one table.";
+
 function asRecord(value: unknown): JsonRecord | null {
   return value !== null && typeof value === "object"
     ? (value as JsonRecord)
@@ -95,23 +99,15 @@ function extractProviderCampaigns(
   providerResult: ProviderResult | undefined,
 ): GlobalCampaign[] {
   if (!providerResult) return [];
-
   const data = providerResult.data;
-
-  if (Array.isArray(data)) {
-    return data as GlobalCampaign[];
-  }
-
+  if (Array.isArray(data)) return data as GlobalCampaign[];
   const dataRecord = asRecord(data);
-
   if (Array.isArray(dataRecord?.campaigns)) {
     return dataRecord.campaigns as GlobalCampaign[];
   }
-
   if (Array.isArray(providerResult.campaigns)) {
     return providerResult.campaigns;
   }
-
   return [];
 }
 
@@ -137,7 +133,6 @@ function getCampaignCurrency(
     budget?.currencyCode ??
     campaignBudget?.currencyCode ??
     providers[campaign.provider as ProviderKey]?.account?.currency;
-
   return typeof currency === "string" && currency.trim()
     ? currency.trim()
     : null;
@@ -147,7 +142,6 @@ function getCampaignSpend(campaign: GlobalCampaign): number | null {
   const metrics = asRecord(asRecord(campaign.source)?.metrics);
   const spend = readNumber(metrics?.spend);
   if (spend !== null) return spend;
-
   const costMicros = readNumber(metrics?.costMicros);
   return costMicros !== null ? costMicros / 1_000_000 : null;
 }
@@ -156,10 +150,8 @@ function getCampaignBudget(campaign: GlobalCampaign): number | null {
   const source = asRecord(campaign.source);
   const normalizedBudget = asRecord(source?.budget);
   const apiBudget = asRecord(source?.campaignBudget);
-
   const normalizedAmount = readNumber(normalizedBudget?.amount);
   if (normalizedAmount !== null) return normalizedAmount;
-
   const amountMicros = readNumber(
     normalizedBudget?.amountMicros ?? apiBudget?.amountMicros,
   );
@@ -169,11 +161,10 @@ function getCampaignBudget(campaign: GlobalCampaign): number | null {
 function formatCurrency(value: number | null, currency: string | null): string {
   if (value === null) return "—";
   if (!currency) {
-    return new Intl.NumberFormat("en-IN", {
-      maximumFractionDigits: 2,
-    }).format(value);
+    return new Intl.NumberFormat("en-IN", { maximumFractionDigits: 2 }).format(
+      value,
+    );
   }
-
   try {
     return new Intl.NumberFormat("en-IN", {
       style: "currency",
@@ -241,6 +232,146 @@ function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "Failed to load campaigns.";
 }
 
+// ── Icons (inline SVGs to avoid extra deps) ─────────────────────────────
+const Icon = {
+  Search: () => (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="11" cy="11" r="7" />
+      <path d="m21 21-4.3-4.3" />
+    </svg>
+  ),
+  Plus: () => (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  ),
+  Refresh: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
+      <path d="M21 3v5h-5" />
+      <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
+      <path d="M3 21v-5h5" />
+    </svg>
+  ),
+  ChevronDown: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="m6 9 6 6 6-6" />
+    </svg>
+  ),
+  ChevronUp: () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <path d="m18 15-6-6-6 6" />
+    </svg>
+  ),
+  Layers: () => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="m12 2 9 5-9 5-9-5 9-5Z" />
+      <path d="m3 12 9 5 9-5" />
+      <path d="m3 17 9 5 9-5" />
+    </svg>
+  ),
+  Google: () => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M21.35 11.1H12v2.9h5.35c-.23 1.4-1.65 4.1-5.35 4.1-3.22 0-5.85-2.67-5.85-5.95S8.78 6.2 12 6.2c1.83 0 3.06.78 3.76 1.45l2.57-2.47C16.75 3.66 14.6 2.75 12 2.75 6.9 2.75 2.75 6.9 2.75 12s4.15 9.25 9.25 9.25c5.34 0 8.9-3.75 8.9-9.03 0-.61-.07-1.08-.15-1.12Z" />
+    </svg>
+  ),
+  Meta: () => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2Zm3.94 12.83c-.65.65-1.42 1.05-2.31 1.18-.13.02-.27.03-.41.03-1.1 0-2.06-.41-2.75-1.21-.72-.85-1.11-1.99-1.11-3.29 0-.55.09-1.09.28-1.55.23-.56.55-1 1.06-1.32.5-.32 1.09-.48 1.73-.48.55 0 1.06.13 1.47.38.41.25.68.6.81.99.11.31.13.63.13.93 0 .24-.01.46-.03.61h-3.55c.06.44.23.79.5 1.04.27.25.63.38 1.06.38.23 0 .45-.05.66-.14.21-.09.36-.22.46-.37l.98.6c-.17.3-.45.56-.82.75-.37.19-.81.29-1.31.29-.55 0-1.05-.13-1.43-.38Z" />
+    </svg>
+  ),
+  Wallet: () => (
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 12V7H5a2 2 0 0 1 0-4h14v4" />
+      <path d="M3 5v14a2 2 0 0 0 2 2h16v-5" />
+      <path d="M18 12a2 2 0 0 0 0 4h4v-4Z" />
+    </svg>
+  ),
+};
+
+// ── Metric Card ────────────────────────────────────────────────────────
+function MetricCard({
+  label,
+  value,
+  detail,
+  icon,
+  accent,
+}: {
+  label: string;
+  value: string | number;
+  detail: string;
+  icon: React.ReactNode;
+  accent: string;
+}) {
+  return (
+    <Card
+      variant="outlined"
+      sx={{
+        height: "100%",
+        transition: "all 0.15s ease",
+        "&:hover": { boxShadow: 2, borderColor: "divider" },
+      }}
+    >
+      <CardContent sx={{ p: 2.5 }}>
+        <Stack direction="row" alignItems="center" spacing={1.5}>
+          <Box
+            sx={{
+              width: 36,
+              height: 36,
+              borderRadius: 1.5,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              bgcolor: accent,
+              color: "white",
+              flexShrink: 0,
+            }}
+          >
+            {icon}
+          </Box>
+          <Typography variant="body2" color="text.secondary" fontWeight={500}>
+            {label}
+          </Typography>
+        </Stack>
+        <Typography variant="h4" component="p" fontWeight={700} sx={{ mt: 1.5, letterSpacing: "-0.02em" }}>
+          {value}
+        </Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: "block" }}>
+          {detail}
+        </Typography>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ── Detail Item ────────────────────────────────────────────────────────
+function DetailItem({ label, value }: { label: string; value: unknown }) {
+  const display =
+    value === null || value === undefined || value === ""
+      ? "—"
+      : Array.isArray(value)
+        ? value.length
+          ? value.join(", ")
+          : "None"
+        : String(value);
+
+  return (
+    <Box sx={{ minWidth: 0 }}>
+      <Typography variant="caption" color="text.secondary" display="block">
+        {label}
+      </Typography>
+      <Typography
+        variant="body2"
+        fontWeight={600}
+        sx={{ overflowWrap: "anywhere", mt: 0.25 }}
+      >
+        {display}
+      </Typography>
+    </Box>
+  );
+}
+
+// ── Main Page ──────────────────────────────────────────────────────────
 export default function CampaignsPage({
   pageTitle = "Campaign Management",
   pageDescription = DEFAULT_DESCRIPTION,
@@ -255,6 +386,11 @@ export default function CampaignsPage({
   const [error, setError] = useState<string | null>(null);
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
 
+  // Filter / search state
+  const [search, setSearch] = useState("");
+  const [platformFilter, setPlatformFilter] = useState<"all" | ProviderKey>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+
   const loadCampaigns = useCallback(async (append = false) => {
     if (append) setLoadingMore(true);
     else setLoading(true);
@@ -262,8 +398,7 @@ export default function CampaignsPage({
     try {
       const params: Record<string, string> = {};
       if (append) {
-        const googleToken =
-          providersRef.current.googleAds?.pagination?.nextToken;
+        const googleToken = providersRef.current.googleAds?.pagination?.nextToken;
         const metaToken = providersRef.current.metaAds?.pagination?.nextToken;
         if (googleToken) params.googlePageToken = googleToken;
         if (metaToken) params.metaPageToken = metaToken;
@@ -275,8 +410,6 @@ export default function CampaignsPage({
       );
       const payload = response.data;
 
-      console.log("Campaigns response:", payload);
-
       if (!payload?.success) {
         throw new Error(
           payload?.message || "Campaign API returned an unsuccessful response.",
@@ -284,7 +417,6 @@ export default function CampaignsPage({
       }
 
       const providerResults = payload.providers ?? {};
-
       const googleResult = providerResults.googleAds;
       const metaResult = providerResults.metaAds;
 
@@ -297,7 +429,6 @@ export default function CampaignsPage({
           provider: "googleAds" as const,
           accountId: campaign.accountId ?? googleResult?.accountId ?? null,
         })),
-
         ...metaCampaigns.map((campaign) => ({
           ...campaign,
           provider: "metaAds" as const,
@@ -307,28 +438,27 @@ export default function CampaignsPage({
 
       setCampaigns((current) => {
         if (!append) return incomingCampaigns;
-
         const merged = new Map<string, GlobalCampaign>();
-
         [...current, ...incomingCampaigns].forEach((campaign) => {
           merged.set(`${campaign.provider}:${campaign.id}`, campaign);
         });
-
         return [...merged.values()];
       });
-      setProviders({
+
+      const newProviders = {
         googleAds: {
           ...googleResult,
           connected: googleResult?.success === true,
           status: googleResult?.success ? "connected" : "disconnected",
         },
-
         metaAds: {
           ...metaResult,
           connected: metaResult?.success === true,
           status: metaResult?.success ? "connected" : "disconnected",
         },
-      });
+      };
+      setProviders(newProviders);
+      providersRef.current = newProviders;
       setError(null);
     } catch (requestError) {
       setError(getErrorMessage(requestError));
@@ -342,6 +472,7 @@ export default function CampaignsPage({
     void loadCampaigns(false);
   }, [loadCampaigns]);
 
+  // Derived stats
   const totalSpend = useMemo(() => {
     const totalsByCurrency = new Map<string, number>();
     let unknownCurrencyTotal = 0;
@@ -376,49 +507,132 @@ export default function CampaignsPage({
     return "Multiple currencies";
   }, [campaigns, providers]);
 
-  const googleCount = campaigns.filter(
-    (campaign) => campaign.provider === "googleAds",
-  ).length;
-  const metaCount = campaigns.filter(
-    (campaign) => campaign.provider === "metaAds",
-  ).length;
+  const googleCount = campaigns.filter((c) => c.provider === "googleAds").length;
+  const metaCount = campaigns.filter((c) => c.provider === "metaAds").length;
   const connectedProviders = ["googleAds", "metaAds"].filter(
     (provider) => providers[provider as ProviderKey]?.connected,
   ).length;
 
   const hasMore = Boolean(
     providers.googleAds?.pagination?.hasMore ||
-    providers.metaAds?.pagination?.hasMore,
+      providers.metaAds?.pagination?.hasMore,
   );
 
+  // Available statuses for filter
+  const availableStatuses = useMemo(() => {
+    const set = new Set<string>();
+    campaigns.forEach((c) => {
+      const s = (c.effectiveStatus || c.status || "").toUpperCase();
+      if (s) set.add(s);
+    });
+    return [...set].sort();
+  }, [campaigns]);
+
+  // Filtered campaigns
+  const filteredCampaigns = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return campaigns.filter((c) => {
+      if (platformFilter !== "all" && c.provider !== platformFilter) return false;
+      if (statusFilter !== "all") {
+        const s = (c.effectiveStatus || c.status || "").toUpperCase();
+        if (s !== statusFilter) return false;
+      }
+      if (q) {
+        const haystack = `${c.name} ${c.id} ${c.accountId ?? ""} ${c.objective ?? ""}`.toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [campaigns, search, platformFilter, statusFilter]);
+
+  const activeFiltersCount =
+    (search ? 1 : 0) +
+    (platformFilter !== "all" ? 1 : 0) +
+    (statusFilter !== "all" ? 1 : 0);
+
+  const clearFilters = () => {
+    setSearch("");
+    setPlatformFilter("all");
+    setStatusFilter("all");
+  };
+
   return (
-    <Box sx={{ width: "100%", maxWidth: 1600, mx: "auto" }}>
-      <Stack
-        direction={{ xs: "column", sm: "row" }}
-        // justifyContent="space-between"
-        // alignItems={{ xs: "stretch", sm: "center" }}
-        spacing={2}
-        sx={{ mb: 3 }}
+    <Box sx={{ width: "100%", maxWidth: 1700, mx: "auto" }}>
+      {/* Header */}
+           {/* Header */}
+      <Box
+        sx={{
+          display: "flex",
+          flexDirection: { xs: "column", sm: "row" },
+          justifyContent: "space-between",
+          alignItems: { xs: "flex-start", sm: "center" }, // Center aligns the button vertically with the title
+          gap: 2,
+          mb: 3,
+        }}
       >
         <Box>
-          <Typography variant="h4" component="h1" fontWeight={700}>
+          <Typography
+            variant="caption"
+            sx={{
+              fontWeight: 600,
+              letterSpacing: "0.08em",
+              textTransform: "uppercase",
+              color: "primary.main",
+            }}
+          >
+            AdSyntra · Campaigns
+          </Typography>
+          <Typography
+            variant="h4"
+            component="h1"
+            fontWeight={700}
+            sx={{ mt: 0.5, letterSpacing: "-0.02em" }}
+          >
             {pageTitle}
           </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
             {pageDescription}
           </Typography>
         </Box>
-        <Button
-          component={Link}
-          href="/dashboard/campaigns/new"
-          variant="contained"
-          size="large"
-          disableElevation
-        >
-          Create campaign
-        </Button>
-      </Stack>
 
+        <Stack direction="row" spacing={1.5} alignItems="center">
+          <Tooltip title="Refresh campaigns">
+            <span>
+              <IconButton
+                onClick={() => void loadCampaigns(false)}
+                disabled={loading}
+                sx={{
+                  border: 1,
+                  borderColor: "divider",
+                  bgcolor: "background.paper",
+                }}
+              >
+                <Icon.Refresh />
+              </IconButton>
+            </span>
+          </Tooltip>
+          <Button
+            component={Link}
+            href="/dashboard/campaigns/new"
+            variant="contained"
+            size="medium" // Changed from large to medium for better proportion
+            disableElevation
+            startIcon={<Icon.Plus />}
+            sx={{
+              borderRadius: 2,
+              textTransform: "none",
+              fontWeight: 600,
+              px: 3,
+              py: 1,
+              height: "fit-content", // Prevents it from stretching
+              whiteSpace: "nowrap", // Prevents text from wrapping
+            }}
+          >
+            Create campaign
+          </Button>
+        </Stack>
+      </Box>
+      {/* Metric Cards */}
       <Box
         sx={{
           display: "grid",
@@ -435,6 +649,8 @@ export default function CampaignsPage({
           label="Total campaigns"
           value={campaigns.length}
           detail="Across all connected platforms"
+          icon={<Icon.Layers />}
+          accent="#2563eb"
         />
         <MetricCard
           label="Google Ads"
@@ -444,6 +660,8 @@ export default function CampaignsPage({
               ? "Account connected"
               : "Not connected"
           }
+          icon={<Icon.Google />}
+          accent="#1a73e8"
         />
         <MetricCard
           label="Meta Ads"
@@ -451,18 +669,22 @@ export default function CampaignsPage({
           detail={
             providers.metaAds?.connected ? "Account connected" : "Not connected"
           }
+          icon={<Icon.Meta />}
+          accent="#6366f1"
         />
         <MetricCard
           label="Total spend"
           value={totalSpend}
           detail="Based on metrics returned by providers"
+          icon={<Icon.Wallet />}
+          accent="#10b981"
         />
       </Box>
 
       {error && (
         <Alert
           severity="error"
-          sx={{ mb: 2 }}
+          sx={{ mb: 2, borderRadius: 2 }}
           action={
             <Button
               color="inherit"
@@ -477,45 +699,100 @@ export default function CampaignsPage({
         </Alert>
       )}
 
-      <Paper variant="outlined" sx={{ width: "100%", overflow: "hidden" }}>
+      <Paper variant="outlined" sx={{ width: "100%", overflow: "hidden", borderRadius: 2 }}>
+        {/* Toolbar */}
         <Stack
-          direction={{ xs: "column", sm: "row" }}
+          direction={{ xs: "column", md: "row" }}
           justifyContent="space-between"
-          alignItems={{ xs: "stretch", sm: "center" }}
-          spacing={1}
+          alignItems={{ xs: "stretch", md: "center" }}
+          spacing={2}
           sx={{ px: 2.5, py: 2, borderBottom: 1, borderColor: "divider" }}
         >
           <Box>
-            <Typography variant="h6" fontWeight={700}>
-              All campaigns
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              {campaigns.length} campaigns · {connectedProviders} of 2 providers
-              connected
+            <Stack direction="row" alignItems="center" spacing={1}>
+              <Typography variant="h6" fontWeight={700}>
+                All campaigns
+              </Typography>
+              <Chip
+                label={filteredCampaigns.length}
+                size="small"
+                sx={{ fontWeight: 700, height: 22 }}
+              />
+            </Stack>
+            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
+              {connectedProviders} of 2 providers connected
             </Typography>
           </Box>
-          <Stack direction="row" spacing={1}>
-            <Chip
-              label={`Google ${providers.googleAds?.status ?? "unknown"}`}
-              color={providers.googleAds?.connected ? "success" : "default"}
-              variant="outlined"
+
+          <Stack
+            direction={{ xs: "column", sm: "row" }}
+            spacing={1.5}
+            alignItems={{ xs: "stretch", sm: "center" }}
+          >
+            <TextField
               size="small"
+              placeholder="Search campaigns…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              slotProps={{
+                input: {
+                  startAdornment: (
+                    <InputAdornment position="start">
+                      <Box sx={{ color: "text.secondary", display: "flex" }}>
+                        <Icon.Search />
+                      </Box>
+                    </InputAdornment>
+                  ),
+                },
+              }}
+              sx={{ minWidth: { sm: 240 } }}
             />
-            <Chip
-              label={`Meta ${providers.metaAds?.status ?? "unknown"}`}
-              color={providers.metaAds?.connected ? "success" : "default"}
-              variant="outlined"
+            <TextField
+              select
               size="small"
-            />
+              value={platformFilter}
+              onChange={(e) =>
+                setPlatformFilter(e.target.value as "all" | ProviderKey)
+              }
+              sx={{ minWidth: 140 }}
+            >
+              <MenuItem value="all">All platforms</MenuItem>
+              <MenuItem value="googleAds">Google Ads</MenuItem>
+              <MenuItem value="metaAds">Meta Ads</MenuItem>
+            </TextField>
+            <TextField
+              select
+              size="small"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              sx={{ minWidth: 140 }}
+            >
+              <MenuItem value="all">All statuses</MenuItem>
+              {availableStatuses.map((s) => (
+                <MenuItem key={s} value={s}>
+                  {s}
+                </MenuItem>
+              ))}
+            </TextField>
+            {activeFiltersCount > 0 && (
+              <Button
+                size="small"
+                onClick={clearFilters}
+                sx={{ textTransform: "none" }}
+              >
+                Clear ({activeFiltersCount})
+              </Button>
+            )}
           </Stack>
         </Stack>
 
+        {/* Content */}
         {loading ? (
           <Stack
             alignItems="center"
             justifyContent="center"
             spacing={2}
-            sx={{ py: 9 }}
+            sx={{ py: 10 }}
           >
             <CircularProgress />
             <Typography variant="body2" color="text.secondary">
@@ -523,73 +800,83 @@ export default function CampaignsPage({
             </Typography>
           </Stack>
         ) : campaigns.length === 0 ? (
-          <Alert severity="info" sx={{ m: 2 }}>
-            No campaigns were returned by the connected advertising accounts.
-          </Alert>
+          <Box sx={{ p: 6, textAlign: "center" }}>
+            <Typography variant="h6" fontWeight={700} gutterBottom>
+              No campaigns yet
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+              No campaigns were returned by the connected advertising accounts.
+            </Typography>
+            <Button
+              component={Link}
+              href="/dashboard/campaigns/new"
+              variant="contained"
+              disableElevation
+              startIcon={<Icon.Plus />}
+              sx={{ textTransform: "none" }}
+            >
+              Create your first campaign
+            </Button>
+          </Box>
+        ) : filteredCampaigns.length === 0 ? (
+          <Box sx={{ p: 6, textAlign: "center" }}>
+            <Typography variant="h6" fontWeight={700} gutterBottom>
+              No matching campaigns
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+              Try adjusting your filters or search.
+            </Typography>
+            <Button onClick={clearFilters} sx={{ textTransform: "none" }}>
+              Clear filters
+            </Button>
+          </Box>
         ) : (
-          <TableContainer sx={{ width: "100%" }}>
+          <TableContainer sx={{ width: "100%", maxHeight: "70vh" }}>
             <Table
               size="medium"
               sx={{ minWidth: 1900 }}
               aria-label="Global advertising campaigns"
+              stickyHeader
             >
               <TableHead>
-                <TableRow sx={{ backgroundColor: "action.hover" }}>
-                  <TableCell sx={{ fontWeight: 700 }}>Campaign</TableCell>
+                <TableRow>
+                  <TableCell
+                    sx={{
+                      fontWeight: 700,
+                      position: "sticky",
+                      left: 0,
+                      zIndex: 3,
+                      bgcolor: "background.paper",
+                      borderRight: 1,
+                      borderColor: "divider",
+                      minWidth: 230,
+                    }}
+                  >
+                    Campaign
+                  </TableCell>
                   <TableCell sx={{ fontWeight: 700 }}>Platform</TableCell>
                   <TableCell sx={{ fontWeight: 700 }}>Objective</TableCell>
-                  <TableCell sx={{ fontWeight: 700 }}>Campaign type</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Type</TableCell>
                   <TableCell sx={{ fontWeight: 700 }}>Bid strategy</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>
-                    Budget
-                  </TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>
-                    Spend
-                  </TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>
-                    Impressions
-                  </TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>
-                    Reach
-                  </TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>
-                    Clicks
-                  </TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>
-                    CTR
-                  </TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>
-                    CPC
-                  </TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>
-                    CPM
-                  </TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>
-                    Conversions
-                  </TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>
-                    Conv. rate
-                  </TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>
-                    Cost / conv.
-                  </TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>
-                    Conv. value
-                  </TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>
-                    ROAS
-                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>Budget</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>Spend</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>Impressions</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>Reach</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>Clicks</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>CTR</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>CPC</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>CPM</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>Conversions</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>Conv. rate</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>Cost / conv.</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>Conv. value</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>ROAS</TableCell>
                   <TableCell sx={{ fontWeight: 700 }}>Status</TableCell>
-                  <TableCell align="center" sx={{ fontWeight: 700 }}>
-                    Details
-                  </TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>
-                    Action
-                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>Actions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
-                {campaigns.map((campaign) => {
+                {filteredCampaigns.map((campaign) => {
                   const currency = getCampaignCurrency(campaign, providers);
                   const status =
                     campaign.effectiveStatus || campaign.status || "UNKNOWN";
@@ -598,15 +885,12 @@ export default function CampaignsPage({
                   const source = asRecord(campaign.source);
                   const rawCampaign = asRecord(source?.campaign);
                   const budget =
-                    asRecord(source?.budget) ??
-                    asRecord(source?.campaignBudget);
+                    asRecord(source?.budget) ?? asRecord(source?.campaignBudget);
                   const bidding = asRecord(source?.bidding);
                   const specialCategories = source?.special_ad_categories;
                   const startTime = source?.start_time;
-                  const createdTime =
-                    source?.created_time ?? campaign.createdAt;
-                  const updatedTime =
-                    source?.updated_time ?? campaign.updatedAt;
+                  const createdTime = source?.created_time ?? campaign.createdAt;
+                  const updatedTime = source?.updated_time ?? campaign.updatedAt;
 
                   const metricCurrency = currency;
                   const formatPercent = (value: unknown) => {
@@ -632,8 +916,17 @@ export default function CampaignsPage({
 
                   return (
                     <Fragment key={rowKey}>
-                      <TableRow hover>
-                        <TableCell sx={{ minWidth: 230 }}>
+                      <TableRow hover sx={{ "& td": { verticalAlign: "top" } }}>
+                        <TableCell
+                          sx={{
+                            position: "sticky",
+                            left: 0,
+                            zIndex: 1,
+                            bgcolor: "background.paper",
+                            borderRight: 1,
+                            borderColor: "divider",
+                          }}
+                        >
                           <Typography variant="body2" fontWeight={600}>
                             {campaign.name || "Untitled campaign"}
                           </Typography>
@@ -660,19 +953,28 @@ export default function CampaignsPage({
                             variant="outlined"
                           />
                         </TableCell>
-                        <TableCell>{campaign.objective || "—"}</TableCell>
-                        <TableCell>{getCampaignType(campaign)}</TableCell>
                         <TableCell>
-                          {displayValue(
-                            bidding?.strategy ??
-                              rawCampaign?.biddingStrategyType,
-                          )}
+                          <Typography variant="body2">
+                            {campaign.objective || "—"}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Typography variant="body2">
+                            {getCampaignType(campaign)}
+                          </Typography>
+                        </TableCell>
+                        <TableCell>
+                          <Typography variant="body2">
+                            {displayValue(
+                              bidding?.strategy ??
+                                rawCampaign?.biddingStrategyType,
+                            )}
+                          </Typography>
                         </TableCell>
                         <TableCell align="right">
-                          {formatCurrency(
-                            getCampaignBudget(campaign),
-                            currency,
-                          )}
+                          <Typography variant="body2" fontWeight={500}>
+                            {formatCurrency(getCampaignBudget(campaign), currency)}
+                          </Typography>
                           <Typography
                             variant="caption"
                             color="text.secondary"
@@ -682,7 +984,9 @@ export default function CampaignsPage({
                           </Typography>
                         </TableCell>
                         <TableCell align="right">
-                          {formatCurrency(getCampaignSpend(campaign), currency)}
+                          <Typography variant="body2" fontWeight={500}>
+                            {formatCurrency(getCampaignSpend(campaign), currency)}
+                          </Typography>
                         </TableCell>
                         <TableCell align="right">
                           {formatMetric(getMetric(campaign, "impressions"))}
@@ -716,9 +1020,7 @@ export default function CampaignsPage({
                         </TableCell>
                         <TableCell align="right">
                           {formatCurrency(
-                            readNumber(
-                              getMetric(campaign, "costPerConversion"),
-                            ),
+                            readNumber(getMetric(campaign, "costPerConversion")),
                             metricCurrency,
                           )}
                         </TableCell>
@@ -739,25 +1041,33 @@ export default function CampaignsPage({
                             variant="outlined"
                           />
                         </TableCell>
-                        <TableCell align="center">
+                        <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
                           <Button
                             size="small"
+                            variant="text"
                             onClick={() =>
                               setExpandedRows((current) => ({
                                 ...current,
                                 [rowKey]: !current[rowKey],
                               }))
                             }
+                            endIcon={
+                              isExpanded ? <Icon.ChevronUp /> : <Icon.ChevronDown />
+                            }
+                            sx={{ textTransform: "none", minWidth: 0 }}
                           >
-                            {isExpanded ? "Hide" : "Expand"}
+                            {isExpanded ? "Hide" : "More"}
                           </Button>
-                        </TableCell>
-                        <TableCell align="right">
                           <Button
                             component={Link}
                             href={`/dashboard/campaigns/${encodeURIComponent(campaign.id)}`}
                             size="small"
-                            variant="text"
+                            variant="outlined"
+                            sx={{
+                              textTransform: "none",
+                              ml: 1,
+                              minWidth: 0,
+                            }}
                           >
                             View
                           </Button>
@@ -765,18 +1075,15 @@ export default function CampaignsPage({
                       </TableRow>
                       <TableRow key={`${rowKey}:details`}>
                         <TableCell
-                          colSpan={21}
+                          colSpan={20}
                           sx={{
                             py: 0,
                             borderBottom: isExpanded ? undefined : 0,
+                            bgcolor: "action.hover",
                           }}
                         >
-                          <Collapse
-                            in={isExpanded}
-                            timeout="auto"
-                            unmountOnExit
-                          >
-                            <Box sx={{ py: 2.5 }}>
+                          <Collapse in={isExpanded} timeout="auto" unmountOnExit>
+                            <Box sx={{ py: 2.5, px: 2 }}>
                               <Typography
                                 variant="subtitle2"
                                 fontWeight={700}
@@ -795,14 +1102,8 @@ export default function CampaignsPage({
                                   gap: 2,
                                 }}
                               >
-                                <DetailItem
-                                  label="Campaign ID"
-                                  value={campaign.id}
-                                />
-                                <DetailItem
-                                  label="Account ID"
-                                  value={campaign.accountId}
-                                />
+                                <DetailItem label="Campaign ID" value={campaign.id} />
+                                <DetailItem label="Account ID" value={campaign.accountId} />
                                 <DetailItem
                                   label="Effective status"
                                   value={campaign.effectiveStatus}
@@ -829,10 +1130,7 @@ export default function CampaignsPage({
                                     rawCampaign?.biddingStrategySystemStatus
                                   }
                                 />
-                                <DetailItem
-                                  label="Budget name"
-                                  value={budget?.name}
-                                />
+                                <DetailItem label="Budget name" value={budget?.name} />
                                 <DetailItem
                                   label="Budget amount"
                                   value={formatCurrency(
@@ -852,18 +1150,9 @@ export default function CampaignsPage({
                                   label="Buying type"
                                   value={source?.buying_type}
                                 />
-                                <DetailItem
-                                  label="Start time"
-                                  value={startTime}
-                                />
-                                <DetailItem
-                                  label="Created"
-                                  value={createdTime}
-                                />
-                                <DetailItem
-                                  label="Last updated"
-                                  value={updatedTime}
-                                />
+                                <DetailItem label="Start time" value={startTime} />
+                                <DetailItem label="Created" value={createdTime} />
+                                <DetailItem label="Last updated" value={updatedTime} />
                                 <DetailItem
                                   label="Special ad categories"
                                   value={specialCategories}
@@ -894,6 +1183,7 @@ export default function CampaignsPage({
             <Button
               onClick={() => void loadCampaigns(true)}
               disabled={loadingMore}
+              sx={{ textTransform: "none" }}
             >
               {loadingMore ? (
                 <CircularProgress size={18} sx={{ mr: 1 }} />
@@ -904,66 +1194,5 @@ export default function CampaignsPage({
         )}
       </Paper>
     </Box>
-  );
-}
-
-function DetailItem({ label, value }: { label: string; value: unknown }) {
-  const display =
-    value === null || value === undefined || value === ""
-      ? "—"
-      : Array.isArray(value)
-        ? value.length
-          ? value.join(", ")
-          : "None"
-        : String(value);
-
-  return (
-    <Box sx={{ minWidth: 0 }}>
-      <Typography variant="caption" color="text.secondary" display="block">
-        {label}
-      </Typography>
-      <Typography
-        variant="body2"
-        fontWeight={600}
-        sx={{ overflowWrap: "anywhere", mt: 0.25 }}
-      >
-        {display}
-      </Typography>
-    </Box>
-  );
-}
-
-function MetricCard({
-  label,
-  value,
-  detail,
-}: {
-  label: string;
-  value: string | number;
-  detail: string;
-}) {
-  return (
-    <Card variant="outlined" sx={{ height: "100%" }}>
-      <CardContent>
-        <Typography variant="body2" color="text.secondary" fontWeight={500}>
-          {label}
-        </Typography>
-        <Typography
-          variant="h4"
-          component="p"
-          fontWeight={700}
-          sx={{ mt: 1.25 }}
-        >
-          {value}
-        </Typography>
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          sx={{ mt: 0.75, display: "block" }}
-        >
-          {detail}
-        </Typography>
-      </CardContent>
-    </Card>
   );
 }

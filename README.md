@@ -1,5 +1,4 @@
 Campaign Management: provider-separated version
-
 Copy these files into the matching paths in your Next.js project:
 - app/dashboard/campaigns/page.tsx
 - app/dashboard/campaigns/[id]/page.tsx

@@ -48,7 +48,7 @@ export default function DashboardPage() {
           </p>
 
           <Link
-            href="/provider"
+            href="/dashboard/provider"
             className="mt-5 inline-block text-sm font-semibold text-blue-600 hover:text-blue-800"
           >
             Manage Accounts →

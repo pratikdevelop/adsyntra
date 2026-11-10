@@ -2753,13 +2753,11 @@ export default function CreateCampaignPage() {
                       .map((key) => ({ key: key.trim() })),
                   }),
                   ...(metaCityKeys.trim() && {
-                    cities: metaCityKeys
-                      .split(/[\n,]+/)
-                      .map((key) => ({
-                        key: key.trim(),
-                        radius: Number(metaCityRadius),
-                        distance_unit: metaCityDistanceUnit,
-                      })),
+                    cities: metaCityKeys.split(/[\n,]+/).map((key) => ({
+                      key: key.trim(),
+                      radius: Number(metaCityRadius),
+                      distance_unit: metaCityDistanceUnit,
+                    })),
                   }),
                   ...(metaZipKeys.trim() && {
                     zips: metaZipKeys
@@ -3481,7 +3479,10 @@ export default function CreateCampaignPage() {
         <div className="mt-6 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           {connectionError}
           <div className="mt-2">
-            <Link href="/provider" className="font-semibold underline">
+            <Link
+              href="/dashboard/provider"
+              className="font-semibold underline"
+            >
               Manage account connections
             </Link>
           </div>

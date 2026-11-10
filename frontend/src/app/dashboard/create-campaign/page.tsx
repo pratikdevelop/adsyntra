@@ -292,8 +292,6 @@ const googleObjectiveFromShared: Record<Objective, GoogleMarketingObjective> = {
   APP_PROMOTION: "APP_PROMOTION",
 };
 
-// Values here are builder choices. APP is translated to Google's actual
-// MULTI_CHANNEL channel type plus an APP_CAMPAIGN_* subtype.
 const googleCampaignTypes = [
   { value: "SEARCH", label: "Search", channelType: "SEARCH" },
   { value: "DISPLAY", label: "Display", channelType: "DISPLAY" },
@@ -314,9 +312,6 @@ const googleCampaignTypes = [
   },
 ];
 
-// The Google Ads UI asks what the campaign should optimize for. The API does
-// not expose one universal `performance_goal` field; this selection is mapped
-// to a campaign-type-compatible bidding strategy by the backend.
 const googlePerformanceGoalsByType: Record<
   string,
   { value: GooglePerformanceGoal; label: string; biddingStrategy: string }[]
@@ -698,8 +693,6 @@ export default function CreateCampaignPage() {
   ] = useState("customers/1234567890/biddingStrategies/123456789");
   const [googleStartDate, setGoogleStartDate] = useState("2026-11-05");
   const [googleEndDate, setGoogleEndDate] = useState("2026-12-05");
-  // Values entered here are geoTargetConstant / languageConstant resource IDs or names;
-  // the API adapter must resolve and validate them against the selected customer.
   const [googleGeoTargetResources, setGoogleGeoTargetResources] = useState(
     "geoTargetConstants/2356",
   );
@@ -1140,7 +1133,6 @@ export default function CreateCampaignPage() {
     "https://example.com/image.jpg",
   );
   const [assetNotice, setAssetNotice] = useState("no notice");
-  // AI Creative Studio is a local prototype simulation. No external AI service is called.
   const [creativePrompt, setCreativePrompt] = useState(
     "Create a premium summer campaign visual for Acme Demo Store featuring the new collection, warm sunlight, clean product styling and a confident shopping message.",
   );
@@ -1325,8 +1317,6 @@ export default function CreateCampaignPage() {
   }, [getToken, isLoaded, isSignedIn]);
 
   const clearPreview = () => {
-    // Editing the current draft invalidates its JSON preview, but it should not
-    // erase already simulated creation records shown in Campaign Details / Ad Management.
     setPreparedPayload("");
     setCopyNotice("");
   };
@@ -2419,12 +2409,10 @@ export default function CreateCampaignPage() {
             accountId: connections.googleAds.selectedAccountId,
             campaign: {
               name: campaignName.trim(),
-              // UI values are mapped to Google's actual channel enums.
               campaignType: googleCampaignType,
               advertising_channel_type: googleCampaignTypes.find(
                 (item) => item.value === googleCampaignType,
               )?.channelType,
-              // Builder metadata only; Google Campaign has no generic objective field.
               marketingObjective: googleMarketingObjective,
               conversionGoalConfiguration:
                 googleCustomConversionGoalResourceName.trim()
@@ -2501,7 +2489,6 @@ export default function CreateCampaignPage() {
               }),
               ...(googleCampaignType !== "APP" &&
                 googleCampaignType !== "HOTEL" && {
-                  // A UI preset, not a native Google Campaign API field.
                   performanceGoalPreset: effectiveGooglePerformanceGoal,
                   biddingMode: effectiveGoogleBiddingMode,
                   ...(effectiveGoogleBiddingScope === "STANDARD" && {
@@ -2997,7 +2984,6 @@ export default function CreateCampaignPage() {
               name: campaignName.trim(),
               status: "PAUSED",
               objective: metaObjectiveMap[objective],
-              // Meta Marketing API campaign-level field: AUCTION or RESERVED.
               buying_type: metaBuyingType,
               special_ad_categories: metaSpecialAdCategories,
               budgetLevel: metaBudgetLevel,
@@ -3062,8 +3048,6 @@ export default function CreateCampaignPage() {
               campaignLink:
                 "Backend supplies the newly created campaign_id returned by the Campaign create call.",
               status: "PAUSED",
-              // Meta's UI calls this the Performance Goal. The API field is
-              // optimization_goal and belongs to the Ad Set, not Campaign.
               optimization_goal: effectiveMetaOptimizationGoal,
               billing_event: effectiveMetaBillingEvent,
               bidStrategyPlacement:
@@ -3317,7 +3301,6 @@ export default function CreateCampaignPage() {
           : null,
       },
       launch: {
-        // Start paused so the user can review each provider's campaign before activation.
         initialStatus: "PAUSED",
       },
     };
@@ -3359,10 +3342,6 @@ export default function CreateCampaignPage() {
                   ? "Responsive Display Ad"
                   : "Demand Gen Ad"
       : "Ad";
-    // Google CampaignBudget is a separate resource and must be visible as its
-    // own execution step. It may be submitted atomically with Campaign through
-    // GoogleAdsService.Mutate using temporary resource names, but it remains a
-    // distinct resource/result for monitoring and reconciliation.
     const resourceLabels = isGoogle
       ? ["Campaign Budget", "Campaign", middleLabel, finalLabel]
       : ["Campaign", "Ad Set", "Ad Creative", finalLabel];
@@ -3452,7 +3431,6 @@ export default function CreateCampaignPage() {
       provider === "googleAds" &&
       !selectedPlatforms.includes("metaAds")
     ) {
-      // When only Google is selected, still demonstrate a provider-level failure.
       markFailedFrom(
         0,
         "GOOGLE_ADS_INVALID_ARGUMENT",
@@ -3635,8 +3613,6 @@ export default function CreateCampaignPage() {
     const suffix = String(Date.now()).slice(-6);
     const providers = demoJob.providers.map((provider) => {
       if (provider.provider !== providerName) return provider;
-      // Demo assumes the lookup finds the resource. A real adapter must query by
-      // provider identifiers / known fields before deciding whether to retry.
       const resources = provider.resources.map((resource) =>
         resource.status === "TIMED_OUT"
           ? {
@@ -4154,7 +4130,6 @@ export default function CreateCampaignPage() {
         "Lifestyle edit",
         "Offer-led concept",
       ][index],
-      // Demo references only; these URLs are not generated media files.
       url: `https://example.com/creative-studio/demo-${now}-${index + 1}.${creativeKind === "IMAGE" ? "jpg" : "mp4"}`,
       generatedAt: new Date(now).toLocaleString(),
       googlePack: {
@@ -4429,8 +4404,6 @@ export default function CreateCampaignPage() {
         {(
           [
             { value: "builder", label: "Campaign Builder", icon: "＋" },
-            // { value: "campaigns", label: "Campaign Management", icon: "▦" },
-            // { value: "campaign", label: "Campaign Details", icon: "▤" },
             { value: "ads", label: "Ad Management", icon: "◫" },
             { value: "assets", label: "Asset Library", icon: "▧" },
             { value: "creative", label: "AI Creative Studio", icon: "✦" },
@@ -4484,7 +4457,10 @@ export default function CreateCampaignPage() {
         <div className="mt-6 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
           {connectionError}
           <div className="mt-2">
-            <Link href="/provider" className="font-semibold underline">
+            <Link
+              href="/dashboard/provider"
+              className="font-semibold underline"
+            >
               Manage account connections
             </Link>
           </div>
@@ -4614,7 +4590,7 @@ export default function CreateCampaignPage() {
 
             {!loadingConnections && (
               <Link
-                href="/provider"
+                href="/dashboard/provider"
                 className="mt-4 inline-block text-sm font-semibold text-blue-600 hover:text-blue-800"
               >
                 Manage advertising accounts →
@@ -9961,7 +9937,7 @@ export default function CreateCampaignPage() {
 
       {workspaceView === "campaigns" && (
         <section className="mt-8 space-y-6">
-          <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-sm font-semibold text-blue-700">Workspace</p>
               <h2 className="mt-1 text-2xl font-bold text-slate-900">
@@ -9980,7 +9956,7 @@ export default function CreateCampaignPage() {
                 setError("");
                 clearPreview();
               }}
-              className="rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
+              className="w-fit shrink-0 whitespace-nowrap rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700"
             >
               + Create campaign
             </button>

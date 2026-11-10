@@ -9,7 +9,11 @@ import CampaignModel, {
     type AdvertisingProvider,
 } from "../models/campaign.model.js";
 import AdAccountModel from "../models/ad-account.model.js";
-import ProviderConnectionModel from "../models/provider-connection.model.js";
+import {
+    listMetaCustomAudiences,
+    listMetaSavedAudiences,
+} from "../metaadsAPI/services/targeting.js";
+// import ProviderConnectionModel from "../models/provider-connection.model.js";
 import {
     CampaignRequestValidationError,
     parseCreateCampaignRequest,
@@ -20,6 +24,12 @@ import {
 } from "../googleadsAPI/services/campaign-creation.js";
 
 import type { CreateGoogleAdsSearchCampaignFlowInput } from "../googleadsAPI/iterface/campaign-creation.js";
+import {
+    searchMetaLocations,
+    searchMetaDetailedTargeting,
+    MetaTargetingSearchError,
+} from "../metaadsAPI/services/targeting.js";
+// import {
 const router = Router();
 
 interface ProviderCampaignResult {
@@ -86,6 +96,20 @@ async function fetchProviderCampaigns(
         };
     }
 }
+async function getSelectedMetaAccountId(
+    userId: string,
+): Promise<string | null> {
+    const account = await AdAccountModel.findOne({
+        userId,
+        provider: "metaAds",
+        status: "active",
+        isSelected: true,
+    })
+        .select("externalAccountId")
+        .lean();
+
+    return account?.externalAccountId ?? null;
+}
 
 const mergeGoogleCampaigns = (
     apiCampaigns: any[],
@@ -151,6 +175,92 @@ const mergeGoogleCampaigns = (
         };
     });
 };
+
+/**
+ * GET /api/campaigns/meta/targeting/locations
+ *
+ * Search Meta geographic targeting locations for the campaign builder.
+ */
+router.get(
+    "/meta/targeting/locations",
+    async (req: any, res: Response) => {
+        // 1. Get authenticated Clerk user
+        const { userId } = getAuth(req);
+
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Authentication required.",
+            });
+        }
+
+        try {
+            // 2. Read query parameters safely
+            const query =
+                typeof req.query.query === "string"
+                    ? req.query.query
+                    : "";
+
+            const type =
+                typeof req.query.type === "string"
+                    ? req.query.type
+                    : "";
+
+            const countryCode =
+                typeof req.query.countryCode === "string"
+                    ? req.query.countryCode
+                    : undefined;
+
+            const regionId =
+                typeof req.query.regionId === "string"
+                    ? req.query.regionId
+                    : undefined;
+
+            const after =
+                typeof req.query.after === "string"
+                    ? req.query.after
+                    : undefined;
+
+            const limit =
+                typeof req.query.limit === "string"
+                    ? Number(req.query.limit)
+                    : 25;
+
+            // 3. Execute Meta location search
+            const result = await searchMetaLocations(
+                userId,
+                {
+                    query,
+                    type,
+                    countryCode,
+                    regionId,
+                    limit,
+                    after,
+                },
+            );
+
+            return res.status(200).json({
+                success: true,
+                data: result,
+            });
+        } catch (error) {
+            const statusCode =
+                error instanceof MetaTargetingSearchError
+                    ? error.statusCode
+                    : 502;
+
+            console.error(
+                "Meta targeting location route error:",
+                getErrorMessage(error),
+            );
+
+            return res.status(statusCode).json({
+                success: false,
+                message: getErrorMessage(error),
+            });
+        }
+    },
+);
 
 
 /**
@@ -562,6 +672,7 @@ router.post("/", async (req: Request, res: Response) => {
     }
 });
 
+
 router.get("/", async (req: Request, res: Response) => {
     try {
         const { userId } = getAuth(req);
@@ -593,60 +704,60 @@ router.get("/", async (req: Request, res: Response) => {
                 .select("externalAccountId")
                 .lean(),
         ]);
-            const savedCampaigns = await CampaignModel.find({
-    userId,
-}).lean();
+        const savedCampaigns = await CampaignModel.find({
+            userId,
+        }).lean();
 
-// console.log("MongoDB campaign merge diagnostic:", {
-//     savedCount: savedCampaigns.length,
+        // console.log("MongoDB campaign merge diagnostic:", {
+        //     savedCount: savedCampaigns.length,
 
-//     campaigns: savedCampaigns.map((campaign: any) => {
-//         const googleAds = campaign.providers?.googleAds;
+        //     campaigns: savedCampaigns.map((campaign: any) => {
+        //         const googleAds = campaign.providers?.googleAds;
 
-//         return {
-//             name: campaign.name,
-//             documentKeys: Object.keys(campaign),
-//             providerKeys: Object.keys(campaign.providers ?? {}),
-//             googleAdsKeys: Object.keys(googleAds ?? {}),
-//             googleAdsAccountId: googleAds?.accountId,
-//             googleAdsCampaignId: googleAds?.campaignId,
-//         };
-//     }),
-// });
+        //         return {
+        //             name: campaign.name,
+        //             documentKeys: Object.keys(campaign),
+        //             providerKeys: Object.keys(campaign.providers ?? {}),
+        //             googleAdsKeys: Object.keys(googleAds ?? {}),
+        //             googleAdsAccountId: googleAds?.accountId,
+        //             googleAdsCampaignId: googleAds?.campaignId,
+        //         };
+        //     }),
+        // });
 
-const totalDocuments = await CampaignModel.countDocuments();
+        const totalDocuments = await CampaignModel.countDocuments();
 
-const sample = await CampaignModel.findOne().lean() as any;
+        const sample = await CampaignModel.findOne().lean() as any;
 
-console.log("CampaignModel diagnostic:", {
-    authenticatedUserId: userId,
-    collection: CampaignModel.collection.name,
-    totalDocuments,
-    schemaPaths: Object.keys(CampaignModel.schema.paths),
+        console.log("CampaignModel diagnostic:", {
+            authenticatedUserId: userId,
+            collection: CampaignModel.collection.name,
+            totalDocuments,
+            schemaPaths: Object.keys(CampaignModel.schema.paths),
 
-    sample: sample
-        ? {
-            documentKeys: Object.keys(sample),
-
-            ownership: {
-                userId: sample.userId ?? null,
-                clerkUserId: sample.clerkUserId ?? null,
-                createdBy: sample.createdBy ?? null,
-                ownerId: sample.ownerId ?? null,
-            },
-
-            providerKeys: Object.keys(sample.providers ?? {}),
-
-            googleAds: sample.providers?.googleAds
+            sample: sample
                 ? {
-                    keys: Object.keys(sample.providers.googleAds),
-                    accountId: sample.providers.googleAds.accountId ?? null,
-                    campaignId: sample.providers.googleAds.campaignId ?? null,
+                    documentKeys: Object.keys(sample),
+
+                    ownership: {
+                        userId: sample.userId ?? null,
+                        clerkUserId: sample.clerkUserId ?? null,
+                        createdBy: sample.createdBy ?? null,
+                        ownerId: sample.ownerId ?? null,
+                    },
+
+                    providerKeys: Object.keys(sample.providers ?? {}),
+
+                    googleAds: sample.providers?.googleAds
+                        ? {
+                            keys: Object.keys(sample.providers.googleAds),
+                            accountId: sample.providers.googleAds.accountId ?? null,
+                            campaignId: sample.providers.googleAds.campaignId ?? null,
+                        }
+                        : null,
                 }
                 : null,
-        }
-        : null,
-});
+        });
 
         // Fetch both providers independently.
         const [googleResult, metaResult] = await Promise.all([
@@ -658,19 +769,19 @@ console.log("CampaignModel diagnostic:", {
             ),
         ]);
         if (googleResult.success && googleResult.data) {
-    googleResult.data = {
-        ...googleResult.data,
-        campaigns: mergeGoogleCampaigns(
-            googleResult.data.campaigns,
-            savedCampaigns,
-            googleResult.accountId!
-        ),
-    };
-}
+            googleResult.data = {
+                ...googleResult.data,
+                campaigns: mergeGoogleCampaigns(
+                    googleResult.data.campaigns,
+                    savedCampaigns,
+                    googleResult.accountId!
+                ),
+            };
+        }
         console.log(
             "googleResult", googleResult
         );
-        
+
 
         const providers = {
             googleAds: googleResult,
@@ -703,5 +814,185 @@ console.log("CampaignModel diagnostic:", {
         });
     }
 });
+
+/**
+ * GET /api/campaigns/meta/targeting/detailed
+ *
+ * Search Meta interests, behaviours and demographic categories.
+ */
+router.get(
+    "/meta/targeting/detailed",
+    async (req: any, res: Response) => {
+        const { userId } = getAuth(req);
+
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Authentication required.",
+            });
+        }
+
+        try {
+            const kind =
+                typeof req.query.kind === "string"
+                    ? req.query.kind
+                    : "";
+
+            const query =
+                typeof req.query.query === "string"
+                    ? req.query.query
+                    : undefined;
+
+            const after =
+                typeof req.query.after === "string"
+                    ? req.query.after
+                    : undefined;
+
+            const limit =
+                typeof req.query.limit === "string"
+                    ? Number(req.query.limit)
+                    : 25;
+
+            const result = await searchMetaDetailedTargeting(
+                userId,
+                {
+                    kind: kind as
+                        | "interest"
+                        | "behavior"
+                        | "demographic"
+                        | "life_event"
+                        | "industry"
+                        | "family_status"
+                        | "income",
+                    query,
+                    limit,
+                    after,
+                },
+            );
+
+            return res.status(200).json({
+                success: true,
+                data: result,
+            });
+        } catch (error) {
+            const statusCode =
+                error instanceof MetaTargetingSearchError
+                    ? error.statusCode
+                    : 502;
+
+            return res.status(statusCode).json({
+                success: false,
+                message: getErrorMessage(error),
+            });
+        }
+    },
+);
+
+// GET /api/campaigns/meta/audiences/custom
+router.get(
+    "/meta/audiences/custom",
+    async (req: Request, res: Response) => {
+        try {
+            const { userId } = getAuth(req);
+
+            if (!userId) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Authentication required.",
+                });
+            }
+
+            const accountId =
+                await getSelectedMetaAccountId(userId);
+
+            if (!accountId) {
+                return res.status(409).json({
+                    success: false,
+                    message: "No active Meta Ads account is selected.",
+                });
+            }
+
+            const limit = Number(req.query.limit ?? 50);
+            const after =
+                typeof req.query.after === "string"
+                    ? req.query.after
+                    : undefined;
+
+            const data = await listMetaCustomAudiences(
+                userId,
+                accountId,
+                { limit, after },
+            );
+
+            return res.json({
+                success: true,
+                data,
+            });
+        } catch (error) {
+            const status =
+                error instanceof MetaTargetingSearchError
+                    ? error.statusCode
+                    : 502;
+
+            return res.status(status).json({
+                success: false,
+                message: getErrorMessage(error),
+            });
+        }
+    },
+);
+// GET /api/campaigns/meta/audiences/saved
+router.get(
+    "/meta/audiences/saved",
+    async (req: Request, res: Response) => {
+        try {
+            const { userId } = getAuth(req);
+
+            if (!userId) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Authentication required.",
+                });
+            }
+
+            const accountId =
+                await getSelectedMetaAccountId(userId);
+
+            if (!accountId) {
+                return res.status(409).json({
+                    success: false,
+                    message: "No active Meta Ads account is selected.",
+                });
+            }
+
+            const limit = Number(req.query.limit ?? 50);
+            const after =
+                typeof req.query.after === "string"
+                    ? req.query.after
+                    : undefined;
+
+            const data = await listMetaSavedAudiences(
+                userId,
+                accountId,
+                { limit, after },
+            );
+
+            return res.json({
+                success: true,
+                data,
+            });
+        } catch (error) {
+            const status =
+                error instanceof MetaTargetingSearchError
+                    ? error.statusCode
+                    : 502;
+
+            return res.status(status).json({
+                success: false,
+                message: getErrorMessage(error),
+            });
+        }
+    },
+);
 
 export default router;

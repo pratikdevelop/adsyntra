@@ -103,7 +103,6 @@ export default function ProviderPage() {
   const { getToken, isLoaded, isSignedIn } = useAuth();
 
   const [google, setGoogle] = useState<ProviderConnection>(emptyProvider);
-
   const [meta, setMeta] = useState<ProviderConnection>(emptyProvider);
 
   const [isLoading, setIsLoading] = useState(true);
@@ -120,6 +119,7 @@ export default function ProviderPage() {
   const hasSelectedAccount =
     (google.connected && Boolean(google.selectedAccountId)) ||
     (meta.connected && Boolean(meta.selectedAccountId));
+
   // Load saved connections for the signed-in user.
   useEffect(() => {
     if (!isLoaded) return;
@@ -138,16 +138,13 @@ export default function ProviderPage() {
         setError("");
 
         const token = await getToken();
-
         if (!token) {
           throw new Error("Unable to get your authentication token.");
         }
 
         const response = await fetch(`${API_BASE_URL}/api/connections/me`, {
           method: "GET",
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+          headers: { Authorization: `Bearer ${token}` },
           cache: "no-store",
         });
 
@@ -161,7 +158,6 @@ export default function ProviderPage() {
         }
 
         if (cancelled) return;
-        console.log("data : ", data.providers);
 
         setGoogle(normalizeProvider(data.providers?.googleAds));
         setMeta(normalizeProvider(data.providers?.metaAds));
@@ -188,6 +184,7 @@ export default function ProviderPage() {
     };
   }, [getToken, isLoaded, isSignedIn]);
 
+  // Handle OAuth redirect feedback.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
 
@@ -196,7 +193,6 @@ export default function ProviderPage() {
         "Google Ads authorization completed. Your connection details have been refreshed.",
       );
     }
-    console.log(params.get("meta"));
 
     if (params.get("meta") === "connected") {
       setNotice(
@@ -206,7 +202,6 @@ export default function ProviderPage() {
 
     if (params.get("meta") === "error") {
       const reason = params.get("reason");
-
       const messages: Record<string, string> = {
         authorization_denied: "Meta Ads authorization was denied.",
         invalid_callback: "Invalid Meta OAuth callback. Please try again.",
@@ -215,19 +210,8 @@ export default function ProviderPage() {
         token_exchange_failed: "Meta token exchange failed. Please reconnect.",
         callback_failed: "Meta connection failed. Please try again.",
       };
-
       setError(
         messages[reason || ""] || "Unable to complete Meta Ads authorization.",
-      );
-    }
-  }, []);
-  // Show a message after Google OAuth redirects back to this page.
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-
-    if (params.get("google") === "connected") {
-      setNotice(
-        "Google Ads authorization completed. Your connection details have been refreshed.",
       );
     }
   }, []);
@@ -240,40 +224,31 @@ export default function ProviderPage() {
       setNotice("");
 
       const token = await getToken();
+      if (!token) throw new Error("Please sign in first.");
 
-      if (!token) {
-        throw new Error("Please sign in first.");
-      }
-
-      const response = await fetch(
-        `${API_BASE_URL}/api/auth/google`,
-        {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        },
-      );
+      const response = await fetch(`${API_BASE_URL}/api/auth/google`, {
+        method: "GET",
+        headers: { Authorization: `Bearer ${token}` },
+      });
 
       const data = await response.json();
-
       if (!response.ok || !data.authUrl) {
         throw new Error(
           data.message || "Unable to start Google authorization.",
         );
       }
-    console.log("data.authUrl : ", data.authUrl);
+
       window.location.assign(data.authUrl);
     } catch (err) {
       console.error("Google connection error:", err);
-
       setError(
         err instanceof Error ? err.message : "Unable to connect Google Ads.",
       );
-
       setIsConnectingGoogle(false);
     }
   };
+
+  // Start Meta OAuth.
   const connectMeta = async () => {
     try {
       setIsConnectingMeta(true);
@@ -281,21 +256,15 @@ export default function ProviderPage() {
       setNotice("");
 
       const token = await getToken();
-
-      if (!token) {
-        throw new Error("Please sign in first.");
-      }
+      if (!token) throw new Error("Please sign in first.");
 
       const response = await fetch(`${API_BASE_URL}/api/auth/meta`, {
         method: "GET",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { Authorization: `Bearer ${token}` },
         cache: "no-store",
       });
 
       const data = await response.json();
-
       if (!response.ok || !data.authUrl) {
         throw new Error(
           data.message || "Unable to start Meta Ads authorization.",
@@ -305,11 +274,9 @@ export default function ProviderPage() {
       window.location.assign(data.authUrl);
     } catch (err) {
       console.error("Meta connection error:", err);
-
       setError(
         err instanceof Error ? err.message : "Unable to connect Meta Ads.",
       );
-
       setIsConnectingMeta(false);
     }
   };
@@ -322,10 +289,7 @@ export default function ProviderPage() {
       setNotice("");
 
       const token = await getToken();
-
-      if (!token) {
-        throw new Error("Please sign in first.");
-      }
+      if (!token) throw new Error("Please sign in first.");
 
       const response = await fetch(
         `${API_BASE_URL}/api/connections/${provider}/select-account`,
@@ -340,7 +304,6 @@ export default function ProviderPage() {
       );
 
       const data = await response.json();
-
       if (!response.ok) {
         throw new Error(data.message || "Unable to select this account.");
       }
@@ -361,7 +324,6 @@ export default function ProviderPage() {
       );
     } catch (err) {
       console.error("Account selection error:", err);
-
       setError(
         err instanceof Error ? err.message : "Unable to select the account.",
       );
@@ -391,17 +353,15 @@ export default function ProviderPage() {
           <h4 className="text-sm font-semibold text-slate-800">
             Available accounts
           </h4>
-
           <span className="text-xs text-slate-500">
             {connection.accounts.length} account(s)
           </span>
         </div>
 
-        <div className="space-y-2">
+        <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
           {connection.accounts.map((account, index) => {
             const accountId = getAccountId(account);
             const accountName = getAccountName(account);
-
             const isSelected =
               accountId !== null && accountId === connection.selectedAccountId;
 
@@ -417,21 +377,19 @@ export default function ProviderPage() {
                 }}
                 className={`flex w-full items-center justify-between gap-3 rounded-xl border p-3 text-left transition ${
                   isSelected
-                    ? "border-blue-500 bg-blue-50"
+                    ? "border-blue-500 bg-blue-50 ring-1 ring-blue-200"
                     : "border-slate-200 bg-white hover:border-blue-300 hover:bg-slate-50"
                 } disabled:cursor-not-allowed disabled:opacity-60`}
               >
-                <span className="min-w-0">
+                <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-semibold text-slate-800">
                     {accountName}
                   </span>
-
                   {accountId && (
-                    <span className="mt-1 block break-all text-xs text-slate-500">
+                    <span className="mt-1 block truncate text-xs text-slate-500">
                       {accountId}
                     </span>
                   )}
-
                   {!accountId && (
                     <span className="mt-1 block text-xs text-amber-700">
                       Account ID unavailable
@@ -440,7 +398,7 @@ export default function ProviderPage() {
                 </span>
 
                 <span
-                  className={`shrink-0 rounded-lg px-3 py-2 text-xs font-semibold ${
+                  className={`shrink-0 rounded-lg px-3 py-1.5 text-xs font-semibold ${
                     isSelected
                       ? "bg-blue-600 text-white"
                       : "bg-slate-100 text-slate-700"
@@ -467,109 +425,185 @@ export default function ProviderPage() {
   };
 
   return (
-    <main className="min-h-screen bg-slate-50 text-slate-900">
-      <div className="mx-auto max-w-6xl px-5 py-10 sm:px-8">
+    <main className="min-h-screen bg-gradient-to-b from-slate-50 to-white text-slate-900">
+      <div className="mx-auto max-w-6xl px-5 py-10 sm:px-8 sm:py-14">
         {/* Header */}
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-sm font-semibold uppercase tracking-wider text-blue-600">
-              Workspace settings
-            </p>
-
-            <h1 className="mt-2 text-3xl font-bold">Account Connections</h1>
-
-            <p className="mt-2 text-slate-500">
-              Connect and manage your advertising accounts from one workspace.
-            </p>
+          <div className="flex items-start gap-4">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 text-lg font-bold text-white shadow-lg shadow-blue-500/25">
+              AS
+            </div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-widest text-blue-600">
+                AdSyntra · Workspace settings
+              </p>
+              <h1 className="mt-1 text-2xl font-bold tracking-tight sm:text-3xl">
+                Account Connections
+              </h1>
+              <p className="mt-1.5 text-sm text-slate-500">
+                Connect and manage your advertising accounts from one workspace.
+              </p>
+            </div>
           </div>
 
-          {hasSelectedAccount ? (
-            <Link
-              href="/dashboard"
-              className="w-fit rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-blue-700"
-            >
-              Go to Dashboard →
-            </Link>
-          ) : (
-            <span className="w-fit rounded-full bg-amber-50 px-4 py-2 text-sm font-medium text-amber-700">
-              Connect and select an account to continue
-            </span>
-          )}
+          {/* Status pill (replaces the dashboard button) */}
+          <div
+            className={`flex w-fit items-center gap-2 rounded-full px-4 py-2 text-sm font-medium ${
+              hasSelectedAccount
+                ? "bg-green-50 text-green-700 ring-1 ring-green-200"
+                : "bg-amber-50 text-amber-700 ring-1 ring-amber-200"
+            }`}
+          >
+            <span
+              className={`h-2 w-2 rounded-full ${
+                hasSelectedAccount ? "bg-green-500" : "bg-amber-500"
+              }`}
+            />
+            {hasSelectedAccount
+              ? "Account ready"
+              : "Connect & select an account to continue"}
+          </div>
         </div>
 
         {/* Notifications */}
         {error && (
-          <div className="mt-6 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
-            {error}
+          <div className="mt-6 flex items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+            <svg
+              className="mt-0.5 h-4 w-4 shrink-0"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"
+              />
+            </svg>
+            <span>{error}</span>
           </div>
         )}
 
         {notice && (
-          <div className="mt-6 rounded-xl border border-green-200 bg-green-50 p-4 text-sm text-green-700">
-            {notice}
+          <div className="mt-6 flex items-start gap-3 rounded-xl border border-green-200 bg-green-50 p-4 text-sm text-green-700">
+            <svg
+              className="mt-0.5 h-4 w-4 shrink-0"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
+            </svg>
+            <span>{notice}</span>
           </div>
         )}
 
         {/* Connection Summary */}
-        <div className="mt-8 grid gap-5 sm:grid-cols-2">
-          <div className="rounded-2xl border border-slate-200 bg-white p-6">
-            <p className="text-sm text-slate-500">Connected providers</p>
-
-            <div className="mt-2 flex items-end gap-2">
-              <span className="text-3xl font-bold">
+        <div className="mt-8 grid gap-4 sm:grid-cols-2">
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-slate-500">Connected providers</p>
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600">
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M13.19 8.688a4.5 4.5 0 011.242 7.244l-4.5 4.5a4.5 4.5 0 01-6.364-6.364l1.757-1.757m13.35-.622l1.757-1.757a4.5 4.5 0 00-6.364-6.364l-4.5 4.5a4.5 4.5 0 001.242 7.244"
+                  />
+                </svg>
+              </span>
+            </div>
+            <div className="mt-3 flex items-end gap-2">
+              <span className="text-3xl font-bold tracking-tight">
                 {isLoading ? "—" : connectedCount}
               </span>
-
               <span className="mb-1 text-sm text-slate-400">/ 2 providers</span>
             </div>
           </div>
 
-          <div className="rounded-2xl border border-slate-200 bg-white p-6">
-            <p className="text-sm text-slate-500">Available providers</p>
-
-            <p className="mt-2 text-3xl font-bold">2</p>
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="flex items-center justify-between">
+              <p className="text-sm text-slate-500">Available providers</p>
+              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-50 text-indigo-600">
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z"
+                  />
+                </svg>
+              </span>
+            </div>
+            <p className="mt-3 text-3xl font-bold tracking-tight">2</p>
           </div>
         </div>
 
         {/* Provider Cards */}
         <div className="mt-10">
-          <h2 className="text-lg font-bold">Advertising Platforms</h2>
-
-          <p className="mt-1 text-sm text-slate-500">
-            Connect your accounts, select an active account, and manage
-            campaigns.
-          </p>
+          <div className="flex items-end justify-between">
+            <div>
+              <h2 className="text-lg font-bold tracking-tight">
+                Advertising Platforms
+              </h2>
+              <p className="mt-1 text-sm text-slate-500">
+                Connect your accounts, select an active account, and manage
+                campaigns.
+              </p>
+            </div>
+          </div>
 
           {isLoading && (
-            <p className="mt-5 text-sm text-slate-500">
+            <p className="mt-5 animate-pulse text-sm text-slate-500">
               Loading your advertising connections...
             </p>
           )}
 
           <div className="mt-6 grid gap-6 md:grid-cols-2">
             {/* Google Ads */}
-            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <div className="flex items-center justify-between">
+            <section className="flex flex-col rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:shadow-md">
+              <div className="flex items-start justify-between">
                 <div className="flex items-center gap-4">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-slate-200 text-2xl font-bold text-blue-600">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-xl border border-slate-200 bg-white text-xl font-bold text-blue-600 shadow-sm">
                     G
                   </div>
-
                   <div>
-                    <h3 className="font-bold">Google Ads</h3>
-                    <p className="mt-1 text-xs text-slate-500">
-                      Advertising platform
+                    <h3 className="font-bold text-slate-900">Google Ads</h3>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Search, Display & Performance Max
                     </p>
                   </div>
                 </div>
 
                 <span
-                  className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                  className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${
                     google.connected
                       ? "bg-green-100 text-green-700"
                       : "bg-slate-100 text-slate-600"
                   }`}
                 >
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      google.connected ? "bg-green-500" : "bg-slate-400"
+                    }`}
+                  />
                   {google.connected ? "Connected" : "Not connected"}
                 </span>
               </div>
@@ -585,39 +619,51 @@ export default function ProviderPage() {
                 type="button"
                 onClick={connectGoogle}
                 disabled={isConnectingGoogle || isLoading}
-                className="mt-6 w-full rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                className="mt-auto pt-6"
               >
-                {isConnectingGoogle
-                  ? "Redirecting..."
-                  : google.connected
-                    ? "Reconnect Google Ads"
-                    : "Connect Google Ads"}
+                <span
+                  className={`block w-full rounded-xl px-4 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                    google.connected
+                      ? "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                      : "bg-blue-600 text-white hover:bg-blue-700"
+                  }`}
+                >
+                  {isConnectingGoogle
+                    ? "Redirecting..."
+                    : google.connected
+                      ? "Reconnect Google Ads"
+                      : "Connect Google Ads"}
+                </span>
               </button>
             </section>
 
             {/* Meta Ads */}
-            <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-              <div className="flex items-center justify-between">
+            <section className="flex flex-col rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition hover:shadow-md">
+              <div className="flex items-start justify-between">
                 <div className="flex items-center gap-4">
-                  <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-600 text-2xl font-bold text-white">
+                  <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-blue-600 to-indigo-600 text-xl font-bold text-white shadow-sm">
                     M
                   </div>
-
                   <div>
-                    <h3 className="font-bold">Meta Ads</h3>
-                    <p className="mt-1 text-xs text-slate-500">
-                      Advertising platform
+                    <h3 className="font-bold text-slate-900">Meta Ads</h3>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Facebook & Instagram campaigns
                     </p>
                   </div>
                 </div>
 
                 <span
-                  className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                  className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold ${
                     meta.connected
                       ? "bg-green-100 text-green-700"
                       : "bg-slate-100 text-slate-600"
                   }`}
                 >
+                  <span
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      meta.connected ? "bg-green-500" : "bg-slate-400"
+                    }`}
+                  />
                   {meta.connected ? "Connected" : "Not connected"}
                 </span>
               </div>
@@ -640,39 +686,51 @@ export default function ProviderPage() {
                 type="button"
                 onClick={connectMeta}
                 disabled={isConnectingMeta || isLoading}
-                className="mt-6 w-full rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                className="mt-auto pt-6"
               >
-                {isConnectingMeta
-                  ? "Redirecting to Meta..."
-                  : meta.connected
-                    ? "Reconnect Meta Ads"
-                    : "Connect Meta Ads"}
+                <span
+                  className={`block w-full rounded-xl px-4 py-3 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                    meta.connected
+                      ? "border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                      : "bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-md shadow-blue-500/20 hover:opacity-95"
+                  }`}
+                >
+                  {isConnectingMeta
+                    ? "Redirecting to Meta..."
+                    : meta.connected
+                      ? "Reconnect Meta Ads"
+                      : "Connect Meta Ads"}
+                </span>
               </button>
-
-              {/* <button
-                type="button"
-                disabled
-                className="mt-6 w-full cursor-not-allowed rounded-xl bg-slate-200 px-4 py-3 text-sm font-semibold text-slate-500"
-              >
-                {meta.connected
-                  ? "Meta Ads Connected"
-                  : "Meta Ads Integration Coming Next"}
-              </button> */}
             </section>
           </div>
         </div>
 
         {/* Information */}
-        <div className="mt-8 rounded-xl border border-blue-100 bg-blue-50 p-4">
-          <p className="text-sm font-semibold text-blue-900">
-            About account connections
-          </p>
-
-          <p className="mt-1 text-sm leading-6 text-blue-800">
-            Connection details and selected advertising accounts are loaded from
-            your backend. Google Ads and Meta Ads access tokens remain encrypted
-            on the backend and are never exposed to the frontend.
-          </p>
+        <div className="mt-8 flex items-start gap-3 rounded-xl border border-blue-100 bg-blue-50 p-4">
+          <svg
+            className="mt-0.5 h-5 w-5 shrink-0 text-blue-600"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z"
+            />
+          </svg>
+          <div>
+            <p className="text-sm font-semibold text-blue-900">
+              About account connections
+            </p>
+            <p className="mt-1 text-sm leading-6 text-blue-800">
+              Connection details and selected advertising accounts are loaded
+              from your backend. Google Ads and Meta Ads access tokens remain
+              encrypted on the backend and are never exposed to the frontend.
+            </p>
+          </div>
         </div>
       </div>
     </main>

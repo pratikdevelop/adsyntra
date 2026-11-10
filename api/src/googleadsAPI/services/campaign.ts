@@ -7,40 +7,6 @@ import type {
   GoogleAdsSearchResponse,
 } from "../iterface/campaign.js";
 
-/*const GOOGLE_DATE_PRESETS: Record<string, GoogleCampaignDatePreset> = {
-    TODAY: "TODAY",
-    YESTERDAY: "YESTERDAY",
-    LAST_7_DAYS: "LAST_7_DAYS",
-    LAST_7D: "LAST_7_DAYS",
-    LAST_BUSINESS_WEEK: "LAST_BUSINESS_WEEK",
-    LAST_14_DAYS: "LAST_14_DAYS",
-    LAST_14D: "LAST_14_DAYS",
-    LAST_30_DAYS: "LAST_30_DAYS",
-    LAST_30D: "LAST_30_DAYS",
-    THIS_MONTH: "THIS_MONTH",
-    LAST_MONTH: "LAST_MONTH",
-    THIS_WEEK_SUN_TODAY: "THIS_WEEK_SUN_TODAY",
-    THIS_WEEK_MON_TODAY: "THIS_WEEK_MON_TODAY",
-    LAST_WEEK_SUN_SAT: "LAST_WEEK_SUN_SAT",
-    LAST_WEEK_MON_SUN: "LAST_WEEK_MON_SUN",
-};
-/*
-function normalizeDatePreset(value?: string): GoogleCampaignDatePreset {
-    if (!value?.trim()) {
-        return "LAST_30_DAYS";
-    }
-
-    const normalized = GOOGLE_DATE_PRESETS[value.trim().toUpperCase()];
-
-    if (!normalized) {
-        throw new Error(
-            `Invalid Google Ads date preset '${value}'. Supported presets: ${Object.keys(GOOGLE_DATE_PRESETS).join(", ")}.`
-        );
-    }
-
-    return normalized;
-}
-*/
 
 function normalizeCustomerResourceName(customerId: string): string {
   const value = customerId.trim();
@@ -112,28 +78,24 @@ function mapGoogleCampaign(
   );
 
   const id = String(campaign.id ?? "");
-  const primaryStatus = campaign.primaryStatus ?? null;
 
-  const primaryStatusReasons = campaign.primaryStatusReasons ?? [];
-
-  const servingStatus = campaign.servingStatus ?? null;
-const campaignFields = { ...row };
-delete campaignFields.customer;
+  const campaignFields = { ...row };
+  delete campaignFields.customer;
   return {
     raw: row,
     id,
     platform: "googleAds",
     name: String(campaign.name ?? "Unnamed campaign"),
     status: campaign.status ?? null,
-    primaryStatus: campaign.primaryStatus ?? null,
+    primaryStatus: campaign[`primaryStatus`] ?? null,
 
-    primaryStatusReasons: campaign.primaryStatusReasons ?? [],
+    primaryStatusReasons: campaign[`primaryStatusReasons`] ?? [],
 
-    servingStatus: campaign.servingStatus ?? null,
+    servingStatus: campaign[`servingStatus`] ?? null,
 
-    startDateTime: campaign.startDateTime ?? null,
+    startDateTime: campaign[`startDateTime`] ?? null,
 
-    endDateTime: campaign.endDateTime ?? null,
+    endDateTime: campaign[`endDateTime`] ?? null,
 
     // Google Ads exposes campaign channel/type, not a universal objective field.
     objective: null,
@@ -169,10 +131,10 @@ delete campaignFields.customer;
           ? spend / conversions
           : null),
       conversionValue,
-          roas:
-      spend !== null && spend > 0 && conversionValue !== null
-        ? conversionValue / spend
-        : null,
+      roas:
+        spend !== null && spend > 0 && conversionValue !== null
+          ? conversionValue / spend
+          : null,
 
       reach: null,
     },
@@ -345,6 +307,7 @@ export const getCampaigns = async (
         nextToken,
         totalResults,
       },
+      currencyCode: currencyCode
     };
   } catch (error) {
     console.error(

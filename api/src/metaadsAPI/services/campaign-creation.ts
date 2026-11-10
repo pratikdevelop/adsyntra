@@ -22,24 +22,6 @@ export type MetaAdsBidStrategy =
   | "COST_CAP"
   | "LOWEST_COST_WITH_MIN_ROAS";
 
-/*export interface CreateMetaAdsCampaignInput {
-  
-  name: string;
-  // objective: string;
-  objective: MetaAdsCampaignObjective;
-  specialAdCategories?: string[];
-  buyingType?: "AUCTION" | "RESERVED";
-  isAdsetBudgetSharingEnabled?: boolean;
-  validateOnly?: boolean;
-  confirm?: boolean;
-  dailyBudgetAmount?: number;
-  budgetCurrency?: string;
-  bidStrategy?: MetaAdsBidStrategy;
-  budgetLevel?: any;
-  lifetimeBudgetAmount?: number;
-  startTime?: string;
-  stopTime?: string;
-}*/
 
 export interface CreateMetaAdsCampaignInput {
   name: string;
@@ -134,13 +116,12 @@ export interface MetaAdsAdCreationResult {
   validateOnly: boolean;
   adAccountId: string;
   adId: string | null;
-  adSetId: string;
-  creativeId: string;
+  adSetId: string | null;
+  creativeId: string | null;
   name: string;
   status: "PAUSED";
   metaResponse: Record<string, unknown> | null;
 }
-
 export type MetaAdsCallToAction =
   | "LEARN_MORE"
   | "SHOP_NOW"
@@ -210,7 +191,7 @@ export class MetaAdsCampaignCreationError extends Error {
 function toMetaMinorCurrencyUnits(amount: number, currency: string): string {
   if (!Number.isFinite(amount) || amount <= 0) {
     throw new MetaAdsCampaignCreationError(
-      "Daily budget must be a positive number.",
+      "Amount must be a positive number.",
       400,
     );
   }
@@ -241,7 +222,7 @@ function toMetaMinorCurrencyUnits(amount: number, currency: string): string {
 
   if (!Number.isSafeInteger(minorUnits) || minorUnits <= 0) {
     throw new MetaAdsCampaignCreationError(
-      "Daily budget is outside the supported amount range.",
+      "Amount is outside the supported range.",
       400,
     );
   }
@@ -287,22 +268,6 @@ export interface MetaGeoLocations {
 export type MetaExcludedGeoLocations = Omit<MetaGeoLocations, "location_types">;
 
 
-
-export interface MetaAdsPromotedObject {
-  pixel_id?: string;
-  custom_event_type?: string;
-  custom_event_str?: string;
-
-  page_id?: string;
-
-  application_id?: string;
-  object_store_url?: string;
-
-  custom_conversion_id?: string;
-  offline_conversion_data_set_id?: string;
-  product_set_id?: string;
-}
-
 const META_BILLING_EVENTS_BY_GOAL: Record<
   string,
   readonly string[]
@@ -347,238 +312,6 @@ const META_REQUIRED_DESTINATION_BY_GOAL: Partial<
 
   APP_INSTALLS: "APP_STORE",
 };
-
-interface MetaObjectiveValidationResult {
-  destinationType?: MetaAdsDestinationType;
-}
-
-/* function validateMetaObjectiveCompatibility(
-//   input: MetaObjectiveValidationInput,
-// ): MetaObjectiveValidationResult {
-//   const objective = input.campaignObjective;
-//   const goal = input.optimizationGoal;
-//   const billingEvent = input.billingEvent;
-
-//   // 1. Validate Campaign objective
-//   const supportedObjectives = Object.keys(
-//     META_OPTIMIZATION_GOALS_BY_OBJECTIVE,
-//   );
-
-//   if (
-//     !supportedObjectives.includes(objective)
-//   ) {
-//     throw new MetaAdsCampaignCreationError(
-//       "Unsupported Meta campaign objective.",
-//       400,
-//     );
-//   }
-
-//   // 2. Validate objective and optimization-goal combination
-//   const supportedGoals =
-//     META_OPTIMIZATION_GOALS_BY_OBJECTIVE[objective];
-
-//   if (!supportedGoals.includes(goal)) {
-//     throw new MetaAdsCampaignCreationError(
-//       `Optimization goal ${goal} is not supported for campaign objective ${objective}.`,
-//       400,
-//     );
-//   }
-
-//   // 3. Validate billing event
-//   const allowedBillingEvents =
-//     META_BILLING_EVENTS_BY_GOAL[goal] ??
-//     META_BILLING_EVENTS_BY_GOAL.DEFAULT;
-
-//   if (!allowedBillingEvents.includes(billingEvent)) {
-//     throw new MetaAdsCampaignCreationError(
-//       `Billing event ${billingEvent} is not supported for optimization goal ${goal}.`,
-//       400,
-//     );
-//   }
-
-//   // 4. Resolve destination
-//   let expectedDestination =
-//     META_REQUIRED_DESTINATION_BY_GOAL[goal];
-
-//   if (
-//     goal === "OFFSITE_CONVERSIONS" ||
-//     goal === "VALUE"
-//   ) {
-//     expectedDestination =
-//       objective === "OUTCOME_APP_PROMOTION"
-//         ? "APP_STORE"
-//         : "WEBSITE";
-//   }
-
-//   if (goal === "CONVERSATIONS") {
-//     const messagingDestinations: MetaAdsDestinationType[] = [
-//       "MESSENGER",
-//       "WHATSAPP",
-//       "INSTAGRAM_DIRECT",
-//     ];
-
-//     if (
-//       !input.destinationType ||
-//       !messagingDestinations.includes(input.destinationType)
-//     ) {
-//       throw new MetaAdsCampaignCreationError(
-//         "CONVERSATIONS requires a messaging destination: MESSENGER, WHATSAPP or INSTAGRAM_DIRECT.",
-//         400,
-//       );
-//     }
-
-//     expectedDestination = input.destinationType;
-//   }
-
-//   if (
-//     input.destinationType &&
-//     expectedDestination &&
-//     input.destinationType !== expectedDestination
-//   ) {
-//     throw new MetaAdsCampaignCreationError(
-//       `Destination ${input.destinationType} is incompatible with optimization goal ${goal}. Expected ${expectedDestination}.`,
-//       400,
-//     );
-//   }
-
-//   const destinationType =
-//     input.destinationType ?? expectedDestination;
-
-//   // 5. Validate promoted-object identifiers
-//   const promoted = input.promotedObject;
-
-//   const validateNumericId = (
-//     value: string | undefined,
-//     fieldName: string,
-//   ) => {
-//     if (value !== undefined && !/^\d+$/.test(value.trim())) {
-//       throw new MetaAdsCampaignCreationError(
-//         `${fieldName} must be a numeric ID.`,
-//         400,
-//       );
-//     }
-//   };
-
-//   validateNumericId(promoted?.pixel_id, "pixel_id");
-//   validateNumericId(promoted?.page_id, "page_id");
-//   validateNumericId(promoted?.application_id, "application_id");
-//   validateNumericId(promoted?.custom_conversion_id, "custom_conversion_id");
-//   validateNumericId(
-//     promoted?.offline_conversion_data_set_id,
-//     "offline_conversion_data_set_id",
-//   );
-//   validateNumericId(promoted?.product_set_id, "product_set_id");
-
-//   // 6. Website conversion goals require a conversion source
-//   if (
-//     (
-//       goal === "OFFSITE_CONVERSIONS" ||
-//       goal === "VALUE"
-//     ) &&
-//     objective !== "OUTCOME_APP_PROMOTION"
-//   ) {
-//     const hasPixelEvent =
-//       Boolean(
-//         promoted?.pixel_id &&
-//         promoted?.custom_event_type,
-//       );
-
-//     const hasCustomConversion =
-//       Boolean(promoted?.custom_conversion_id);
-
-//     const hasOfflineEvent =
-//       Boolean(
-//         promoted?.offline_conversion_data_set_id &&
-//         promoted?.custom_event_type,
-//       );
-
-//     if (
-//       !hasPixelEvent &&
-//       !hasCustomConversion &&
-//       !hasOfflineEvent
-//     ) {
-//       throw new MetaAdsCampaignCreationError(
-//         `${goal} requires a Pixel with a conversion event, a Custom Conversion ID, or an Offline Conversion Dataset with an event.`,
-//         400,
-//       );
-//     }
-
-//     if (
-//       promoted?.custom_event_type === "OTHER" &&
-//       !promoted?.custom_event_str?.trim()
-//     ) {
-//       throw new MetaAdsCampaignCreationError(
-//         "custom_event_str is required when custom_event_type is OTHER.",
-//         400,
-//       );
-//     }
-//   }
-
-//   // 7. App promotion requirements
-//   if (
-//     objective === "OUTCOME_APP_PROMOTION" &&
-//     (
-//       goal === "APP_INSTALLS" ||
-//       goal === "OFFSITE_CONVERSIONS" ||
-//       goal === "VALUE"
-//     )
-//   ) {
-//     if (
-//       !promoted?.application_id ||
-//       !promoted?.object_store_url
-//     ) {
-//       throw new MetaAdsCampaignCreationError(
-//         `${goal} for App Promotion requires application_id and object_store_url.`,
-//         400,
-//       );
-//     }
-
-//     try {
-//       const storeUrl = new URL(promoted.object_store_url);
-
-//       if (storeUrl.protocol !== "https:") {
-//         throw new Error("Invalid store URL");
-//       }
-//     } catch {
-//       throw new MetaAdsCampaignCreationError(
-//         "object_store_url must be a valid HTTPS URL.",
-//         400,
-//       );
-//     }
-
-//     if (
-//       goal === "OFFSITE_CONVERSIONS" ||
-//       goal === "VALUE"
-//     ) {
-//       if (!promoted.custom_event_type) {
-//         throw new MetaAdsCampaignCreationError(
-//           "App conversion optimization requires custom_event_type.",
-//           400,
-//         );
-//       }
-//     }
-//   }
-
-//   // 8. Page-dependent objectives
-//   if (
-//     [
-//       "LEAD_GENERATION",
-//       "PAGE_LIKES",
-//       "POST_ENGAGEMENT",
-//     ].includes(goal) &&
-//     !promoted?.page_id
-//   ) {
-//     throw new MetaAdsCampaignCreationError(
-//       `${goal} requires promoted_object.page_id.`,
-//       400,
-//     );
-//   }
-
-//   return {
-//     destinationType,
-//   };
-// }
-*/
 
 
 export interface CreateMetaAdsCampaignBundleInput {
@@ -642,8 +375,8 @@ export interface MetaAdsTargeting {
 
 export interface MetaAdsAdSetCreationResult {
   validateOnly: boolean;
-  adAccountId: string;
-  campaignId: string;
+  adAccountId: string | null;
+  campaignId: string | null;
   adSetId: string | null;
   name: string;
   status: "PAUSED";
@@ -759,7 +492,7 @@ function normalizeMetaSchedule(
 
   if (lifetimeBudget && !normalizedEnd) {
     throw new MetaAdsCampaignCreationError(
-      "An endTime is required for a lifetime-budget Ad Set.",
+      "An endTime is required when using a lifetime budget.",
       400,
     );
   }
@@ -1060,7 +793,7 @@ function normalizeMetaPlacementSettings(
       );
     }
 
-    result.device_platforms = [
+    result[`device_platforms`] = [
       ...new Set(input.devicePlatforms),
     ];
   }
@@ -1116,421 +849,6 @@ function getMetaApiVersion(): string {
 
   return version;
 }
-/*
-function validateCreateCampaignInput(
-  input: any,
-): Required<
-  Pick<
-    CreateMetaAdsCampaignInput,
-    "name" | "objective" | "specialAdCategories" | "buyingType" | "validateOnly"
-  >
-> & {
-  isAdsetBudgetSharingEnabled?: boolean;
-  confirm?: boolean;
-  dailyBudgetMinorUnits?: string;
-  lifetimeBudgetMinorUnits?: string;
-  bidStrategy?: MetaAdsBidStrategy;
-} {
-  const name = input.name?.trim();
-  if (!name || name.length > 255 || /[\0\r\n]/.test(name)) {
-    throw new MetaAdsCampaignCreationError(
-      "Campaign name is required and must not exceed 255 characters.",
-      400,
-    );
-  }
-
-  const objective = input.objective?.trim().toUpperCase();
-  if (!objective || objective.length > 120) {
-    throw new MetaAdsCampaignCreationError(
-      "A valid Meta Ads campaign objective is required.",
-      400,
-    );
-  }
-  const supportedObjectives: MetaAdsCampaignObjective[] = [
-    "OUTCOME_AWARENESS",
-    "OUTCOME_TRAFFIC",
-    "OUTCOME_ENGAGEMENT",
-    "OUTCOME_LEADS",
-    "OUTCOME_SALES",
-    "OUTCOME_APP_PROMOTION",
-  ];
-
-  if (!supportedObjectives.includes(
-    objective as MetaAdsCampaignObjective,
-  )) {
-    throw new MetaAdsCampaignCreationError(
-      "Unsupported Meta campaign objective. Use a supported outcome-based objective.",
-      400,
-    );
-  }
-
-  const specialAdCategories = input.specialAdCategories ?? [];
-  if (
-    !Array.isArray(specialAdCategories) ||
-    !specialAdCategories.every(
-      (category) =>
-        typeof category === "string" &&
-        category.trim().length > 0 &&
-        category.trim().length <= 80,
-    )
-  ) {
-    throw new MetaAdsCampaignCreationError(
-      "specialAdCategories must be an array of non-empty category strings.",
-      400,
-    );
-  }
-
-  const normalizedCategories = specialAdCategories.map((category) =>
-    category.trim().toUpperCase(),
-  );
-
-  if (new Set(normalizedCategories).size !== normalizedCategories.length) {
-    throw new MetaAdsCampaignCreationError(
-      "specialAdCategories must not contain duplicate values.",
-      400,
-    );
-  }
-
-  const buyingType = input.buyingType ?? "AUCTION";
-  if (buyingType !== "AUCTION" && buyingType !== "RESERVED") {
-    throw new MetaAdsCampaignCreationError(
-      "buyingType must be AUCTION or RESERVED.",
-      400,
-    );
-  }
-
-  if (
-    input.isAdsetBudgetSharingEnabled !== undefined &&
-    typeof input.isAdsetBudgetSharingEnabled !== "boolean"
-  ) {
-    throw new MetaAdsCampaignCreationError(
-      "isAdsetBudgetSharingEnabled must be a boolean.",
-      400,
-    );
-  }
-
-  const validateOnly = input.validateOnly ?? true;
-  if (typeof validateOnly !== "boolean") {
-    throw new MetaAdsCampaignCreationError(
-      "validateOnly must be a boolean.",
-      400,
-    );
-  }
-
-  if (!validateOnly && input.confirm !== true) {
-    throw new MetaAdsCampaignCreationError(
-      "Live Meta Ads campaign creation requires confirm: true and validateOnly: false.",
-      400,
-    );
-  }
-  const supportedBidStrategies: MetaAdsBidStrategy[] = [
-    "LOWEST_COST_WITHOUT_CAP",
-    "LOWEST_COST_WITH_BID_CAP",
-    "COST_CAP",
-    "LOWEST_COST_WITH_MIN_ROAS",
-  ];
-
-  let bidStrategy = input.bid_strategy;
-
-
-  let bidAmountMinorUnits: string | undefined;
-
-  // 1. Determine budget ownership
-  const hasDailyBudget =
-    input.dailyBudgetAmount !== undefined;
-
-  const hasLifetimeBudget =
-    input.lifetimeBudgetAmount !== undefined;
-
-  if (hasDailyBudget && hasLifetimeBudget) {
-    throw new MetaAdsCampaignCreationError(
-      "Provide either dailyBudgetAmount or lifetimeBudgetAmount, not both.",
-      400,
-    );
-  }
-
-  const budgetLevel =
-    input.budgetLevel ??
-    (hasDailyBudget || hasLifetimeBudget
-      ? "AD_SET"
-      : "CAMPAIGN");
-  if (budgetLevel === "AD_SET") {
-    bidStrategy ??= "LOWEST_COST_WITHOUT_CAP";
-
-    if (!supportedBidStrategies.includes(bidStrategy)) {
-      throw new MetaAdsCampaignCreationError(
-        "Unsupported Ad Set bid strategy.",
-        400,
-      );
-    }
-  }
-
-  if (budgetLevel === "AD_SET") {
-    const requiresBidAmount = [
-      "LOWEST_COST_WITH_BID_CAP",
-      "COST_CAP",
-    ].includes(bidStrategy!);
-
-    if (requiresBidAmount) {
-      if (
-        input.bidAmountInput === undefined ||
-        !input.budgetCurrency?.trim()
-      ) {
-        throw new MetaAdsCampaignCreationError(
-          "A bid amount and account currency are required for the selected bid strategy.",
-          400,
-        );
-      }
-
-      bidAmountMinorUnits = toMetaMinorCurrencyUnits(
-        input.bidAmountInput,
-        input.budgetCurrency,
-      );
-    } else if (
-      input.bidAmountInput !== undefined
-    ) {
-      throw new MetaAdsCampaignCreationError(
-        "bidAmountInput is not applicable to the selected bid strategy.",
-        400,
-      );
-    }
-
-    if (bidStrategy === "LOWEST_COST_WITH_MIN_ROAS") {
-      if (
-        optimizationGoal !== "VALUE" ||
-        !input.bid_constraints ||
-        !Number.isSafeInteger(
-          input.bid_constraints.roas_average_floor,
-        ) ||
-        input.bid_constraints.roas_average_floor <= 0
-      ) {
-        throw new MetaAdsCampaignCreationError(
-          "Minimum ROAS requires VALUE optimization and a positive ROAS floor.",
-          400,
-        );
-      }
-    } else if (input.bid_constraints !== undefined) {
-      throw new MetaAdsCampaignCreationError(
-        "bid_constraints are only supported for the Minimum ROAS strategy in this implementation.",
-        400,
-      );
-    }
-  }
-
-  // 2. Validate budget placement
-  if (
-    budgetLevel !== "CAMPAIGN" &&
-    budgetLevel !== "AD_SET"
-  ) {
-    throw new MetaAdsCampaignCreationError(
-      "budgetLevel must be CAMPAIGN or AD_SET.",
-      400,
-    );
-  }
-
-  if (
-    budgetLevel === "CAMPAIGN" &&
-    (hasDailyBudget || hasLifetimeBudget)
-  ) {
-    throw new MetaAdsCampaignCreationError(
-      "Campaign-level budgeting must not include an Ad Set budget.",
-      400,
-    );
-  }
-
-  if (
-    budgetLevel === "AD_SET" &&
-    !hasDailyBudget &&
-    !hasLifetimeBudget
-  ) {
-    throw new MetaAdsCampaignCreationError(
-      "An Ad Set-level daily or lifetime budget is required.",
-      400,
-    );
-  }
-
-  // 3. Convert budget into account currency minor units
-  let dailyBudgetMinorUnits: string | undefined;
-  let lifetimeBudgetMinorUnits: string | undefined;
-
-  if (hasDailyBudget || hasLifetimeBudget) {
-    if (!input.budgetCurrency?.trim()) {
-      throw new MetaAdsCampaignCreationError(
-        "Account currency is required for budget conversion.",
-        400,
-      );
-    }
-
-    if (hasDailyBudget) {
-      dailyBudgetMinorUnits = toMetaMinorCurrencyUnits(
-        input.dailyBudgetAmount!,
-        input.budgetCurrency,
-      );
-    }
-
-    if (hasLifetimeBudget) {
-      lifetimeBudgetMinorUnits = toMetaMinorCurrencyUnits(
-        input.lifetimeBudgetAmount!,
-        input.budgetCurrency,
-      );
-    }
-  }
-
-  // let bidStrategy = input.bid_strategy;
-
-  if (budgetLevel === "AD_SET") {
-    bidStrategy ??= "LOWEST_COST_WITHOUT_CAP";
-
-    if (!supportedBidStrategies.includes(bidStrategy)) {
-      throw new MetaAdsCampaignCreationError(
-        "Unsupported Ad Set bid strategy.",
-        400,
-      );
-    }
-  }
-
-  // let bidAmountMinorUnits: string | undefined;
-
-  if (budgetLevel === "AD_SET") {
-    const requiresBidAmount = [
-      "LOWEST_COST_WITH_BID_CAP",
-      "COST_CAP",
-    ].includes(bidStrategy!);
-
-    if (requiresBidAmount) {
-      if (
-        input.bidAmountInput === undefined ||
-        !input.budgetCurrency?.trim()
-      ) {
-        throw new MetaAdsCampaignCreationError(
-          "A bid amount and account currency are required for the selected bid strategy.",
-          400,
-        );
-      }
-
-      bidAmountMinorUnits = toMetaMinorCurrencyUnits(
-        input.bidAmountInput,
-        input.budgetCurrency,
-      );
-    } else if (
-      input.bidAmountInput !== undefined
-    ) {
-      throw new MetaAdsCampaignCreationError(
-        "bidAmountInput is not applicable to the selected bid strategy.",
-        400,
-      );
-    }
-
-    if (bidStrategy === "LOWEST_COST_WITH_MIN_ROAS") {
-      if (
-        optimizationGoal !== "VALUE" ||
-        !input.bid_constraints ||
-        !Number.isSafeInteger(
-          input.bid_constraints.roas_average_floor,
-        ) ||
-        input.bid_constraints.roas_average_floor <= 0
-      ) {
-        throw new MetaAdsCampaignCreationError(
-          "Minimum ROAS requires VALUE optimization and a positive ROAS floor.",
-          400,
-        );
-      }
-    } else if (input.bid_constraints !== undefined) {
-      throw new MetaAdsCampaignCreationError(
-        "bid_constraints are only supported for the Minimum ROAS strategy in this implementation.",
-        400,
-      );
-    }
-  }
-  const allowedBidStrategies: MetaAdsBidStrategy[] = [
-    "LOWEST_COST_WITHOUT_CAP",
-    "LOWEST_COST_WITH_BID_CAP",
-    "COST_CAP",
-    "LOWEST_COST_WITH_MIN_ROAS",
-  ];
-
-  if (
-    input.bidStrategy !== undefined &&
-    !allowedBidStrategies.includes(input.bidStrategy)
-  ) {
-    throw new MetaAdsCampaignCreationError(
-      "Unsupported Meta Ads bid strategy.",
-      400,
-    );
-  }
-
-  // const budgetLevel = input.budgetLevel ?? "CAMPAIGN";
-
-  // const hasDailyBudget =
-  //   input.dailyBudgetAmount !== undefined;
-
-  // const hasLifetimeBudget =
-  //   input.lifetimeBudgetAmount !== undefined;
-
-  // if (hasDailyBudget && hasLifetimeBudget) {
-  //   throw new MetaAdsCampaignCreationError(
-  //     "Provide either a daily or lifetime campaign budget, not both.",
-  //     400,
-  //   );
-  // }
-
-  if (
-    budgetLevel === "CAMPAIGN" &&
-    !hasDailyBudget &&
-    !hasLifetimeBudget
-  ) {
-    throw new MetaAdsCampaignCreationError(
-      "Campaign-level budgeting requires a daily or lifetime budget.",
-      400,
-    );
-  }
-
-  if (
-    budgetLevel === "AD_SET" &&
-    (hasDailyBudget || hasLifetimeBudget || input.bidStrategy)
-  ) {
-    throw new MetaAdsCampaignCreationError(
-      "Campaign budget and bidding fields must be omitted when using Ad Set-level budgeting.",
-      400,
-    );
-  }
-
-  if (
-    budgetLevel !== "CAMPAIGN" &&
-    budgetLevel !== "AD_SET"
-  ) {
-    throw new MetaAdsCampaignCreationError(
-      "Invalid Meta Ads budget level.",
-      400,
-    );
-  }
-
-
-  const campaignSchedule = normalizeMetaSchedule(
-    input.startTime,
-    input.stopTime,
-    hasLifetimeBudget,
-  );
-
-  return {
-    dailyBudgetMinorUnits,
-    bidStrategy: input.bidStrategy,
-    name,
-    objective,
-    specialAdCategories: normalizedCategories,
-    buyingType,
-    isAdsetBudgetSharingEnabled: input.isAdsetBudgetSharingEnabled,
-    validateOnly,
-    budgetLevel: budgetLevel,
-    // dailyBudgetMinorUnits: dailyBudgetMinorUnits,
-    lifetimeBudgetMinorUnits,
-    startTime: campaignSchedule.startTime,
-    stopTime: campaignSchedule.endTime,
-    // bidStrategy: input.bidStrategy,
-    confirm: input.confirm,
-    objective: objective as MetaAdsCampaignObjective,
-  };
-}*/
 
 function validateCreateCampaignInput(
   input: CreateMetaAdsCampaignInput,
@@ -1890,7 +1208,8 @@ function normalizeMetaFlexibleSpec(
 }
 
 function normalizeMetaGeoLocations(
-  value: MetaGeoLocations | MetaExcludedGeoLocations | undefined,
+  // value: MetaGeoLocations | MetaExcludedGeoLocations | undefined,
+  value: any,
   fieldName: string,
   requireIncludedLocation = false,
 ): MetaGeoLocations | MetaExcludedGeoLocations {
@@ -1901,14 +1220,14 @@ function normalizeMetaGeoLocations(
     );
   }
 
-  const normalized: MetaGeoLocations = {};
+  const normalized: any = {};
 
   // 1. Countries
   if (value.countries !== undefined) {
     if (
       !Array.isArray(value.countries) ||
       !value.countries.every(
-        (country) =>
+        (country: any) =>
           typeof country === "string" && /^[A-Za-z]{2}$/.test(country.trim()),
       )
     ) {
@@ -1918,9 +1237,9 @@ function normalizeMetaGeoLocations(
       );
     }
 
-    normalized.countries = [
+    normalized[`countries`] = [
       ...new Set(
-        value.countries.map((country) => country.trim().toUpperCase()),
+        value.countries.map((country: any) => country.trim().toUpperCase()),
       ),
     ];
   }
@@ -1941,7 +1260,7 @@ function normalizeMetaGeoLocations(
     if (
       !Array.isArray(value.country_groups) ||
       !value.country_groups.every(
-        (group) =>
+        (group: any) =>
           typeof group === "string" &&
           supportedGroups.includes(group.trim().toLowerCase()),
       )
@@ -1954,7 +1273,7 @@ function normalizeMetaGeoLocations(
 
     normalized.country_groups = [
       ...new Set(
-        value.country_groups.map((group) => group.trim().toLowerCase()),
+        value.country_groups.map((group: any) => group.trim().toLowerCase()),
       ),
     ];
   }
@@ -1964,7 +1283,7 @@ function normalizeMetaGeoLocations(
     if (
       !Array.isArray(value.regions) ||
       !value.regions.every(
-        (item) => typeof item?.key === "string" && item.key.trim().length > 0,
+        (item: any) => typeof item?.key === "string" && item.key.trim().length > 0,
       )
     ) {
       throw new MetaAdsCampaignCreationError(
@@ -1973,7 +1292,7 @@ function normalizeMetaGeoLocations(
       );
     }
 
-    normalized.regions = value.regions.map((item) => ({
+    normalized.regions = value.regions.map((item: any) => ({
       key: item.key.trim(),
     }));
   }
@@ -1983,7 +1302,7 @@ function normalizeMetaGeoLocations(
     if (
       !Array.isArray(value.cities) ||
       !value.cities.every(
-        (city) => typeof city?.key === "string" && city.key.trim().length > 0,
+        (city: any) => typeof city?.key === "string" && city.key.trim().length > 0,
       )
     ) {
       throw new MetaAdsCampaignCreationError(
@@ -1992,7 +1311,7 @@ function normalizeMetaGeoLocations(
       );
     }
 
-    normalized.cities = value.cities.map((city) => {
+    normalized.cities = value.cities.map((city: any) => {
       const hasRadius = city.radius !== undefined;
       const hasUnit = city.distance_unit !== undefined;
 
@@ -2030,7 +1349,7 @@ function normalizeMetaGeoLocations(
     if (
       !Array.isArray(value.zips) ||
       !value.zips.every(
-        (zip) => typeof zip?.key === "string" && zip.key.trim().length > 0,
+        (zip: any) => typeof zip?.key === "string" && zip.key.trim().length > 0,
       )
     ) {
       throw new MetaAdsCampaignCreationError(
@@ -2039,7 +1358,7 @@ function normalizeMetaGeoLocations(
       );
     }
 
-    normalized.zips = value.zips.map((zip) => ({
+    normalized.zips = value.zips.map((zip: any) => ({
       key: zip.key.trim(),
     }));
   }
@@ -2053,7 +1372,7 @@ function normalizeMetaGeoLocations(
       );
     }
 
-    normalized.custom_locations = value.custom_locations.map((location) => {
+    normalized.custom_locations = value.custom_locations.map((location: any) => {
       if (
         !Number.isFinite(location.latitude) ||
         location.latitude < -90 ||
@@ -2109,10 +1428,10 @@ function normalizeMetaGeoLocations(
   }
 
   // 7. Location types
-  if (value.location_types !== undefined) {
+  if (value[`location_types`] !== undefined) {
     const supportedTypes: MetaLocationType[] = ["home", "recent", "travel_in"];
 
-    const types = value.location_types;
+    const types = value[`location_types`];
 
     const validCombination =
       Array.isArray(types) &&
@@ -2199,17 +1518,17 @@ function buildMetaAdvantageAudienceTargeting(
   const individualSetting: Record<string, 0 | 1> = {};
 
   if (settings?.ageAsSuggestion !== undefined) {
-    individualSetting.age =
+    individualSetting[`age`] =
       settings.ageAsSuggestion ? 1 : 0;
   }
 
   if (settings?.genderAsSuggestion !== undefined) {
-    individualSetting.gender =
+    individualSetting[`gender`] =
       settings.genderAsSuggestion ? 1 : 0;
   }
 
   if (deviceExpansion !== undefined) {
-    individualSetting.device =
+    individualSetting[`device`] =
       deviceExpansion ? 1 : 0;
   }
 
@@ -2225,7 +1544,7 @@ function buildMetaAdvantageAudienceTargeting(
       }
       : undefined;
 
-  const targetingRelaxationTypes: Record<string, 0 | 1> = {};
+  const targetingRelaxationTypes: any = {};
 
   if (settings?.customAudienceExpansion !== undefined) {
     targetingRelaxationTypes.custom_audience =
@@ -2438,6 +1757,7 @@ export interface MetaAdsPromotedObject {
   custom_conversion_id?: string;
   offline_conversion_data_set_id?: string;
   product_set_id?: string;
+
 }
 
 export type MetaDevicePlatform =
@@ -2517,9 +1837,9 @@ function validateMetaObjectiveCompatibility(
   }
 
   // 3. Validate billing event
-  const allowedBillingEvents =
+  const allowedBillingEvents: any =
     META_BILLING_EVENTS_BY_GOAL[goal] ??
-    META_BILLING_EVENTS_BY_GOAL.DEFAULT;
+    META_BILLING_EVENTS_BY_GOAL[`DEFAULT`];
 
   if (!allowedBillingEvents.includes(billingEvent)) {
     throw new MetaAdsCampaignCreationError(
@@ -3109,7 +2429,7 @@ export async function createMetaAdsAdSet(
 
   // Detailed-targeting exclusions are not supported.
   // Custom Audience exclusions will be handled separately.
-  if ((input.targeting as Record<string, unknown>).exclusions !== undefined) {
+  if ((input.targeting as Record<string, unknown>)[`exclusions`] !== undefined) {
     throw new MetaAdsCampaignCreationError(
       "Detailed targeting exclusions are no longer supported. Use excluded custom audiences for audience exclusions.",
       400,
@@ -3167,30 +2487,6 @@ export async function createMetaAdsAdSet(
     // Stage 6: Placement and device settings
     ...placementTargeting,
   };
-  if (
-    !targeting ||
-    typeof targeting !== "object" ||
-    !targeting.geo_locations ||
-    !Array.isArray(targeting.geo_locations.countries) ||
-    targeting.geo_locations.countries.length === 0 ||
-    !targeting.geo_locations.countries.every(
-      (country) =>
-        typeof country === "string" && /^[A-Za-z]{2}$/.test(country.trim()),
-    )
-  ) {
-    throw new MetaAdsCampaignCreationError(
-      "At least one valid two-letter country code is required in targeting.",
-      400,
-    );
-  }
-
-  const countries = [
-    ...new Set(
-      targeting.geo_locations.countries.map((country) =>
-        country.trim().toUpperCase(),
-      ),
-    ),
-  ];
 
   if (
     targeting.age_min !== undefined &&
@@ -3404,7 +2700,44 @@ export async function createMetaAdsAdSet(
     metaResponse: responseBody as Record<string, unknown>,
   };
 }
+function validateMetaHttpsUrl(
+  value: string,
+  fieldName: string,
+): string {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new MetaAdsCampaignCreationError(
+      `${fieldName} is required.`,
+      400,
+    );
+  }
 
+  let parsedUrl: URL;
+
+  try {
+    parsedUrl = new URL(value.trim());
+  } catch {
+    throw new MetaAdsCampaignCreationError(
+      `${fieldName} must be a valid URL.`,
+      400,
+    );
+  }
+
+  if (parsedUrl.protocol !== "https:") {
+    throw new MetaAdsCampaignCreationError(
+      `${fieldName} must use HTTPS.`,
+      400,
+    );
+  }
+
+  if (parsedUrl.username || parsedUrl.password) {
+    throw new MetaAdsCampaignCreationError(
+      `${fieldName} must not contain embedded credentials.`,
+      400,
+    );
+  }
+
+  return parsedUrl.toString();
+}
 export async function createMetaAdsAdCreative(
   context: MetaAdsCreationContext,
   input: CreateMetaAdsAdCreativeInput,
@@ -3603,218 +2936,12 @@ export async function createMetaAdsAdCreative(
   };
 }
 
-/*
-export async function createMetaAdsAdCreative(
-  context: MetaAdsCreationContext,
-  input: CreateMetaAdsAdCreativeInput,
-): Promise<MetaAdsAdCreativeCreationResult> {
-  // 1. Validate creative name
-  const name = input.name?.trim();
 
-  if (!name || name.length > 100) {
-    throw new MetaAdsCampaignCreationError(
-      "Creative name is required and must not exceed 100 characters.",
-      400,
-    );
-  }
-
-  // 2. Validate Facebook Page ID
-  const pageId = input.pageId?.trim();
-
-  if (!pageId || !/^\d+$/.test(pageId)) {
-    throw new MetaAdsCampaignCreationError(
-      "A valid numeric Facebook Page ID is required.",
-      400,
-    );
-  }
-
-  // 3. Validate optional Instagram Actor ID
-  const instagramActorId = input.instagramActorId?.trim();
-
-  if (instagramActorId && !/^\d+$/.test(instagramActorId)) {
-    throw new MetaAdsCampaignCreationError(
-      "Instagram Actor ID must be numeric.",
-      400,
-    );
-  }
-
-  // 4. Validate creative text
-  const primaryText = input.primaryText?.trim();
-  const headline = input.headline?.trim();
-  const description = input.description?.trim();
-
-  if (!primaryText || !headline) {
-    throw new MetaAdsCampaignCreationError(
-      "Primary text and headline are required.",
-      400,
-    );
-  }
-
-  // 5. Validate image and destination URLs
-  const imageUrl = validateMetaHttpsUrl(
-    input.imageUrl,
-    "Creative image URL",
-  );
-
-  const destinationUrl = validateMetaHttpsUrl(
-    input.destinationUrl,
-    "Destination URL",
-  );
-
-  // 6. Validate CTA
-  const supportedCtas: MetaAdsCallToAction[] = [
-    "LEARN_MORE",
-    "SHOP_NOW",
-    "SIGN_UP",
-    "CONTACT_US",
-    "GET_QUOTE",
-    "DOWNLOAD",
-  ];
-
-  if (!supportedCtas.includes(input.callToAction)) {
-    throw new MetaAdsCampaignCreationError(
-      "Unsupported Meta Ads call-to-action type.",
-      400,
-    );
-  }
-
-  // 7. Validate mutation mode
-  const validateOnly = input.validateOnly ?? true;
-
-  if (typeof validateOnly !== "boolean") {
-    throw new MetaAdsCampaignCreationError(
-      "validateOnly must be a boolean.",
-      400,
-    );
-  }
-
-  if (!validateOnly && input.confirm !== true) {
-    throw new MetaAdsCampaignCreationError(
-      "Live Ad Creative creation requires validateOnly: false and confirm: true.",
-      400,
-    );
-  }
-
-  // 8. Local validation-only response
-  if (validateOnly) {
-    return {
-      validateOnly: true,
-      adAccountId: context.adAccountId,
-      creativeId: null,
-      name,
-      pageId,
-      metaResponse: null,
-    };
-  }
-
-  // 9. Build the Meta Ad Creative payload
-  const objectStorySpec = {
-    page_id: pageId,
-
-    ...(instagramActorId && {
-      instagram_actor_id: instagramActorId,
-    }),
-
-    link_data: {
-      picture: imageUrl,
-      link: destinationUrl,
-      message: primaryText,
-      name: headline,
-
-      ...(description && {
-        description,
-      }),
-
-      call_to_action: {
-        type: input.callToAction,
-        value: {
-          link: destinationUrl,
-        },
-      },
-    },
-  };
-
-  // 10. Prepare Graph API request
-  const url = new URL(
-    `https://graph.facebook.com/${context.apiVersion}/${context.adAccountId}/adcreatives`,
-  );
-
-  const form = new URLSearchParams({
-    name,
-    object_story_spec: JSON.stringify(objectStorySpec),
-  });
-
-  // 11. Create Ad Creative
-  let response: Response;
-  let responseBody: unknown;
-
-  try {
-    response = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${context.accessToken}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-        Accept: "application/json",
-      },
-      body: form.toString(),
-      signal: AbortSignal.timeout(30_000),
-    });
-
-    responseBody = await response.json().catch(() => null);
-  } catch (error) {
-    throw new MetaAdsCampaignCreationError(
-      error instanceof Error
-        ? `Could not reach Meta Graph API: ${error.message}`
-        : "Could not reach Meta Graph API.",
-      502,
-    );
-  }
-
-  // 12. Handle Meta API errors
-  if (!response.ok) {
-    throw new MetaAdsCampaignCreationError(
-      getMetaErrorMessage(responseBody, response.status),
-      response.status,
-      responseBody,
-    );
-  }
-
-  // 13. Verify Creative ID
-  if (
-    !responseBody ||
-    typeof responseBody !== "object" ||
-    !("id" in responseBody) ||
-    typeof (responseBody as { id?: unknown }).id !== "string"
-  ) {
-    throw new MetaAdsCampaignCreationError(
-      "Meta Ads returned a successful response without a Creative ID.",
-      502,
-      responseBody,
-    );
-  }
-
-  const creativeId = (responseBody as { id: string }).id;
-
-  return {
-    validateOnly: false,
-    adAccountId: context.adAccountId,
-    creativeId,
-    name,
-    pageId,
-    metaResponse: responseBody as Record<string, unknown>,
-  };
-}*/
-
-/**
- * Creates the Meta campaign object only. Ad Sets and Ads are separate steps
- * because Meta requires the campaign ID before those child resources exist.
- * All newly created campaigns remain PAUSED.
- */
 export async function createMetaAdsCampaign(
   context: MetaAdsCreationContext,
   input: CreateMetaAdsCampaignInput,
 ): Promise<MetaAdsCampaignCreationResult> {
-  const validated: any = validateCreateCampaignInput(input);
+  const validated = validateCreateCampaignInput(input);
 
 
   if (validated.validateOnly) {
@@ -3937,11 +3064,6 @@ export async function createMetaAdsCampaign(
   };
 }
 
-/**
- * Resolve the current user's Meta credential and the selected ad account.
- * This service deliberately does not use the legacy readAccessToken() helper
- * or the Meta request-context middleware.
- */
 export async function getMetaAdsCreationContext(
   userId: string,
   selectedAccountId: string,
@@ -3969,30 +3091,6 @@ export async function getMetaAdsCreationContext(
     apiVersion: getMetaApiVersion(),
   };
 }
-
-/** Convenience entry point for the global campaign route. 
-export async function createMetaAdsCampaignForUser(
-  userId: string,
-  selectedAccountId: string,
-  input: CreateMetaAdsCampaignInput,
-): Promise<MetaAdsCampaignCreationResult> {
-  const context = await getMetaAdsCreationContext(userId, selectedAccountId);
-
-  const campaignResult = await createMetaAdsCampaign(context, campaignInput);
-
-  if (!campaignResult.campaignId) {
-    throw new Error("Meta campaign was not created.");
-  }
-
-  const adSetResult = await createMetaAdsAdSet(context, {
-    ...adSetInput,
-    campaignId: campaignResult.campaignId,
-  });
-
-  const creativeResult = await createMetaAdsAdCreative(context, creativeInput);
-  return createMetaAdsCampaign(context, input);
-}
-*/
 
 export async function createMetaAdsCampaignForUser(
   userId: string,
@@ -4084,9 +3182,16 @@ export async function createMetaAdsCampaignForUser(
       validateOnly: true,
       adAccountId: context.adAccountId,
       campaign: campaignResult,
-      adSet: adSetResult,
+      adSet: {
+        ...adSetResult,
+        campaignId: null,
+      },
       creative: creativeResult,
-      ad: adResult,
+      ad: {
+        ...adResult,
+        adSetId: null,
+        creativeId: null,
+      },
     };
   }
 
@@ -4184,9 +3289,16 @@ export async function createMetaAdsCampaignForUser(
       validateOnly: false,
       adAccountId: context.adAccountId,
       campaign: campaignResult,
-      adSet: adSetResult,
+      adSet: {
+        ...adSetResult,
+        campaignId: null,
+      },
       creative: creativeResult,
-      ad: adResult,
+      ad: {
+        ...adResult,
+        adSetId: null,
+        creativeId: null,
+      },
     };
   } catch (error) {
     // Preserve information about resources already created.

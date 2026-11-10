@@ -22,7 +22,11 @@ import {
     getGoogleAdsCreationContext,
     createGoogleAdsCampaignFlow,
 } from "../googleadsAPI/services/campaign-creation.js";
-
+import {
+    createMetaAdsCampaignForUser,
+    MetaAdsCampaignCreationError,
+    type CreateMetaAdsCampaignBundleInput,
+} from "../metaadsAPI/services/campaign-creation.js";
 import type { CreateGoogleAdsSearchCampaignFlowInput } from "../googleadsAPI/iterface/campaign-creation.js";
 import {
     searchMetaLocations,
@@ -51,6 +55,470 @@ function getErrorMessage(error: unknown): string {
     return "An unexpected provider error occurred.";
 }
 
+function isRecord(
+    value: unknown,
+): value is Record<string, unknown> {
+    return (
+        typeof value === "object" &&
+        value !== null &&
+        !Array.isArray(value)
+    );
+}
+
+function requireConfigObject(
+    value: unknown,
+    fieldName: string,
+): Record<string, unknown> {
+    if (!isRecord(value)) {
+        throw new CampaignRequestValidationError(
+            `${fieldName} must be an object.`,
+        );
+    }
+
+    return value;
+}
+
+function getConfigValue(
+    source: Record<string, unknown>,
+    ...keys: string[]
+): unknown {
+    for (const key of keys) {
+        if (
+            source[key] !== undefined &&
+            source[key] !== null
+        ) {
+            return source[key];
+        }
+    }
+
+    return undefined;
+}
+
+function requireConfigString(
+    source: Record<string, unknown>,
+    keys: string[],
+    fieldName: string,
+): string {
+    const value = getConfigValue(source, ...keys);
+
+    if (typeof value !== "string" || !value.trim()) {
+        throw new CampaignRequestValidationError(
+            `${fieldName} is required.`,
+        );
+    }
+
+    return value.trim();
+}
+
+function optionalConfigString(
+    source: Record<string, unknown>,
+    keys: string[],
+    fieldName: string,
+): string | undefined {
+    const value = getConfigValue(source, ...keys);
+
+    if (value === undefined || value === null || value === "") {
+        return undefined;
+    }
+
+    if (typeof value !== "string") {
+        throw new CampaignRequestValidationError(
+            `${fieldName} must be a string.`,
+        );
+    }
+
+    return value.trim() || undefined;
+}
+
+function optionalConfigNumber(
+    source: Record<string, unknown>,
+    keys: string[],
+    fieldName: string,
+): number | undefined {
+    const value = getConfigValue(source, ...keys);
+
+    if (value === undefined || value === null || value === "") {
+        return undefined;
+    }
+
+    const numberValue =
+        typeof value === "number" ? value : Number(value);
+
+    if (!Number.isFinite(numberValue)) {
+        throw new CampaignRequestValidationError(
+            `${fieldName} must be a valid number.`,
+        );
+    }
+
+    return numberValue;
+}
+function buildMetaCampaignBundleInput(
+    campaignName: string,
+    websiteUrl: string | null,
+    providerObjective: string,
+    configuration: any,
+    execution: {
+        validateOnly: boolean;
+        confirm: boolean;
+    },
+): any {
+    const campaignConfig = requireConfigObject(
+        configuration.campaign,
+        "Meta Campaign configuration",
+    );
+
+    const adSetConfig: any = requireConfigObject(
+        configuration.adSet,
+        "Meta Ad Set configuration",
+    );
+
+    const adConfig: any = requireConfigObject(
+        configuration.ad,
+        "Meta Ad configuration",
+    );
+
+    // Support both a separate creative object and the existing
+    // ad.creativeDraft builder structure.
+    const rawCreative = getConfigValue(
+        configuration,
+        "creative",
+    ) ?? adConfig.creativeDraft;
+
+    const creativeConfig = requireConfigObject(
+        rawCreative,
+        "Meta Creative configuration",
+    );
+
+    // Campaign objective
+    const objective = (
+        getConfigValue(campaignConfig, "objective") ??
+        providerObjective
+    );
+
+    if (
+        typeof objective !== "string" ||
+        !objective.trim()
+    ) {
+        throw new CampaignRequestValidationError(
+            "Meta campaign objective is required.",
+        );
+    }
+
+    // Budget level
+    const rawBudgetLevel =
+        getConfigValue(campaignConfig, "budgetLevel") ??
+        "CAMPAIGN";
+
+    if (
+        rawBudgetLevel !== "CAMPAIGN" &&
+        rawBudgetLevel !== "AD_SET"
+    ) {
+        throw new CampaignRequestValidationError(
+            "Meta budgetLevel must be CAMPAIGN or AD_SET.",
+        );
+    }
+
+    const budgetLevel = rawBudgetLevel;
+
+    // Buying type
+    const buyingType = (
+        getConfigValue(
+            campaignConfig,
+            "buyingType",
+            "buying_type",
+        ) ?? "AUCTION"
+    );
+
+    // Special Ad Categories
+    const rawCategories = getConfigValue(
+        campaignConfig,
+        "specialAdCategories",
+        "special_ad_categories",
+    ) ?? [];
+
+    if (!Array.isArray(rawCategories)) {
+        throw new CampaignRequestValidationError(
+            "Meta specialAdCategories must be an array.",
+        );
+    }
+
+    const specialAdCategories = rawCategories as string[];
+
+    // Currency is shared by campaign and Ad Set budget settings.
+    const budgetCurrency =
+        optionalConfigString(
+            adSetConfig,
+            ["budgetCurrency", "budget_currency"],
+            "Meta Ad Set budget currency",
+        ) ??
+        optionalConfigString(
+            campaignConfig,
+            ["budgetCurrency", "budget_currency"],
+            "Meta Campaign budget currency",
+        );
+
+    // Ad name
+    const adName =
+        optionalConfigString(
+            adConfig,
+            ["name"],
+            "Meta Ad name",
+        ) ?? `${campaignName} - Ad`;
+
+    const creativeName =
+        optionalConfigString(
+            creativeConfig,
+            ["name"],
+            "Meta Creative name",
+        ) ?? `${adName} Creative`;
+
+    const destinationUrl =
+        optionalConfigString(
+            creativeConfig,
+            ["destinationUrl", "destination_url"],
+            "Meta Creative destination URL",
+        ) ?? websiteUrl;
+
+    if (!destinationUrl) {
+        throw new CampaignRequestValidationError(
+            "A Meta Creative destination URL is required.",
+        );
+    }
+
+    const sharingSetting = getConfigValue(
+        campaignConfig,
+        "isAdsetBudgetSharingEnabled",
+        "is_adset_budget_sharing_enabled",
+    );
+
+    if (
+        sharingSetting !== undefined &&
+        typeof sharingSetting !== "boolean"
+    ) {
+        throw new CampaignRequestValidationError(
+            "Meta Ad Set budget-sharing setting must be a boolean.",
+        );
+    }
+
+    const targeting = requireConfigObject(
+        adSetConfig.targeting,
+        "Meta Ad Set targeting",
+    );
+
+    return {
+        campaign: {
+            name: campaignName,
+
+            objective: objective as
+                CreateMetaAdsCampaignBundleInput["campaign"]["objective"],
+
+            buyingType: buyingType as
+                CreateMetaAdsCampaignBundleInput["campaign"]["buyingType"],
+
+            specialAdCategories,
+
+            budgetLevel,
+
+            dailyBudgetAmount: optionalConfigNumber(
+                campaignConfig,
+                ["dailyBudgetAmount", "daily_budget"],
+                "Meta Campaign daily budget",
+            ),
+
+            lifetimeBudgetAmount: optionalConfigNumber(
+                campaignConfig,
+                ["lifetimeBudgetAmount", "lifetime_budget"],
+                "Meta Campaign lifetime budget",
+            ),
+
+            budgetCurrency,
+
+            bidStrategy: optionalConfigString(
+                campaignConfig,
+                ["bidStrategy", "bid_strategy"],
+                "Meta Campaign bid strategy",
+            ) as CreateMetaAdsCampaignBundleInput["campaign"]["bidStrategy"],
+
+            isAdsetBudgetSharingEnabled:
+                sharingSetting as boolean | undefined,
+
+            startTime: optionalConfigString(
+                campaignConfig,
+                ["startTime", "start_time"],
+                "Meta Campaign start time",
+            ),
+
+            stopTime: optionalConfigString(
+                campaignConfig,
+                ["stopTime", "stop_time"],
+                "Meta Campaign stop time",
+            ),
+
+            validateOnly: execution.validateOnly,
+            confirm: execution.confirm,
+        },
+
+        adSet: {
+            name: requireConfigString(
+                adSetConfig,
+                ["name"],
+                "Meta Ad Set name",
+            ),
+
+            campaignObjective: objective as
+                CreateMetaAdsCampaignBundleInput["campaign"]["objective"],
+
+            optimization_goal: requireConfigString(
+                adSetConfig,
+                ["optimization_goal", "optimizationGoal"],
+                "Meta optimization goal",
+            ),
+
+            billing_event: requireConfigString(
+                adSetConfig,
+                ["billing_event", "billingEvent"],
+                "Meta billing event",
+            ),
+
+            targeting: targeting as
+                CreateMetaAdsCampaignBundleInput["adSet"]["targeting"],
+
+            budgetLevel,
+
+            budgetCurrency,
+
+            specialAdCategories,
+
+            dailyBudgetAmount: optionalConfigNumber(
+                adSetConfig,
+                ["dailyBudgetAmount", "daily_budget"],
+                "Meta Ad Set daily budget",
+            ),
+
+            lifetimeBudgetAmount: optionalConfigNumber(
+                adSetConfig,
+                ["lifetimeBudgetAmount", "lifetime_budget"],
+                "Meta Ad Set lifetime budget",
+            ),
+
+            bid_strategy: optionalConfigString(
+                adSetConfig,
+                ["bid_strategy", "bidStrategy"],
+                "Meta Ad Set bid strategy",
+            ) as CreateMetaAdsCampaignBundleInput["adSet"]["bid_strategy"],
+
+            bidAmountInput: optionalConfigNumber(
+                adSetConfig,
+                ["bidAmountInput", "bid_amount"],
+                "Meta bid amount",
+            ),
+
+            bid_constraints: getConfigValue(
+                adSetConfig,
+                "bid_constraints",
+                "bidConstraints",
+            ) as CreateMetaAdsCampaignBundleInput["adSet"]["bid_constraints"],
+
+            destinationType: getConfigValue(
+                adSetConfig,
+                "destinationType",
+                "destination_type",
+            ) as CreateMetaAdsCampaignBundleInput["adSet"]["destinationType"],
+
+            promoted_object: getConfigValue(
+                adSetConfig,
+                "promoted_object",
+                "promotedObject",
+            ) as CreateMetaAdsCampaignBundleInput["adSet"]["promoted_object"],
+
+            placements: getConfigValue(
+                adSetConfig,
+                "placements",
+            ) as CreateMetaAdsCampaignBundleInput["adSet"]["placements"],
+
+            advantageAudience: getConfigValue(
+                adSetConfig,
+                "advantageAudience",
+            ) as CreateMetaAdsCampaignBundleInput["adSet"]["advantageAudience"],
+
+            attributionSpec: getConfigValue(
+                adSetConfig,
+                "attributionSpec",
+                "attribution_spec",
+            ) as CreateMetaAdsCampaignBundleInput["adSet"]["attributionSpec"],
+
+            startTime: optionalConfigString(
+                adSetConfig,
+                ["startTime", "start_time"],
+                "Meta Ad Set start time",
+            ),
+
+            endTime: optionalConfigString(
+                adSetConfig,
+                ["endTime", "end_time"],
+                "Meta Ad Set end time",
+            ),
+
+            validateOnly: execution.validateOnly,
+            confirm: execution.confirm,
+        },
+
+        creative: {
+            name: creativeName,
+
+            pageId: requireConfigString(
+                creativeConfig,
+                ["pageId", "page_id"],
+                "Meta Facebook Page ID",
+            ),
+
+            instagramActorId: optionalConfigString(
+                creativeConfig,
+                ["instagramActorId", "instagram_actor_id"],
+                "Meta Instagram Actor ID",
+            ),
+
+            primaryText: requireConfigString(
+                creativeConfig,
+                ["primaryText", "message"],
+                "Meta Creative primary text",
+            ),
+
+            headline: requireConfigString(
+                creativeConfig,
+                ["headline", "name"],
+                "Meta Creative headline",
+            ),
+
+            description: optionalConfigString(
+                creativeConfig,
+                ["description"],
+                "Meta Creative description",
+            ),
+
+            imageUrl: requireConfigString(
+                creativeConfig,
+                ["imageUrl", "image_url"],
+                "Meta Creative image URL",
+            ),
+
+            destinationUrl,
+
+            callToAction: requireConfigString(
+                creativeConfig,
+                ["callToAction", "call_to_action"],
+                "Meta Creative call to action",
+            ) as CreateMetaAdsCampaignBundleInput["creative"]["callToAction"],
+
+            validateOnly: execution.validateOnly,
+            confirm: execution.confirm,
+        },
+
+        ad: {
+            name: adName,
+        },
+    };
+}
 const normalizeGoogleId = (value: unknown): string | null => {
     if (typeof value !== "string" || !value.trim()) {
         return null;
@@ -133,7 +601,7 @@ const mergeGoogleCampaigns = (
         if (savedAccountId !== normalizedAccountId) continue;
 
         const campaignId = normalizeGoogleId(
-            googleProvider.campaignId
+            googleProvider?.providerCampaignId
         );
 
         if (campaignId) {
@@ -309,98 +777,35 @@ router.post("/", async (req: Request, res: Response) => {
         }
 
         const request: any = parseCreateCampaignRequest(req.body);
+        const rawBody: any = isRecord(req.body) ? req.body : {};
 
-        // const accountChecks = await Promise.all(
-        //     request.platforms.map(async (provider: any) => {
-        //         const providerRequest = request.providers[provider];
+        const executionConfig: any =
+            rawBody.execution === undefined
+                ? {}
+                : requireConfigObject(
+                    rawBody.execution,
+                    "execution",
+                );
 
-        //         if (!providerRequest) {
-        //             return {
-        //                 provider,
-        //                 valid: false,
-        //                 accountId: null,
-        //                 message: "Provider configuration is missing.",
-        //             };
-        //         }
-        //         console.log(
-        //             `[CAMPAIGN CREATE] Validating provider account for ${provider}:`,
-        //             providerRequest.accountId,
-        //         );
+        const validateOnly =
+            executionConfig.validateOnly ?? true;
 
-        //         const validProviders = ["googleAds", "metaAds"];
+        const confirm =
+            executionConfig.confirm ?? false;
 
-        //         if (!validProviders.includes(provider)) {
-        //             return {
-        //                 provider,
-        //                 valid: false,
-        //                 accountId: providerRequest.accountId,
-        //                 message: `Unsupported provider: ${provider}.`,
-        //             };
-        //         }
+        if (
+            typeof validateOnly !== "boolean" ||
+            typeof confirm !== "boolean"
+        ) {
+            throw new CampaignRequestValidationError(
+                "execution.validateOnly and execution.confirm must be booleans.",
+            );
+        }
 
-        //         // Check that the selected account exists, is active, and belongs to the user.
-
-        //         const account = await AdAccountModel.findOne({
-        //             userId,
-        //             provider,
-        //             externalAccountId: providerRequest.accountId,
-        //             status: "active",
-        //         })
-        //             .select("_id connectionId externalAccountId")
-        //             .lean();
-
-        //         if (!account) {
-        //             return {
-        //                 provider,
-        //                 valid: false,
-        //                 accountId: providerRequest.accountId,
-        //                 message:
-        //                     "The selected advertising account was not found, is inactive, or does not belong to this user.",
-        //             };
-        //         }
-
-        //         const connection = await ProviderConnectionModel.findOne({
-        //             _id: account.connectionId,
-        //             userId,
-        //             provider,
-        //             status: "connected",
-        //         })
-        //             .select("_id")
-        //             .lean();
-
-        //         if (!connection) {
-        //             return {
-        //                 provider,
-        //                 valid: false,
-        //                 accountId: providerRequest.accountId,
-        //                 message:
-        //                     "The provider connection is not active. Reconnect this provider before creating campaigns.",
-        //             };
-        //         }
-
-        //         return {
-        //             provider,
-        //             valid: true,
-        //             accountId: account.externalAccountId,
-        //             message: null,
-        //         };
-        //     }),
-        // );
-
-        // const accountErrors = accountChecks.filter((check) => !check.valid);
-
-        // if (accountErrors.length > 0) {
-        //     return res.status(422).json({
-        //         success: false,
-        //         message: "One or more selected advertising accounts are not ready.",
-        //         providers: accountErrors.map((check) => ({
-        //             provider: check.provider,
-        //             accountId: check.accountId,
-        //             error: check.message,
-        //         })),
-        //     });
-        // }
-
+        const execution = {
+            validateOnly,
+            confirm,
+        };
         const providerDocuments: CampaignProviders = {};
 
         for (const provider of request.platforms) {
@@ -473,8 +878,8 @@ router.post("/", async (req: Request, res: Response) => {
                     ...(googleRequest.configuration as unknown as CreateGoogleAdsSearchCampaignFlowInput),
 
                     // Global execution controls override provider configuration.
-                    validateOnly: request.execution.validateOnly,
-                    confirm: request.execution.confirm,
+                    validateOnly: execution.validateOnly,
+                    confirm: execution.confirm,
                 };
 
                 // 3. Execute the complete Google Search campaign flow.
@@ -547,7 +952,7 @@ router.post("/", async (req: Request, res: Response) => {
 
                 // 6. Return Google provider result.
 
-                providerResults.googleAds = {
+                providerResults[`googleAds`] = {
                     success: true,
                     accountId: googleRequest.accountId,
                     creationStatus: googleProvider.creationStatus,
@@ -571,7 +976,7 @@ router.post("/", async (req: Request, res: Response) => {
                     await campaign.save();
                 }
 
-                providerResults.googleAds = {
+                providerResults[`googleAds`] = {
                     success: false,
                     accountId: googleRequest.accountId,
                     creationStatus: "failed",
@@ -581,26 +986,325 @@ router.post("/", async (req: Request, res: Response) => {
         }
 
         // ==========================================
-        // META ADS — PENDING IMPLEMENTATION
+        // META ADS — CAMPAIGN CREATION EXECUTION
         // ==========================================
 
         if (request.platforms.includes("metaAds")) {
-            providerResults.metaAds = {
-                status: "pending",
-                message:
-                    "Meta Ads campaign execution will be connected after its campaign creation service is implemented.",
-            };
+            const metaRequest = request.providers.metaAds;
+            const metaProvider = campaign.providers.metaAds;
+
+            try {
+                if (!metaRequest || !metaProvider) {
+                    throw new Error(
+                        "Meta Ads provider configuration is missing.",
+                    );
+                }
+
+                // 1. Verify that the submitted account belongs to this user.
+                const ownedMetaAccount = await AdAccountModel.findOne({
+                    userId,
+                    provider: "metaAds",
+                    externalAccountId: metaRequest.accountId,
+                    status: "active",
+                })
+                    .select("_id externalAccountId")
+                    .lean();
+
+                if (!ownedMetaAccount) {
+                    throw new Error(
+                        "The selected Meta Ads account does not belong to this user or is not active.",
+                    );
+                }
+
+                // 2. Convert the provider configuration into the
+                // Campaign -> Ad Set -> Creative -> Ad service input.
+                const metaBundleInput = buildMetaCampaignBundleInput(
+                    request.name,
+                    request.websiteUrl,
+                    metaRequest.providerObjective,
+                    metaRequest.configuration,
+                    execution,
+                );
+
+                // 3. Execute all four Meta creation stages.
+                const result = await createMetaAdsCampaignForUser(
+                    userId,
+                    metaRequest.accountId,
+                    metaBundleInput,
+                );
+
+                // 4. Update the MongoDB provider record.
+                metaProvider.creationStatus = result.validateOnly
+                    ? "validated"
+                    : "created";
+
+                metaProvider.lastError = null;
+
+                metaProvider.providerCampaignId =
+                    result.campaign.campaignId;
+
+                metaProvider.providerStatus =
+                    result.campaign.campaignId ? "PAUSED" : null;
+
+                metaProvider.deliveryStatus = "PAUSED";
+
+                if (result.validateOnly) {
+                    // Validation-only mode must not save fake external IDs.
+                    metaProvider.resources = [];
+                    metaProvider.lastSyncedAt = null;
+                } else {
+                    metaProvider.resources = [
+                        {
+                            resourceType: "campaign",
+                            resourceId: result.campaign.campaignId,
+                        },
+                        {
+                            resourceType: "adSet",
+                            resourceId: result.adSet.adSetId,
+                        },
+                        {
+                            resourceType: "creative",
+                            resourceId: result.creative.creativeId,
+                        },
+                        {
+                            resourceType: "ad",
+                            resourceId: result.ad.adId,
+                        },
+                    ].filter(
+                        (resource) => Boolean(resource.resourceId),
+                    );
+
+                    metaProvider.lastSyncedAt = new Date();
+                }
+
+                campaign.markModified("providers.metaAds");
+
+                await campaign.save();
+
+                // 5. Return the complete Meta execution result.
+                providerResults[`metaAds`] = {
+                    success: true,
+                    accountId: metaRequest.accountId,
+                    creationStatus: metaProvider.creationStatus,
+                    validateOnly: result.validateOnly,
+
+                    campaign: result.campaign,
+                    adSet: result.adSet,
+                    creative: result.creative,
+                    ad: result.ad,
+                };
+            } catch (error) {
+                const message = getErrorMessage(error);
+
+                // 6. Recover resource IDs if the orchestration failed
+                // after one or more Meta resources were created.
+                const errorDetails: any =
+                    error instanceof MetaAdsCampaignCreationError &&
+                        isRecord(error.details)
+                        ? error.details
+                        : {};
+
+                const partialResult = isRecord(
+                    errorDetails.partialResult,
+                )
+                    ? errorDetails.partialResult
+                    : {};
+
+                const partialCampaign = isRecord(
+                    partialResult.campaign,
+                )
+                    ? partialResult.campaign
+                    : {};
+
+                const partialAdSet = isRecord(
+                    partialResult.adSet,
+                )
+                    ? partialResult.adSet
+                    : {};
+
+                const partialCreative = isRecord(
+                    partialResult.creative,
+                )
+                    ? partialResult.creative
+                    : {};
+
+                const partialAd = isRecord(
+                    partialResult.ad,
+                )
+                    ? partialResult.ad
+                    : {};
+
+                const campaignId =
+                    typeof partialCampaign.campaignId === "string"
+                        ? partialCampaign.campaignId
+                        : null;
+
+                const partialResources = [
+                    {
+                        resourceType: "campaign",
+                        resourceId: campaignId,
+                    },
+                    {
+                        resourceType: "adSet",
+                        resourceId:
+                            typeof partialAdSet.adSetId === "string"
+                                ? partialAdSet.adSetId
+                                : null,
+                    },
+                    {
+                        resourceType: "creative",
+                        resourceId:
+                            typeof partialCreative.creativeId === "string"
+                                ? partialCreative.creativeId
+                                : null,
+                    },
+                    {
+                        resourceType: "ad",
+                        resourceId:
+                            typeof partialAd.adId === "string"
+                                ? partialAd.adId
+                                : null,
+                    },
+                ].filter(
+                    (resource) => Boolean(resource.resourceId),
+                );
+
+                // 7. Preserve any resources that were successfully created.
+                if (metaProvider) {
+                    metaProvider.creationStatus =
+                        partialResources.length > 0
+                            ? "partial"
+                            : "failed";
+
+                    metaProvider.providerCampaignId = campaignId;
+
+                    metaProvider.providerStatus =
+                        campaignId ? "PAUSED" : null;
+
+                    metaProvider.deliveryStatus = "PAUSED";
+
+                    metaProvider.resources = partialResources;
+                    metaProvider.lastError = message;
+
+                    metaProvider.lastSyncedAt =
+                        partialResources.length > 0
+                            ? new Date()
+                            : null;
+
+                    campaign.markModified("providers.metaAds");
+
+                    await campaign.save();
+                }
+
+                providerResults[`metaAds`] = {
+                    success: false,
+                    accountId: metaRequest?.accountId ?? null,
+                    creationStatus:
+                        partialResources.length > 0
+                            ? "partial"
+                            : "failed",
+                    failedStep:
+                        typeof errorDetails.failedStep === "string"
+                            ? errorDetails.failedStep
+                            : null,
+                    error: message,
+                    partialResources,
+                };
+            }
         }
 
         // ==========================================
         // GLOBAL CAMPAIGN RESPONSE
         // ==========================================
+        const selectedProviderResults = request.platforms.map(
+            (provider: AdvertisingProvider) => {
+                const result: any = providerResults[provider];
 
-        const googleResult = providerResults.googleAds as
-            | { success: boolean }
-            | undefined;
+                return {
+                    provider,
+                    success:
+                        isRecord(result) &&
+                        result[`success`] === true,
+                };
+            },
+        );
 
-        const googleFailed = googleResult?.success === false;
+        const failedProviders = selectedProviderResults
+            .filter((item: any) => !item.success)
+            .map((item: any) => item.provider);
+
+        const successfulProviders = selectedProviderResults
+            .filter((item: any) => item.success)
+            .map((item: any) => item.provider);
+
+        const hasFailures = failedProviders.length > 0;
+
+        const allFailed =
+            failedProviders.length === request.platforms.length;
+
+        const message = allFailed
+            ? "Campaign request was saved, but all selected provider executions failed."
+            : hasFailures
+                ? "Campaign request was saved with partial provider success."
+                : execution.validateOnly
+                    ? "Campaign validation completed successfully. No external campaign resources were created."
+                    : "Campaign creation completed successfully on all selected providers.";
+
+        const responseStatus = allFailed
+            ? 502
+            : hasFailures
+                ? 207
+                : execution.validateOnly
+                    ? 200
+                    : 201;
+
+        return res.status(responseStatus).json({
+            success: !hasFailures,
+
+            partialSuccess:
+                hasFailures && successfulProviders.length > 0,
+
+            message,
+
+            failedProviders,
+            successfulProviders,
+
+            campaign: {
+                id: campaign._id.toString(),
+                name: campaign.name,
+                businessName: campaign.businessName,
+                objective: campaign.objective,
+                platforms: campaign.platforms,
+
+                providers: Object.fromEntries(
+                    request.platforms.map(
+                        (provider: AdvertisingProvider) => {
+                            const providerData = campaign.providers[provider];
+
+                            return [
+                                provider,
+                                {
+                                    accountId: providerData?.accountId ?? null,
+                                    creationStatus:
+                                        providerData?.creationStatus ?? "pending",
+                                    deliveryStatus:
+                                        providerData?.deliveryStatus ?? "PAUSED",
+                                    providerCampaignId:
+                                        providerData?.providerCampaignId ?? null,
+                                },
+                            ];
+                        },
+                    ),
+                ),
+
+                createdAt: campaign.createdAt,
+            },
+
+            execution,
+            providers: providerResults,
+        });
+
+        /* const googleFailed = googleResult?.success === false;
 
         const googleSelected = request.platforms.includes("googleAds");
 
@@ -652,9 +1356,9 @@ router.post("/", async (req: Request, res: Response) => {
                     createdAt: campaign.createdAt,
                 },
 
-                execution: request.execution,
+                execution,
                 providers: providerResults,
-            });
+            });*/
     } catch (error) {
         if (error instanceof CampaignRequestValidationError) {
             return res.status(400).json({
@@ -671,6 +1375,460 @@ router.post("/", async (req: Request, res: Response) => {
         });
     }
 });
+
+
+/**
+ * POST /api/campaigns/:campaignId/meta/ad-set/retry
+ *
+ * Retries only the Ad Set step for a Meta campaign that was
+ * partially created. It reuses the existing Meta Campaign ID.
+ *
+ * Body:
+ * {
+ *   "confirm": true,
+ *   "billing_event": "IMPRESSIONS"
+ * }
+ */
+router.post(
+    "/:campaignId/meta/ad-set/retry",
+    async (req: Request, res: Response) => {
+        try {
+            const { userId } = getAuth(req);
+
+            if (!userId) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Authentication required.",
+                });
+            }
+
+            const campaignId = req.params.campaignId;
+            const body = isPlainRecord(req.body) ? req.body : {};
+
+            if (!/^[a-fA-F0-9]{24}$/.test(campaignId)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid application campaign ID.",
+                });
+            }
+
+            if (body.confirm !== true) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Ad Set retry requires confirm: true.",
+                });
+            }
+
+            // This retry currently permits only the billing-event correction
+            // needed by the LINK_CLICKS Traffic test.
+            const billingEventOverride =
+                body.billing_event === undefined
+                    ? undefined
+                    : typeof body.billing_event === "string"
+                        ? body.billing_event.trim().toUpperCase()
+                        : null;
+
+            if (
+                billingEventOverride === null ||
+                (billingEventOverride !== undefined &&
+                    billingEventOverride !== "IMPRESSIONS")
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "billing_event override must be IMPRESSIONS.",
+                });
+            }
+
+            // Always scope the application campaign to its owner.
+            const campaign = await CampaignModel.findOne({
+                _id: campaignId,
+                ownerUserId: userId,
+            });
+
+            if (!campaign) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Campaign was not found.",
+                });
+            }
+
+            if (!campaign.platforms.includes("metaAds")) {
+                return res.status(409).json({
+                    success: false,
+                    message: "This campaign does not include Meta Ads.",
+                });
+            }
+
+            const metaProvider = campaign.providers.metaAds;
+
+            if (!metaProvider) {
+                return res.status(409).json({
+                    success: false,
+                    message: "Meta provider configuration is missing.",
+                });
+            }
+
+            // The original Campaign must already exist remotely.
+            const existingCampaignId =
+                metaProvider.providerCampaignId?.trim();
+
+            if (
+                !existingCampaignId ||
+                !/^\d+$/.test(existingCampaignId)
+            ) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "No valid existing Meta Campaign ID is stored. Ad Set retry is not possible.",
+                });
+            }
+
+            // Only retry a failure that occurred during Ad Set creation.
+            if (
+                metaProvider.creationStatus !== "partial" ||
+                !metaProvider.lastError
+                    ?.toLowerCase()
+                    .includes("during ad set")
+            ) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "Ad Set retry is allowed only when the previous Meta execution failed during Ad Set creation.",
+                    creationStatus: metaProvider.creationStatus,
+                    lastError: metaProvider.lastError ?? null,
+                });
+            }
+
+            // Protect against creating a duplicate Ad Set.
+            const resources = Array.isArray(metaProvider.resources)
+                ? metaProvider.resources
+                : [];
+
+            const existingAdSet = resources.some((item: unknown) => {
+                if (!isPlainRecord(item)) return false;
+
+                const resourceType = String(
+                    item.resourceType ?? "",
+                ).toLowerCase();
+
+                const resourceId =
+                    item.resourceId ?? item.id;
+
+                return (
+                    resourceType === "adset" ||
+                    resourceType === "ad_set"
+                ) && typeof resourceId === "string" &&
+                    resourceId.trim().length > 0;
+            });
+
+            if (existingAdSet) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "An Ad Set ID is already stored. Refusing to create another Ad Set.",
+                });
+            }
+
+            // Verify the ad account still belongs to this user and is active.
+            const account = await AdAccountModel.findOne({
+                userId,
+                provider: "metaAds",
+                externalAccountId: metaProvider.accountId,
+                status: "active",
+            })
+                .select("_id externalAccountId")
+                .lean();
+
+            if (!account) {
+                return res.status(403).json({
+                    success: false,
+                    message:
+                        "The Meta Ad Account is inactive, unavailable, or does not belong to this user.",
+                });
+            }
+
+            // Read the original provider configuration saved during
+            // the initial campaign request.
+            const configuration = isPlainRecord(
+                metaProvider.configuration,
+            )
+                ? metaProvider.configuration
+                : null;
+
+            const campaignConfig = isPlainRecord(
+                configuration?.campaign,
+            )
+                ? configuration.campaign
+                : null;
+
+            const adSetConfig = isPlainRecord(
+                configuration?.adSet,
+            )
+                ? configuration.adSet
+                : null;
+
+            if (!campaignConfig || !adSetConfig) {
+                return res.status(422).json({
+                    success: false,
+                    message:
+                        "Saved Meta Campaign or Ad Set configuration is missing.",
+                });
+            }
+
+            const campaignObjective =
+                campaignConfig.objective;
+
+            if (
+                typeof campaignObjective !== "string" ||
+                !campaignObjective.trim()
+            ) {
+                return res.status(422).json({
+                    success: false,
+                    message:
+                        "Saved Meta campaign objective is missing.",
+                });
+            }
+
+            const budgetLevel =
+                campaignConfig.budgetLevel ??
+                adSetConfig.budgetLevel ??
+                "CAMPAIGN";
+
+            if (
+                budgetLevel !== "CAMPAIGN" &&
+                budgetLevel !== "AD_SET"
+            ) {
+                return res.status(422).json({
+                    success: false,
+                    message: "Invalid saved Meta budget level.",
+                });
+            }
+
+            const rawSpecialCategories =
+                campaignConfig.specialAdCategories ??
+                campaignConfig.special_ad_categories ??
+                [];
+
+            if (
+                !Array.isArray(rawSpecialCategories) ||
+                !rawSpecialCategories.every(
+                    (item) => typeof item === "string",
+                )
+            ) {
+                return res.status(422).json({
+                    success: false,
+                    message:
+                        "Saved Meta special ad categories are invalid.",
+                });
+            }
+
+            const optimizationGoal =
+                typeof adSetConfig.optimization_goal === "string"
+                    ? adSetConfig.optimization_goal.trim().toUpperCase()
+                    : "";
+
+            const storedBillingEvent =
+                typeof adSetConfig.billing_event === "string"
+                    ? adSetConfig.billing_event.trim().toUpperCase()
+                    : "";
+
+            const effectiveBillingEvent =
+                billingEventOverride ?? storedBillingEvent;
+
+            if (!optimizationGoal || !effectiveBillingEvent) {
+                return res.status(422).json({
+                    success: false,
+                    message:
+                        "Saved Ad Set optimization goal or billing event is missing.",
+                });
+            }
+
+            // For this LINK_CLICKS Traffic test, use Meta's
+            // documented IMPRESSIONS billing event.
+            if (
+                optimizationGoal === "LINK_CLICKS" &&
+                effectiveBillingEvent !== "IMPRESSIONS"
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "For this LINK_CLICKS Traffic retry, send billing_event: IMPRESSIONS.",
+                });
+            }
+
+            const adSetInput = {
+                ...adSetConfig,
+
+                campaignId: existingCampaignId,
+
+                campaignObjective:
+                    campaignObjective as MetaAdsCampaignObjective,
+
+                specialAdCategories:
+                    rawSpecialCategories as string[],
+
+                budgetLevel,
+
+                optimization_goal: optimizationGoal,
+
+                billing_event: effectiveBillingEvent,
+
+                validateOnly: false,
+                confirm: true,
+            } as unknown as CreateMetaAdsAdSetInput;
+
+            // Claim the retry before contacting Meta.
+            // This prevents a second simultaneous request from creating
+            // another Ad Set for the same saved Campaign.
+            metaProvider.creationStatus =
+                "adset_retry_in_progress";
+
+            // Persist the corrected billing event for subsequent steps.
+            metaProvider.configuration = {
+                ...configuration,
+                adSet: {
+                    ...adSetConfig,
+                    billing_event: effectiveBillingEvent,
+                },
+            };
+
+            campaign.markModified("providers.metaAds");
+            await campaign.save();
+
+            let createdAdSetId: string | null = null;
+
+            try {
+                const context = await getMetaAdsCreationContext(
+                    userId,
+                    metaProvider.accountId,
+                );
+
+                const result = await createMetaAdsAdSet(
+                    context,
+                    adSetInput,
+                );
+
+                if (!result.adSetId) {
+                    throw new MetaAdsCampaignCreationError(
+                        "Meta did not return an Ad Set ID.",
+                        502,
+                        result.metaResponse,
+                    );
+                }
+
+                createdAdSetId = result.adSetId;
+
+                // Save only the new Ad Set resource.
+                metaProvider.resources.push({
+                    resourceType: "adSet",
+                    resourceId: result.adSetId,
+                    status: "created",
+                    deliveryStatus: "PAUSED",
+                });
+
+                // The complete workflow is still partial because
+                // Creative and Ad creation have not happened yet.
+                metaProvider.creationStatus = "partial";
+                metaProvider.providerStatus = "PAUSED";
+                metaProvider.deliveryStatus = "PAUSED";
+                metaProvider.lastError = null;
+                metaProvider.lastSyncedAt = new Date();
+
+                campaign.markModified("providers.metaAds");
+                await campaign.save();
+
+                return res.status(200).json({
+                    success: true,
+                    message:
+                        "Meta Ad Set created successfully under the existing Campaign. Creative and Ad creation are still pending.",
+
+                    campaign: {
+                        id: campaign._id.toString(),
+                        name: campaign.name,
+                    },
+
+                    provider: {
+                        provider: "metaAds",
+                        accountId: metaProvider.accountId,
+                        creationStatus: metaProvider.creationStatus,
+                        campaignId: existingCampaignId,
+                        adSetId: result.adSetId,
+                    },
+
+                    adSet: result,
+                });
+            } catch (error) {
+                const message = getErrorMessage(error);
+
+                const providerErrorDetails =
+                    error instanceof MetaAdsCampaignCreationError
+                        ? error.details ?? null
+                        : null;
+
+                // HTTP 5xx/network failures may have an ambiguous result:
+                // Meta may have processed the request before the connection
+                // failed. Do not allow an automatic duplicate retry.
+                const needsAttention =
+                    createdAdSetId !== null ||
+                    !(error instanceof MetaAdsCampaignCreationError) ||
+                    error.statusCode >= 500;
+
+                metaProvider.creationStatus = needsAttention
+                    ? "needs_attention"
+                    : "partial";
+
+                metaProvider.lastError = message;
+                metaProvider.lastSyncedAt = new Date();
+
+                campaign.markModified("providers.metaAds");
+
+                try {
+                    await campaign.save();
+                } catch (saveError) {
+                    console.error(
+                        "Failed to persist Meta Ad Set retry status:",
+                        getErrorMessage(saveError),
+                    );
+                }
+
+                console.error("[META AD SET RETRY FAILED]", {
+                    campaignId,
+                    providerCampaignId: existingCampaignId,
+                    message,
+                    providerErrorDetails,
+                    createdAdSetId,
+                });
+
+                return res
+                    .status(
+                        error instanceof MetaAdsCampaignCreationError
+                            ? error.statusCode
+                            : 502,
+                    )
+                    .json({
+                        success: false,
+                        message,
+                        failedStep: "Ad Set",
+                        creationStatus: metaProvider.creationStatus,
+                        campaignId: existingCampaignId,
+                        createdAdSetId,
+                        providerErrorDetails,
+                    });
+            }
+        } catch (error) {
+            console.error(
+                "Meta Ad Set retry route error:",
+                getErrorMessage(error),
+            );
+
+            return res.status(500).json({
+                success: false,
+                message: getErrorMessage(error),
+            });
+        }
+    },
+);
 
 
 router.get("/", async (req: Request, res: Response) => {
@@ -705,29 +1863,16 @@ router.get("/", async (req: Request, res: Response) => {
                 .lean(),
         ]);
         const savedCampaigns = await CampaignModel.find({
-            userId,
+            ownerUserId: userId,
         }).lean();
 
-        // console.log("MongoDB campaign merge diagnostic:", {
-        //     savedCount: savedCampaigns.length,
+        const totalDocuments = await CampaignModel.countDocuments({
+            ownerUserId: userId,
+        });
 
-        //     campaigns: savedCampaigns.map((campaign: any) => {
-        //         const googleAds = campaign.providers?.googleAds;
-
-        //         return {
-        //             name: campaign.name,
-        //             documentKeys: Object.keys(campaign),
-        //             providerKeys: Object.keys(campaign.providers ?? {}),
-        //             googleAdsKeys: Object.keys(googleAds ?? {}),
-        //             googleAdsAccountId: googleAds?.accountId,
-        //             googleAdsCampaignId: googleAds?.campaignId,
-        //         };
-        //     }),
-        // });
-
-        const totalDocuments = await CampaignModel.countDocuments();
-
-        const sample = await CampaignModel.findOne().lean() as any;
+        const sample = await CampaignModel.findOne({
+            ownerUserId: userId,
+        }).lean() as any;
 
         console.log("CampaignModel diagnostic:", {
             authenticatedUserId: userId,
@@ -760,7 +1905,7 @@ router.get("/", async (req: Request, res: Response) => {
         });
 
         // Fetch both providers independently.
-        const [googleResult, metaResult] = await Promise.all([
+        const [googleResult, metaResult]: any = await Promise.all([
             fetchProviderCampaigns(googleAccount?.externalAccountId, (accountId) =>
                 getGoogleCampaigns(userId, accountId),
             ),
@@ -772,7 +1917,7 @@ router.get("/", async (req: Request, res: Response) => {
             googleResult.data = {
                 ...googleResult.data,
                 campaigns: mergeGoogleCampaigns(
-                    googleResult.data.campaigns,
+                    googleResult.data[`campaigns`],
                     savedCampaigns,
                     googleResult.accountId!
                 ),
@@ -891,7 +2036,7 @@ router.get(
 // GET /api/campaigns/meta/audiences/custom
 router.get(
     "/meta/audiences/custom",
-    async (req: Request, res: Response) => {
+    async (req: any, res: any) => {
         try {
             const { userId } = getAuth(req);
 
@@ -944,7 +2089,7 @@ router.get(
 // GET /api/campaigns/meta/audiences/saved
 router.get(
     "/meta/audiences/saved",
-    async (req: Request, res: Response) => {
+    async (req: any, res: any) => {
         try {
             const { userId } = getAuth(req);
 

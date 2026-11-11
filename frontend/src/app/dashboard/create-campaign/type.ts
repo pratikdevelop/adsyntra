@@ -25,6 +25,7 @@ export type CampaignExecutionPayload = {
         confirm: boolean;
     };
 };
+// https://recomind.onrender.com
 export type PlatformMode = "googleAds" | "metaAds" | "both";
 export type Objective =
     | "SALES"

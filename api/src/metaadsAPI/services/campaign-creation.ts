@@ -3315,9 +3315,10 @@ export async function createMetaAdsCampaignForUser(
         ? error.statusCode
         : 502;
 
+
     const originalErrorDetails =
       error instanceof MetaAdsCampaignCreationError
-        ? error.details ?? null
+        ? error.details
         : null;
 
     throw new MetaAdsCampaignCreationError(

@@ -752,35 +752,7 @@ router.get(
 router.post("/", async (req: Request, res: Response) => {
     try {
         const auth = getAuth(req);
-
-        // console.log("[CAMPAIGN CREATE AUTH DEBUG]", {
-        //     isAuthenticated: auth.isAuthenticated,
-        //     userId: auth.userId,
-        //     sessionId: auth.sessionId,
-        //     path: req.originalUrl,
-        //     method: req.method,
-        //     hasCookie: Boolean(req.headers.cookie),
-        //     hasAuthorization: Boolean(req.headers.authorization),
-        // });
-
         const { userId } = auth;
-
-
-        // console.log("[CLERK AUTH DEBUG]", {
-        //     isAuthenticated: auth.isAuthenticated,
-        //     userId: auth.userId ?? null,
-        //     debug: auth.debug,
-
-        //     authorizationScheme:
-        //         req.headers.authorization?.split(/\s+/)[0] ?? null,
-
-        //     authorizationParts:
-        //         req.headers.authorization?.trim().split(/\s+/).length ?? 0,
-
-        //     origin: req.headers.origin,
-        //     referer: req.headers.referer,
-        //     accept: req.headers.accept,
-        // });
         if (!userId) {
             return res.status(401).json({
                 success: false,
@@ -977,6 +949,19 @@ router.post("/", async (req: Request, res: Response) => {
             } catch (error) {
                 const message = getErrorMessage(error);
 
+                const googleError = error as {
+                    statusCode?: unknown;
+                    details?: unknown;
+                };
+
+                const providerStatusCode =
+                    typeof googleError.statusCode === "number"
+                        ? googleError.statusCode
+                        : null;
+
+                const providerErrorDetails =
+                    googleError.details ?? null;
+
                 const googleProvider = campaign.providers.googleAds;
 
                 if (googleProvider) {
@@ -990,9 +975,11 @@ router.post("/", async (req: Request, res: Response) => {
 
                 providerResults[`googleAds`] = {
                     success: false,
-                    accountId: googleRequest.accountId,
+                    accountId: googleRequest?.accountId ?? null,
                     creationStatus: "failed",
                     error: message,
+                    providerStatusCode,
+                    providerErrorDetails,
                 };
             }
         }
@@ -1108,8 +1095,6 @@ router.post("/", async (req: Request, res: Response) => {
             } catch (error) {
                 const message = getErrorMessage(error);
 
-                // 6. Recover resource IDs if the orchestration failed
-                // after one or more Meta resources were created.
                 const errorDetails: any =
                     error instanceof MetaAdsCampaignCreationError &&
                         isRecord(error.details)
@@ -1124,33 +1109,23 @@ router.post("/", async (req: Request, res: Response) => {
                         ? error.statusCode
                         : null;
 
-                const partialResult = isRecord(
-                    errorDetails.partialResult,
-                )
+                const partialResult = isRecord(errorDetails.partialResult)
                     ? errorDetails.partialResult
                     : {};
 
-                const partialCampaign = isRecord(
-                    partialResult.campaign,
-                )
+                const partialCampaign = isRecord(partialResult.campaign)
                     ? partialResult.campaign
                     : {};
 
-                const partialAdSet = isRecord(
-                    partialResult.adSet,
-                )
+                const partialAdSet = isRecord(partialResult.adSet)
                     ? partialResult.adSet
                     : {};
 
-                const partialCreative = isRecord(
-                    partialResult.creative,
-                )
+                const partialCreative = isRecord(partialResult.creative)
                     ? partialResult.creative
                     : {};
 
-                const partialAd = isRecord(
-                    partialResult.ad,
-                )
+                const partialAd = isRecord(partialResult.ad)
                     ? partialResult.ad
                     : {};
 
@@ -1185,44 +1160,30 @@ router.post("/", async (req: Request, res: Response) => {
                                 ? partialAd.adId
                                 : null,
                     },
-                ].filter(
-                    (resource) => Boolean(resource.resourceId),
-                );
+                ].filter((resource) => Boolean(resource.resourceId));
 
-                // 7. Preserve any resources that were successfully created.
                 if (metaProvider) {
                     metaProvider.creationStatus =
-                        partialResources.length > 0
-                            ? "partial"
-                            : "failed";
+                        partialResources.length > 0 ? "partial" : "failed";
 
                     metaProvider.providerCampaignId = campaignId;
-
-                    metaProvider.providerStatus =
-                        campaignId ? "PAUSED" : null;
-
+                    metaProvider.providerStatus = campaignId ? "PAUSED" : null;
                     metaProvider.deliveryStatus = "PAUSED";
-
                     metaProvider.resources = partialResources;
                     metaProvider.lastError = message;
 
                     metaProvider.lastSyncedAt =
-                        partialResources.length > 0
-                            ? new Date()
-                            : null;
+                        partialResources.length > 0 ? new Date() : null;
 
                     campaign.markModified("providers.metaAds");
-
                     await campaign.save();
                 }
 
-                providerResults[`metaAds`] = {
+                providerResults.metaAds = {
                     success: false,
                     accountId: metaRequest?.accountId ?? null,
                     creationStatus:
-                        partialResources.length > 0
-                            ? "partial"
-                            : "failed",
+                        partialResources.length > 0 ? "partial" : "failed",
                     failedStep:
                         typeof errorDetails.failedStep === "string"
                             ? errorDetails.failedStep
@@ -1327,9 +1288,9 @@ router.post("/", async (req: Request, res: Response) => {
         });
 
         /* const googleFailed = googleResult?.success === false;
-
+    
         const googleSelected = request.platforms.includes("googleAds");
-
+    
         const message = googleFailed
             ? "Campaign request was saved, but Google Ads campaign execution failed."
             : googleSelected
@@ -1337,7 +1298,7 @@ router.post("/", async (req: Request, res: Response) => {
                     ? "Google Ads Search campaign validation completed successfully. No external campaign resources were created."
                     : "Google Ads Search campaign created successfully."
                 : "Campaign request saved. Provider execution is pending implementation.";
-
+    
         return res
             .status(
                 googleFailed
@@ -1351,18 +1312,18 @@ router.post("/", async (req: Request, res: Response) => {
             .json({
                 success: !googleFailed,
                 message,
-
+    
                 campaign: {
                     id: campaign._id.toString(),
                     name: campaign.name,
                     businessName: campaign.businessName,
                     objective: campaign.objective,
                     platforms: campaign.platforms,
-
+    
                     providers: Object.fromEntries(
                         request.platforms.map((provider: AdvertisingProvider) => {
                             const providerData = campaign.providers[provider];
-
+    
                             return [
                                 provider,
                                 {
@@ -1374,10 +1335,10 @@ router.post("/", async (req: Request, res: Response) => {
                             ];
                         }),
                     ),
-
+    
                     createdAt: campaign.createdAt,
                 },
-
+    
                 execution,
                 providers: providerResults,
             });*/

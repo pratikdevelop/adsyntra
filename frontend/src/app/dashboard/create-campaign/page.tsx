@@ -139,7 +139,7 @@ function selectedAccount(connection: ProviderConnection): unknown | null {
   );
 }
 
-function selectedAccountLabel(connection: ProviderConnection): string {
+function selectedAccountLabel(connection: any): string {
   const account = selectedAccount(connection);
   return account
     ? getAccountName(account)
@@ -205,8 +205,8 @@ export default function CreateCampaignPage() {
     googlePortfolioStrategyResourceName,
     setGooglePortfolioStrategyResourceName,
   ] = useState("customers/1234567890/biddingStrategies/123456789");
-  const [googleStartDate, setGoogleStartDate] = useState("2026-11-05");
-  const [googleEndDate, setGoogleEndDate] = useState("2026-12-05");
+  const [googleStartDate, setGoogleStartDate] = useState("2026-11-12");
+  const [googleEndDate, setGoogleEndDate] = useState("2026-12-12");
   const [googleGeoTargetResources, setGoogleGeoTargetResources] = useState(
     "geoTargetConstants/2356",
   );
@@ -296,8 +296,8 @@ export default function CreateCampaignPage() {
   );
   const [metaDailyBudget, setMetaDailyBudget] = useState("1200");
   const [metaLifetimeBudget, setMetaLifetimeBudget] = useState("25000");
-  const [metaStartTime, setMetaStartTime] = useState("2026-11-05T09:00");
-  const [metaEndTime, setMetaEndTime] = useState("2026-12-05T18:00");
+  const [metaStartTime, setMetaStartTime] = useState("2026-11-12T09:00");
+  const [metaEndTime, setMetaEndTime] = useState("2026-12-12T18:00");
   const [metaOptimizationGoal, setMetaOptimizationGoal] = useState(
     "OFFSITE_CONVERSIONS",
   );
@@ -404,10 +404,10 @@ export default function CreateCampaignPage() {
 
   // Meta child structure: Ad Set and a starter link-ad creative draft.
   const [metaAdSetName, setMetaAdSetName] = useState("Main Ad Set");
-  const [metaPageId, setMetaPageId] = useState("123456789012345");
+  const [metaPageId, setMetaPageId] = useState("1383140784881581");
   const [metaInstagramActorId, setMetaInstagramActorId] =
     useState("123456789012345");
-  const [metaPixelId, setMetaPixelId] = useState("123456789012345");
+  const [metaPixelId, setMetaPixelId] = useState("29451219881127961");
   const [metaConversionEvent, setMetaConversionEvent] = useState("PURCHASE");
   const [metaPrimaryText, setMetaPrimaryText] = useState(
     "Discover the latest collection from Acme Demo Store. Shop seasonal favourites and find something you love.",
@@ -419,7 +419,7 @@ export default function CreateCampaignPage() {
     "New arrivals and seasonal offers.",
   );
   const [metaCreativeImageUrl, setMetaCreativeImageUrl] = useState(
-    "https://example.com/meta-ad-image.jpg",
+    "https://bkacontent.com/wp-content/uploads/2016/06/Depositphotos_31146757_l-2015.webp",
   );
   const [metaCreativeFormat, setMetaCreativeFormat] = useState<
     "SINGLE_IMAGE" | "SINGLE_VIDEO" | "CAROUSEL"
@@ -443,13 +443,13 @@ export default function CreateCampaignPage() {
     "MESSENGER" | "INSTAGRAM_DIRECT" | "WHATSAPP"
   >("MESSENGER");
   const [metaDestinationUrl, setMetaDestinationUrl] = useState(
-    "https://example.com/summer-collection",
+    "https://recomind.onrender.com",
   );
   const [metaCallToAction, setMetaCallToAction] = useState("LEARN_MORE");
 
   // Google ad drafts are collected after the campaign's Ad Group / Asset Group.
   const [googleSearchFinalUrl, setGoogleSearchFinalUrl] = useState(
-    "https://example.com",
+    "https://recomind.onrender.com",
   );
   const [googleSearchHeadlines, setGoogleSearchHeadlines] = useState(
     "Shop Quality Products\nSummer Sale Is Here\nFast Delivery Available",
@@ -460,7 +460,7 @@ export default function CreateCampaignPage() {
   const [googleSearchPath1, setGoogleSearchPath1] = useState("summer-sale");
   const [googleSearchPath2, setGoogleSearchPath2] = useState("shop-online");
   const [googleDisplayFinalUrl, setGoogleDisplayFinalUrl] = useState(
-    "https://example.com",
+    "https://recomind.onrender.com",
   );
   const [googleDisplayHeadlines, setGoogleDisplayHeadlines] = useState(
     "Discover New Arrivals\nSummer Sale Today",
@@ -1296,94 +1296,39 @@ export default function CreateCampaignPage() {
       return false;
     }
     if (selectedPlatforms.includes("metaAds")) {
-      /*const countryCodes = metaCountries
-        .split(",")
-        .map((code) => code.trim().toUpperCase())
-        .filter(Boolean);
+      const splitMetaLocations = (value: string) =>
+        value
+          .split(/[\n,]+/)
+          .map((item) => item.trim())
+          .filter(Boolean);
+
+      const countryCodes = splitMetaLocations(metaCountries).map((code) =>
+        code.toUpperCase(),
+      );
+
+      const regionKeys = splitMetaLocations(metaRegionKeys);
+      const cityKeys = splitMetaLocations(metaCityKeys);
+      const zipKeys = splitMetaLocations(metaZipKeys);
+
       const minAge = Number(metaAgeMin);
       const maxAge = Number(metaAgeMax);
+
+      const hasAnyLocation =
+        countryCodes.length > 0 ||
+        regionKeys.length > 0 ||
+        cityKeys.length > 0 ||
+        zipKeys.length > 0;
+
       if (
-        !countryCodes.length ||
-        countryCodes.some((code) => !/^[A-Z]{2}$/.test(code))
+        !hasAnyLocation ||
+        (countryCodes.length > 0 &&
+          countryCodes.some((code) => !/^[A-Z]{2}$/.test(code)))
       ) {
         setError(
-          "Enter one or more two-letter country codes for Meta targeting, such as IN or US.",
+          "Select at least one valid Meta country, region, city or ZIP location.",
         );
         return false;
       }
-      const regionKeys = metaRegionKeys
-        .split(/[\n,]+/)
-        .map((v) => v.trim())
-        .filter(Boolean);
-      const cityKeys = metaCityKeys
-        .split(/[\n,]+/)
-        .map((v) => v.trim())
-        .filter(Boolean);
-      const zipKeys = metaZipKeys
-        .split(/[\n,]+/)
-        .map((v) => v.trim())
-        .filter(Boolean);
-      if ([...regionKeys, ...cityKeys].some((key) => !/^\d+$/.test(key))) {
-        setError(
-          "Meta region and city targeting require numeric geo-location keys from Meta's location search.",
-        );
-        return false;
-      }
-      if (
-        cityKeys.length &&
-        (!isPositiveAmount(metaCityRadius) || Number(metaCityRadius) > 80)
-      ) {
-        setError(
-          "Enter a city radius greater than zero and no more than 80 km/miles.",
-        );
-        return false;
-      }
-      if (zipKeys.some((key) => !/^[A-Z]{2}:[A-Za-z0-9 -]+$/i.test(key))) {
-        setError(
-          "Use Meta ZIP keys in country-prefixed format, such as US:94103.",
-        );
-        return false;
-      }
-      const interestIds = metaAudienceInterestIds
-        .split(/[\n,]+/)
-        .map((v) => v.trim())
-        .filter(Boolean);
-      const includeIds = metaIncludedCustomAudienceIds
-        .split(/[\n,]+/)
-        .map((v) => v.trim())
-        .filter(Boolean);
-      const excludeIds = metaExcludedCustomAudienceIds
-        .split(/[\n,]+/)
-        .map((v) => v.trim())
-        .filter(Boolean);
-      if (
-        [...interestIds, ...includeIds, ...excludeIds].some(
-          (id) => !/^\d+$/.test(id),
-        )
-      ) {
-        setError(
-          "Meta interest and Custom Audience fields require numeric IDs, not names.",
-        );
-        return false;
-      }
-      if (includeIds.some((id) => excludeIds.includes(id))) {
-        setError(
-          "The same Custom Audience cannot be included and excluded at once.",
-        );
-        return false;
-      }
-      if (
-        !Number.isInteger(minAge) ||
-        !Number.isInteger(maxAge) ||
-        minAge < 18 ||
-        maxAge > 65 ||
-        minAge > maxAge
-      ) {
-        setError(
-          "Enter a valid Meta age range from 18 to 65, with minimum age not greater than maximum age.",
-        );
-        return false;
-      }*/
       const metaObjective = metaObjectiveMap[objective];
       const metaCurrency = selectedCurrency(connections.metaAds);
 
@@ -2000,6 +1945,42 @@ export default function CreateCampaignPage() {
       return;
     }
 
+    const splitMetaLocations = (value: string) =>
+      value
+        .split(/[\n,]+/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+
+    const countryCodes = splitMetaLocations(metaCountries).map((code) =>
+      code.toUpperCase(),
+    );
+
+    const regionKeys = splitMetaLocations(metaRegionKeys);
+    const cityKeys = splitMetaLocations(metaCityKeys);
+    const zipKeys = splitMetaLocations(metaZipKeys);
+
+    const executionGeoLocations =
+      zipKeys.length > 0
+        ? {
+            zips: zipKeys.map((key) => ({
+              key: key.toUpperCase(),
+            })),
+          }
+        : cityKeys.length > 0
+          ? {
+              cities: cityKeys.map((key) => ({
+                key,
+                radius: Number(metaCityRadius),
+                distance_unit: metaCityDistanceUnit,
+              })),
+            }
+          : regionKeys.length > 0
+            ? {
+                regions: regionKeys.map((key) => ({ key })),
+              }
+            : {
+                countries: countryCodes,
+              };
     const payload = {
       contractVersion: "campaign-builder.v1",
       providerApiTargets: { googleAds: "v26", metaMarketingApi: "v26.0" },
@@ -2682,29 +2663,7 @@ export default function CreateCampaignPage() {
               scheduleMapping:
                 "Meta start_time and end_time belong to the Ad Set, including when the budget is at Campaign level.",
               targeting: {
-                geo_locations: {
-                  countries: metaCountries
-                    .split(",")
-                    .map((code) => code.trim().toUpperCase())
-                    .filter(Boolean),
-                  ...(metaRegionKeys.trim() && {
-                    regions: metaRegionKeys
-                      .split(/[\n,]+/)
-                      .map((key) => ({ key: key.trim() })),
-                  }),
-                  ...(metaCityKeys.trim() && {
-                    cities: metaCityKeys.split(/[\n,]+/).map((key) => ({
-                      key: key.trim(),
-                      radius: Number(metaCityRadius),
-                      distance_unit: metaCityDistanceUnit,
-                    })),
-                  }),
-                  ...(metaZipKeys.trim() && {
-                    zips: metaZipKeys
-                      .split(/[\n,]+/)
-                      .map((key) => ({ key: key.trim().toUpperCase() })),
-                  }),
-                },
+                geo_locations: executionGeoLocations,
                 ...(metaSpecialAdCategories.length === 0 && {
                   age_min: Number(metaAgeMin),
                   age_max: Number(metaAgeMax),
@@ -3299,27 +3258,35 @@ export default function CreateCampaignPage() {
         );
       }
 
+      const zipKeys = splitValues(metaZipKeys);
+
+      const geoLocations =
+        zipKeys.length > 0
+          ? {
+              zips: zipKeys.map((key) => ({
+                key: key.toUpperCase(),
+              })),
+            }
+          : cityKeys.length > 0
+            ? {
+                cities: cityKeys.map((key) => ({
+                  key,
+                  radius: Number(metaCityRadius),
+                  distance_unit: metaCityDistanceUnit,
+                })),
+              }
+            : regionKeys.length > 0
+              ? {
+                  regions: regionKeys.map((key) => ({ key })),
+                }
+              : {
+                  countries: splitValues(metaCountries).map((code) =>
+                    code.toUpperCase(),
+                  ),
+                };
+
       const targeting = {
-        geo_locations: {
-          countries: splitValues(metaCountries).map((code) =>
-            code.toUpperCase(),
-          ),
-          ...(regionKeys.length > 0 && {
-            regions: regionKeys.map((key) => ({ key })),
-          }),
-          ...(cityKeys.length > 0 && {
-            cities: cityKeys.map((key) => ({
-              key,
-              radius: Number(metaCityRadius),
-              distance_unit: metaCityDistanceUnit,
-            })),
-          }),
-          ...(splitValues(metaZipKeys).length > 0 && {
-            zips: splitValues(metaZipKeys).map((key) => ({
-              key: key.toUpperCase(),
-            })),
-          }),
-        },
+        geo_locations: geoLocations,
 
         ...(metaSpecialAdCategories.length === 0 && {
           age_min: Number(metaAgeMin),
@@ -3703,44 +3670,42 @@ export default function CreateCampaignPage() {
     const createdAt = new Date().toLocaleString();
     const recordId = `LOCAL-${jobId}`;
     const groupId = recordId;
-    const records: ManagedCampaignRecord[] = selectedPlatforms.map(
-      (platform) => {
-        const providerResult = providers.find(
-          (item) => item.provider === platform,
-        );
-        const providerStatus = providerResult?.status ?? "FAILED";
-        const providerBudget =
+    const records: any[] = selectedPlatforms.map((platform) => {
+      const providerResult = providers.find(
+        (item) => item.provider === platform,
+      );
+      const providerStatus = providerResult?.status ?? "FAILED";
+      const providerBudget =
+        platform === "googleAds"
+          ? `Google ${effectiveGoogleBudgetMode === "DAILY" ? googleDailyBudget + "/day" : googleCampaignTotalBudget + " total"}`
+          : `Meta ${metaBudgetMode === "DAILY" ? metaDailyBudget + "/day" : metaLifetimeBudget + " lifetime"}`;
+      return {
+        id: `${recordId}-${platform === "googleAds" ? "GOOGLE" : "META"}`,
+        groupId,
+        name: campaignName.trim() || "Untitled campaign",
+        provider: platform,
+        campaignType:
           platform === "googleAds"
-            ? `Google ${effectiveGoogleBudgetMode === "DAILY" ? googleDailyBudget + "/day" : googleCampaignTotalBudget + " total"}`
-            : `Meta ${metaBudgetMode === "DAILY" ? metaDailyBudget + "/day" : metaLifetimeBudget + " lifetime"}`;
-        return {
-          id: `${recordId}-${platform === "googleAds" ? "GOOGLE" : "META"}`,
-          groupId,
-          name: campaignName.trim() || "Untitled campaign",
-          provider: platform,
-          campaignType:
-            platform === "googleAds"
-              ? `Google ${googleCampaignType}`
-              : `Meta ${metaBuyingType}`,
-          googleCampaignType:
-            platform === "googleAds" ? googleCampaignType : undefined,
-          objective: (objective || "SALES") as Objective,
-          budgetLabel: providerBudget,
-          status:
-            providerStatus === "SUCCESS"
-              ? "ACTIVE"
-              : providerStatus === "FAILED"
-                ? "FAILED"
-                : "PAUSED",
-          creationStatus: providerStatus,
-          accountLabel: selectedAccountLabel(connections[platform]),
-          createdAt,
-          updatedAt: createdAt,
-          source: "LOCAL",
-          jobId,
-        };
-      },
-    );
+            ? `Google ${googleCampaignType}`
+            : `Meta ${metaBuyingType}`,
+        googleCampaignType:
+          platform === "googleAds" ? googleCampaignType : undefined,
+        objective: (objective || "SALES") as Objective,
+        budgetLabel: providerBudget,
+        status:
+          providerStatus === "SUCCESS"
+            ? "ACTIVE"
+            : providerStatus === "FAILED"
+              ? "FAILED"
+              : "PAUSED",
+        creationStatus: providerStatus,
+        accountLabel: selectedAccountLabel(connections[platform]),
+        createdAt,
+        updatedAt: createdAt,
+        source: "LOCAL",
+        jobId,
+      };
+    });
     setDemoJob({ jobId, createdAt, scenario, overallStatus, providers });
     setCampaignRecords((current) => [
       ...records,

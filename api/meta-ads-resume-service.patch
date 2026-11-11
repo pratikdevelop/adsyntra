@@ -1,0 +1,279 @@
+--- a/src/metaadsAPI/services/campaign-creation.ts
++++ b/src/metaadsAPI/services/campaign-creation.ts
+@@ -3299,4 +3299,274 @@
+       },
+     );
+   }
+-}
+\ No newline at end of file
++}
++/**
++ * Existing Meta resources already attached to the saved local campaign.
++ * IDs in this object are reused; this resume flow never recreates them.
++ */
++export interface MetaAdsExistingResourceIds {
++  adSetId?: string | null;
++  creativeId?: string | null;
++  adId?: string | null;
++}
++
++export interface ResumeMetaAdsCampaignOptions {
++  /** Existing Meta Campaign ID. This method never creates a Campaign. */
++  campaignId: string;
++  /** IDs recovered from the local CampaignModel provider.resources array. */
++  existingResourceIds?: MetaAdsExistingResourceIds;
++  /**
++   * Must be explicitly true before creating any missing child resource.
++   * Set this only after reconciling the Meta account/Ads Manager and confirming
++   * that the missing Ad Set, Creative and Ad do not already exist.
++   */
++  confirmMissingResources?: boolean;
++}
++
++export type MetaAdsCampaignResumeResult =
++  MetaAdsCampaignBundleCreationResult & {
++    resumed: true;
++    reusedResources: Array<"campaign" | "adSet" | "creative" | "ad">;
++  };
++
++/**
++ * Resume a partially-created Meta campaign without creating a second Campaign.
++ * The caller must load the existing local campaign, pass its persisted provider
++ * configuration and the Meta child IDs already saved in provider.resources.
++ */
++export async function resumeMetaAdsCampaignForUser(
++  userId: string,
++  selectedAccountId: string,
++  input: CreateMetaAdsCampaignBundleInput,
++  options: ResumeMetaAdsCampaignOptions,
++): Promise<MetaAdsCampaignResumeResult> {
++  const campaignId = options.campaignId?.trim();
++
++  if (!campaignId || !/^\d+$/.test(campaignId)) {
++    throw new MetaAdsCampaignCreationError(
++      "A valid existing Meta Campaign ID is required to resume creation.",
++      400,
++    );
++  }
++
++  if (!input?.campaign || !input?.adSet || !input?.creative || !input?.ad) {
++    throw new MetaAdsCampaignCreationError(
++      "The saved Meta campaign, Ad Set, creative and ad configuration is required.",
++      400,
++    );
++  }
++
++  const existing = options.existingResourceIds ?? {};
++  const existingAdSetId = existing.adSetId?.trim() || null;
++  const existingCreativeId = existing.creativeId?.trim() || null;
++  const existingAdId = existing.adId?.trim() || null;
++
++  const missingResources = [
++    ...(!existingAdSetId ? ["Ad Set"] : []),
++    ...(!existingCreativeId ? ["Ad Creative"] : []),
++    ...(!existingAdId ? ["Ad"] : []),
++  ];
++
++  if (missingResources.length > 0 && options.confirmMissingResources !== true) {
++    throw new MetaAdsCampaignCreationError(
++      `Retry has been blocked because these Meta resources have no saved IDs: ${missingResources.join(", ")}. Check the Meta account first, then explicitly confirm that the missing resources do not already exist.`,
++      409,
++      {
++        requiresResourceReconciliation: true,
++        existingCampaignId: campaignId,
++        missingResources,
++      },
++    );
++  }
++
++  const context = await getMetaAdsCreationContext(
++    userId,
++    selectedAccountId,
++  );
++
++  const budgetLevel = input.campaign.budgetLevel ?? "CAMPAIGN";
++
++  if (
++    input.adSet.budgetLevel !== undefined &&
++    input.adSet.budgetLevel !== budgetLevel
++  ) {
++    throw new MetaAdsCampaignCreationError(
++      "Campaign and Ad Set budget levels do not match.",
++      400,
++    );
++  }
++
++  if (input.adSet.campaignObjective !== input.campaign.objective) {
++    throw new MetaAdsCampaignCreationError(
++      "Campaign objective and Ad Set campaignObjective must match.",
++      400,
++    );
++  }
++
++  const campaignResult: MetaAdsCampaignCreationResult = {
++    validateOnly: false,
++    adAccountId: context.adAccountId,
++    campaignId,
++    name: input.campaign.name,
++    objective: input.campaign.objective,
++    status: "PAUSED",
++    buyingType: input.campaign.buyingType ?? "AUCTION",
++    // This campaign was created in the earlier attempt; no create call is made.
++    metaResponse: null,
++  };
++
++  const partialResult: {
++    campaign?: MetaAdsCampaignCreationResult;
++    adSet?: MetaAdsAdSetCreationResult;
++    creative?: MetaAdsAdCreativeCreationResult;
++    ad?: MetaAdsAdCreationResult;
++  } = { campaign: campaignResult };
++
++  const reusedResources: Array<"campaign" | "adSet" | "creative" | "ad"> = [
++    "campaign",
++  ];
++
++  let failedStep = "Ad Set";
++
++  try {
++    let adSetResult: MetaAdsAdSetCreationResult;
++
++    if (existingAdSetId) {
++      reusedResources.push("adSet");
++      adSetResult = {
++        validateOnly: false,
++        adAccountId: context.adAccountId,
++        campaignId,
++        adSetId: existingAdSetId,
++        name: input.adSet.name,
++        status: "PAUSED",
++        metaResponse: null,
++      };
++    } else {
++      adSetResult = await createMetaAdsAdSet(context, {
++        ...input.adSet,
++        campaignId,
++        campaignObjective: input.campaign.objective,
++        budgetLevel,
++        specialAdCategories: input.campaign.specialAdCategories ?? [],
++        validateOnly: false,
++        confirm: true,
++      });
++
++      if (!adSetResult.adSetId) {
++        throw new MetaAdsCampaignCreationError(
++          "Meta Ads returned no Ad Set ID while resuming the campaign.",
++          502,
++          adSetResult.metaResponse,
++        );
++      }
++    }
++
++    partialResult.adSet = adSetResult;
++
++    let creativeResult: MetaAdsAdCreativeCreationResult;
++    failedStep = "Creative";
++
++    if (existingCreativeId) {
++      reusedResources.push("creative");
++      creativeResult = {
++        validateOnly: false,
++        adAccountId: context.adAccountId,
++        creativeId: existingCreativeId,
++        name: input.creative.name,
++        pageId: input.creative.pageId,
++        metaResponse: null,
++      };
++    } else {
++      creativeResult = await createMetaAdsAdCreative(context, {
++        ...input.creative,
++        validateOnly: false,
++        confirm: true,
++      });
++
++      if (!creativeResult.creativeId) {
++        throw new MetaAdsCampaignCreationError(
++          "Meta Ads returned no Ad Creative ID while resuming the campaign.",
++          502,
++          creativeResult.metaResponse,
++        );
++      }
++    }
++
++    partialResult.creative = creativeResult;
++
++    let adResult: MetaAdsAdCreationResult;
++    failedStep = "Ad";
++
++    if (existingAdId) {
++      reusedResources.push("ad");
++      adResult = {
++        validateOnly: false,
++        adAccountId: context.adAccountId,
++        adId: existingAdId,
++        adSetId: adSetResult.adSetId!,
++        creativeId: creativeResult.creativeId!,
++        name: input.ad.name,
++        status: "PAUSED",
++        metaResponse: null,
++      };
++    } else {
++      adResult = await createMetaAdsAd(context, {
++        ...input.ad,
++        adSetId: adSetResult.adSetId!,
++        creativeId: creativeResult.creativeId!,
++        validateOnly: false,
++        confirm: true,
++      });
++
++      if (!adResult.adId) {
++        throw new MetaAdsCampaignCreationError(
++          "Meta Ads returned no Ad ID while resuming the campaign.",
++          502,
++          adResult.metaResponse,
++        );
++      }
++    }
++
++    partialResult.ad = adResult;
++
++    return {
++      validateOnly: false,
++      adAccountId: context.adAccountId,
++      campaign: campaignResult,
++      adSet: adSetResult,
++      creative: creativeResult,
++      ad: adResult,
++      resumed: true,
++      reusedResources,
++    };
++  } catch (error) {
++    const message =
++      error instanceof Error
++        ? error.message
++        : "Unknown Meta Ads resume error.";
++
++    const statusCode =
++      error instanceof MetaAdsCampaignCreationError
++        ? error.statusCode
++        : 502;
++
++    const originalErrorDetails =
++      error instanceof MetaAdsCampaignCreationError
++        ? error.details ?? null
++        : null;
++
++    throw new MetaAdsCampaignCreationError(
++      `Meta Ads resume failed during ${failedStep}: ${message}`,
++      statusCode,
++      {
++        failedStep,
++        resumed: true,
++        partialResult,
++        originalError: message,
++        originalErrorDetails,
++      },
++    );
++  }
++}
++

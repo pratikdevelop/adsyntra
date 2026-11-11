@@ -17,6 +17,8 @@ export default async function Home() {
     redirect("/dashboard/provider");
   }
 
+  // https://www.facebook.com/business/news/click-attribution
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-slate-50 via-white to-slate-50">
       {/* Header */}

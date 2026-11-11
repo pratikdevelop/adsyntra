@@ -24,8 +24,14 @@ import {
 } from "../googleadsAPI/services/campaign-creation.js";
 import {
     createMetaAdsCampaignForUser,
+    createMetaAdsAdSet,
+    createMetaAdsAdCreative,
+    getMetaAdsCreationContext,
     MetaAdsCampaignCreationError,
     type CreateMetaAdsCampaignBundleInput,
+    type CreateMetaAdsAdCreativeInput,
+    type CreateMetaAdsAdSetInput,
+    type MetaAdsCampaignObjective,
 } from "../metaadsAPI/services/campaign-creation.js";
 import type { CreateGoogleAdsSearchCampaignFlowInput } from "../googleadsAPI/iterface/campaign-creation.js";
 import {
@@ -533,6 +539,12 @@ const normalizeGoogleAccountId = (value: unknown): string => {
         .replace(/\D/g, "");
 };
 
+function normalizeMetaAccountId(value: unknown): string {
+    return String(value ?? "")
+        .trim()
+        .replace(/^act_/i, "");
+}
+
 async function fetchProviderCampaigns(
     accountId: string | null | undefined,
     fetchCampaigns: (accountId: string) => Promise<unknown>,
@@ -741,34 +753,34 @@ router.post("/", async (req: Request, res: Response) => {
     try {
         const auth = getAuth(req);
 
-        console.log("[CAMPAIGN CREATE AUTH DEBUG]", {
-            isAuthenticated: auth.isAuthenticated,
-            userId: auth.userId,
-            sessionId: auth.sessionId,
-            path: req.originalUrl,
-            method: req.method,
-            hasCookie: Boolean(req.headers.cookie),
-            hasAuthorization: Boolean(req.headers.authorization),
-        });
+        // console.log("[CAMPAIGN CREATE AUTH DEBUG]", {
+        //     isAuthenticated: auth.isAuthenticated,
+        //     userId: auth.userId,
+        //     sessionId: auth.sessionId,
+        //     path: req.originalUrl,
+        //     method: req.method,
+        //     hasCookie: Boolean(req.headers.cookie),
+        //     hasAuthorization: Boolean(req.headers.authorization),
+        // });
 
         const { userId } = auth;
 
 
-        console.log("[CLERK AUTH DEBUG]", {
-            isAuthenticated: auth.isAuthenticated,
-            userId: auth.userId ?? null,
-            debug: auth.debug,
+        // console.log("[CLERK AUTH DEBUG]", {
+        //     isAuthenticated: auth.isAuthenticated,
+        //     userId: auth.userId ?? null,
+        //     debug: auth.debug,
 
-            authorizationScheme:
-                req.headers.authorization?.split(/\s+/)[0] ?? null,
+        //     authorizationScheme:
+        //         req.headers.authorization?.split(/\s+/)[0] ?? null,
 
-            authorizationParts:
-                req.headers.authorization?.trim().split(/\s+/).length ?? 0,
+        //     authorizationParts:
+        //         req.headers.authorization?.trim().split(/\s+/).length ?? 0,
 
-            origin: req.headers.origin,
-            referer: req.headers.referer,
-            accept: req.headers.accept,
-        });
+        //     origin: req.headers.origin,
+        //     referer: req.headers.referer,
+        //     accept: req.headers.accept,
+        // });
         if (!userId) {
             return res.status(401).json({
                 success: false,
@@ -1104,6 +1116,14 @@ router.post("/", async (req: Request, res: Response) => {
                         ? error.details
                         : {};
 
+                const providerErrorDetails =
+                    errorDetails.originalErrorDetails ?? null;
+
+                const providerStatusCode =
+                    error instanceof MetaAdsCampaignCreationError
+                        ? error.statusCode
+                        : null;
+
                 const partialResult = isRecord(
                     errorDetails.partialResult,
                 )
@@ -1209,6 +1229,8 @@ router.post("/", async (req: Request, res: Response) => {
                             : null,
                     error: message,
                     partialResources,
+                    providerStatusCode,
+                    providerErrorDetails,
                 };
             }
         }
@@ -1402,8 +1424,8 @@ router.post(
                 });
             }
 
-            const campaignId = req.params.campaignId;
-            const body = isPlainRecord(req.body) ? req.body : {};
+            const campaignId: any = req.params[`campaignId`];
+            const body: any = isRecord(req.body) ? req.body : {};
 
             if (!/^[a-fA-F0-9]{24}$/.test(campaignId)) {
                 return res.status(400).json({
@@ -1505,15 +1527,15 @@ router.post(
                 ? metaProvider.resources
                 : [];
 
-            const existingAdSet = resources.some((item: unknown) => {
-                if (!isPlainRecord(item)) return false;
+            const existingAdSet = resources.some((item: any) => {
+                if (!isRecord(item)) return false;
 
                 const resourceType = String(
-                    item.resourceType ?? "",
+                    item[`resourceType`] ?? "",
                 ).toLowerCase();
 
                 const resourceId =
-                    item.resourceId ?? item.id;
+                    item[`resourceId`] ?? item[`id`];
 
                 return (
                     resourceType === "adset" ||
@@ -1550,19 +1572,19 @@ router.post(
 
             // Read the original provider configuration saved during
             // the initial campaign request.
-            const configuration = isPlainRecord(
+            const configuration: any = isRecord(
                 metaProvider.configuration,
             )
                 ? metaProvider.configuration
                 : null;
 
-            const campaignConfig = isPlainRecord(
+            const campaignConfig = isRecord(
                 configuration?.campaign,
             )
                 ? configuration.campaign
                 : null;
 
-            const adSetConfig = isPlainRecord(
+            const adSetConfig = isRecord(
                 configuration?.adSet,
             )
                 ? configuration.adSet
@@ -1831,6 +1853,539 @@ router.post(
 );
 
 
+/**
+ * POST /api/campaigns/:campaignId/meta/creative/retry
+ *
+ * Retries only Creative creation.
+ * Reuses the existing Meta Campaign and Ad Set IDs.
+ *
+ * Body:
+ * {
+ *   "confirm": true,
+ *   "creative": {
+ *     "imageUrl": "https://your-domain.com/product.jpg"
+ *   }
+ * }
+ */
+router.post(
+    "/:campaignId/meta/creative/retry",
+    async (req: any, res: Response) => {
+        try {
+            const { userId } = getAuth(req);
+
+            if (!userId) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Authentication required.",
+                });
+            }
+
+            const campaignId = req.params.campaignId;
+            const body = isRecord(req.body) ? req.body : {};
+
+            if (!/^[a-fA-F0-9]{24}$/.test(campaignId)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid application campaign ID.",
+                });
+            }
+
+            if (body.confirm !== true) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Creative retry requires confirm: true.",
+                });
+            }
+
+            // Validate optional Creative overrides.
+            if (
+                body.creative !== undefined &&
+                !isRecord(body.creative)
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Creative overrides must be an object.",
+                });
+            }
+
+            const creativeOverrides: Record<string, unknown> =
+                isRecord(body.creative) ? body.creative : {};
+
+            const allowedOverrideFields = new Set([
+                "name",
+                "pageId",
+                "instagramActorId",
+                "primaryText",
+                "headline",
+                "description",
+                "imageUrl",
+                "destinationUrl",
+                "callToAction",
+            ]);
+
+            const unsupportedField = Object.keys(
+                creativeOverrides,
+            ).find((field) => !allowedOverrideFields.has(field));
+
+            if (unsupportedField) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Unsupported Creative override: ${unsupportedField}.`,
+                });
+            }
+
+            const invalidOverride = Object.entries(
+                creativeOverrides,
+            ).find(([, value]) => typeof value !== "string");
+
+            if (invalidOverride) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        `Creative override "${invalidOverride[0]}" must be a string.`,
+                });
+            }
+
+            // Find the application Campaign owned by this user.
+            const campaign = await CampaignModel.findOne({
+                _id: campaignId,
+                ownerUserId: userId,
+            });
+
+            if (!campaign) {
+                return res.status(404).json({
+                    success: false,
+                    message: "Campaign was not found.",
+                });
+            }
+
+            if (!campaign.platforms.includes("metaAds")) {
+                return res.status(409).json({
+                    success: false,
+                    message: "This campaign does not include Meta Ads.",
+                });
+            }
+
+            const metaProvider = campaign.providers.metaAds;
+
+            if (!metaProvider) {
+                return res.status(409).json({
+                    success: false,
+                    message: "Meta provider configuration is missing.",
+                });
+            }
+
+            // Only allow retry after an actual Creative failure.
+            if (
+                metaProvider.creationStatus !== "partial" ||
+                !metaProvider.lastError
+                    ?.toLowerCase()
+                    .includes("during creative")
+            ) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "Creative retry is allowed only after a partial Meta execution failed during Creative creation.",
+                    creationStatus: metaProvider.creationStatus,
+                    lastError: metaProvider.lastError ?? null,
+                });
+            }
+
+            const resources = Array.isArray(metaProvider.resources)
+                ? metaProvider.resources
+                : [];
+
+            // Read previously created Meta resource IDs.
+            const getResourceId = (
+                acceptedTypes: string[],
+            ): string | null => {
+                const resource = resources.find((item: any) => {
+                    if (!isRecord(item)) return false;
+
+                    const type = String(
+                        item.resourceType ?? "",
+                    ).toLowerCase();
+
+                    return acceptedTypes.includes(type);
+                });
+
+                if (!isRecord(resource)) return null;
+
+                const resourceId =
+                    resource.resourceId ?? resource.id;
+
+                return typeof resourceId === "string" &&
+                    /^\d+$/.test(resourceId)
+                    ? resourceId
+                    : null;
+            };
+
+            const existingCampaignId =
+                metaProvider.providerCampaignId?.trim();
+
+            const existingAdSetId = getResourceId([
+                "adset",
+                "ad_set",
+            ]);
+
+            if (
+                !existingCampaignId ||
+                !/^\d+$/.test(existingCampaignId) ||
+                !existingAdSetId
+            ) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "Existing Meta Campaign or Ad Set ID is missing. Creative retry cannot proceed.",
+                });
+            }
+
+            // Prevent duplicate Creative or Ad creation.
+            if (
+                resources.some((item: any) => {
+                    if (!isRecord(item)) return false;
+
+                    const type = String(
+                        item.resourceType ?? "",
+                    ).toLowerCase();
+
+                    return type === "creative";
+                })
+            ) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "A Creative resource is already stored. Refusing to create a duplicate.",
+                });
+            }
+
+            if (
+                resources.some((item: any) => {
+                    if (!isRecord(item)) return false;
+
+                    return (
+                        String(item.resourceType ?? "").toLowerCase() ===
+                        "ad"
+                    );
+                })
+            ) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "An Ad resource already exists. Creative retry is not allowed.",
+                });
+            }
+
+            // Verify account ownership and active status.
+            const account = await AdAccountModel.findOne({
+                userId,
+                provider: "metaAds",
+                externalAccountId: metaProvider.accountId,
+                status: "active",
+            })
+                .select("_id externalAccountId")
+                .lean();
+
+            if (!account) {
+                return res.status(403).json({
+                    success: false,
+                    message:
+                        "Meta Ad Account is inactive or does not belong to this user.",
+                });
+            }
+
+            // Read saved provider configuration.
+            const configuration: any = isRecord(
+                metaProvider.configuration,
+            )
+                ? metaProvider.configuration
+                : null;
+
+            if (!configuration) {
+                return res.status(422).json({
+                    success: false,
+                    message:
+                        "Saved Meta provider configuration is missing.",
+                });
+            }
+
+            const adConfig = isRecord(configuration.ad)
+                ? configuration.ad
+                : {};
+
+            const savedCreativeConfig = isRecord(
+                configuration.creative,
+            )
+                ? configuration.creative
+                : isRecord(adConfig.creativeDraft)
+                    ? adConfig.creativeDraft
+                    : null;
+
+            if (!savedCreativeConfig) {
+                return res.status(422).json({
+                    success: false,
+                    message:
+                        "Saved Meta Creative configuration is missing.",
+                });
+            }
+
+            // Apply optional corrected Creative values.
+            const effectiveCreativeConfig: Record<string, unknown> = {
+                ...savedCreativeConfig,
+                ...creativeOverrides,
+            };
+
+            const adName =
+                optionalConfigString(
+                    adConfig,
+                    ["name"],
+                    "Meta Ad name",
+                ) ?? `${campaign.name} - Ad`;
+
+            const creativeName =
+                optionalConfigString(
+                    effectiveCreativeConfig,
+                    ["name"],
+                    "Meta Creative name",
+                ) ?? `${adName} Creative`;
+
+            const destinationUrl =
+                optionalConfigString(
+                    effectiveCreativeConfig,
+                    ["destinationUrl", "destination_url"],
+                    "Meta Creative destination URL",
+                ) ??
+                (
+                    typeof campaign.websiteUrl === "string"
+                        ? campaign.websiteUrl
+                        : undefined
+                );
+
+            if (!destinationUrl) {
+                return res.status(422).json({
+                    success: false,
+                    message:
+                        "Meta Creative destination URL is missing.",
+                });
+            }
+
+            // Build only the Creative input.
+            const creativeInput: CreateMetaAdsAdCreativeInput = {
+                name: creativeName,
+
+                pageId: requireConfigString(
+                    effectiveCreativeConfig,
+                    ["pageId", "page_id"],
+                    "Meta Facebook Page ID",
+                ),
+
+                instagramActorId: optionalConfigString(
+                    effectiveCreativeConfig,
+                    ["instagramActorId", "instagram_actor_id"],
+                    "Meta Instagram Actor ID",
+                ),
+
+                primaryText: requireConfigString(
+                    effectiveCreativeConfig,
+                    ["primaryText", "message"],
+                    "Meta Creative primary text",
+                ),
+
+                headline: requireConfigString(
+                    effectiveCreativeConfig,
+                    ["headline", "name"],
+                    "Meta Creative headline",
+                ),
+
+                description: optionalConfigString(
+                    effectiveCreativeConfig,
+                    ["description"],
+                    "Meta Creative description",
+                ),
+
+                imageUrl: requireConfigString(
+                    effectiveCreativeConfig,
+                    ["imageUrl", "image_url"],
+                    "Meta Creative image URL",
+                ),
+
+                destinationUrl,
+
+                callToAction: requireConfigString(
+                    effectiveCreativeConfig,
+                    ["callToAction", "call_to_action"],
+                    "Meta Creative call to action",
+                ) as CreateMetaAdsAdCreativeInput["callToAction"],
+
+                validateOnly: false,
+                confirm: true,
+            };
+
+            // Persist the corrected configuration and claim the retry.
+            const updatedConfiguration: Record<string, unknown> = {
+                ...configuration,
+            };
+
+            if (isRecord(configuration.creative)) {
+                updatedConfiguration[`creative`] =
+                    effectiveCreativeConfig;
+            } else {
+                updatedConfiguration[`ad`] = {
+                    ...adConfig,
+                    creativeDraft: effectiveCreativeConfig,
+                };
+            }
+
+            metaProvider.configuration = updatedConfiguration;
+            metaProvider.creationStatus =
+                "creative_retry_in_progress";
+
+            campaign.markModified("providers.metaAds");
+            await campaign.save();
+
+            let createdCreativeId: string | null = null;
+
+            try {
+                // Obtain Meta API context.
+                const context = await getMetaAdsCreationContext(
+                    userId,
+                    metaProvider.accountId,
+                );
+
+                // Create ONLY the Ad Creative.
+                const result = await createMetaAdsAdCreative(
+                    context,
+                    creativeInput,
+                );
+
+                if (!result.creativeId) {
+                    throw new MetaAdsCampaignCreationError(
+                        "Meta did not return a Creative ID.",
+                        502,
+                        result.metaResponse,
+                    );
+                }
+
+                createdCreativeId = result.creativeId;
+
+                // Store the newly created Creative.
+                metaProvider.resources.push({
+                    resourceType: "creative",
+                    resourceId: result.creativeId,
+                    status: "created",
+                });
+
+                // Ad creation is still pending.
+                metaProvider.creationStatus = "partial";
+                metaProvider.providerStatus = "PAUSED";
+                metaProvider.deliveryStatus = "PAUSED";
+                metaProvider.lastError = null;
+                metaProvider.lastSyncedAt = new Date();
+
+                campaign.markModified("providers.metaAds");
+                await campaign.save();
+
+                return res.status(200).json({
+                    success: true,
+                    message:
+                        "Meta Creative created successfully using the existing Campaign and Ad Set. Ad creation is still pending.",
+
+                    campaign: {
+                        id: campaign._id.toString(),
+                        name: campaign.name,
+                        campaignId: existingCampaignId,
+                    },
+
+                    provider: {
+                        provider: "metaAds",
+                        accountId: metaProvider.accountId,
+                        creationStatus: metaProvider.creationStatus,
+                        campaignId: existingCampaignId,
+                        adSetId: existingAdSetId,
+                        creativeId: result.creativeId,
+                    },
+
+                    creative: result,
+                });
+            } catch (error) {
+                const originalMessage = getErrorMessage(error);
+
+                const message =
+                    `Meta Ads setup partially completed. Creation failed during Creative retry: ${originalMessage}`;
+
+                const providerErrorDetails =
+                    error instanceof MetaAdsCampaignCreationError
+                        ? error.details ?? null
+                        : null;
+
+                // Avoid blind retries when the remote result is ambiguous.
+                const needsAttention =
+                    createdCreativeId !== null ||
+                    !(error instanceof MetaAdsCampaignCreationError) ||
+                    error.statusCode >= 500;
+
+                metaProvider.creationStatus = needsAttention
+                    ? "needs_attention"
+                    : "partial";
+
+                metaProvider.lastError = message;
+                metaProvider.lastSyncedAt = new Date();
+
+                campaign.markModified("providers.metaAds");
+
+                try {
+                    await campaign.save();
+                } catch (saveError) {
+                    console.error(
+                        "Failed to persist Meta Creative retry status:",
+                        getErrorMessage(saveError),
+                    );
+                }
+
+                console.error("[META CREATIVE RETRY FAILED]", {
+                    campaignId,
+                    providerCampaignId: existingCampaignId,
+                    adSetId: existingAdSetId,
+                    message,
+                    providerErrorDetails,
+                    createdCreativeId,
+                });
+
+                return res
+                    .status(
+                        error instanceof MetaAdsCampaignCreationError
+                            ? error.statusCode
+                            : 502,
+                    )
+                    .json({
+                        success: false,
+                        message,
+                        failedStep: "Creative",
+                        creationStatus: metaProvider.creationStatus,
+                        campaignId: existingCampaignId,
+                        adSetId: existingAdSetId,
+                        createdCreativeId,
+                        providerErrorDetails,
+                    });
+            }
+        } catch (error) {
+            console.error(
+                "Meta Creative retry route error:",
+                getErrorMessage(error),
+            );
+
+            return res.status(
+                error instanceof CampaignRequestValidationError
+                    ? 400
+                    : 500,
+            ).json({
+                success: false,
+                message: getErrorMessage(error),
+            });
+        }
+    },
+);
+
 router.get("/", async (req: Request, res: Response) => {
     try {
         const { userId } = getAuth(req);
@@ -1874,35 +2429,35 @@ router.get("/", async (req: Request, res: Response) => {
             ownerUserId: userId,
         }).lean() as any;
 
-        console.log("CampaignModel diagnostic:", {
-            authenticatedUserId: userId,
-            collection: CampaignModel.collection.name,
-            totalDocuments,
-            schemaPaths: Object.keys(CampaignModel.schema.paths),
+        // console.log("CampaignModel diagnostic:", {
+        //     authenticatedUserId: userId,
+        //     collection: CampaignModel.collection.name,
+        //     totalDocuments,
+        //     schemaPaths: Object.keys(CampaignModel.schema.paths),
 
-            sample: sample
-                ? {
-                    documentKeys: Object.keys(sample),
+        //     sample: sample
+        //         ? {
+        //             documentKeys: Object.keys(sample),
 
-                    ownership: {
-                        userId: sample.userId ?? null,
-                        clerkUserId: sample.clerkUserId ?? null,
-                        createdBy: sample.createdBy ?? null,
-                        ownerId: sample.ownerId ?? null,
-                    },
+        //             ownership: {
+        //                 userId: sample.userId ?? null,
+        //                 clerkUserId: sample.clerkUserId ?? null,
+        //                 createdBy: sample.createdBy ?? null,
+        //                 ownerId: sample.ownerId ?? null,
+        //             },
 
-                    providerKeys: Object.keys(sample.providers ?? {}),
+        //             providerKeys: Object.keys(sample.providers ?? {}),
 
-                    googleAds: sample.providers?.googleAds
-                        ? {
-                            keys: Object.keys(sample.providers.googleAds),
-                            accountId: sample.providers.googleAds.accountId ?? null,
-                            campaignId: sample.providers.googleAds.campaignId ?? null,
-                        }
-                        : null,
-                }
-                : null,
-        });
+        //             googleAds: sample.providers?.googleAds
+        //                 ? {
+        //                     keys: Object.keys(sample.providers.googleAds),
+        //                     accountId: sample.providers.googleAds.accountId ?? null,
+        //                     campaignId: sample.providers.googleAds.campaignId ?? null,
+        //                 }
+        //                 : null,
+        //         }
+        //         : null,
+        // });
 
         // Fetch both providers independently.
         const [googleResult, metaResult]: any = await Promise.all([

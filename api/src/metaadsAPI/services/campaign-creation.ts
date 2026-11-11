@@ -3301,7 +3301,6 @@ export async function createMetaAdsCampaignForUser(
       },
     };
   } catch (error) {
-    // Preserve information about resources already created.
     if (Object.keys(partialResult).length === 0) {
       throw error;
     }
@@ -3316,6 +3315,11 @@ export async function createMetaAdsCampaignForUser(
         ? error.statusCode
         : 502;
 
+    const originalErrorDetails =
+      error instanceof MetaAdsCampaignCreationError
+        ? error.details ?? null
+        : null;
+
     throw new MetaAdsCampaignCreationError(
       `Meta Ads setup partially completed. Creation failed during ${failedStep}: ${message}`,
       statusCode,
@@ -3323,6 +3327,7 @@ export async function createMetaAdsCampaignForUser(
         failedStep,
         partialResult,
         originalError: message,
+        originalErrorDetails,
       },
     );
   }

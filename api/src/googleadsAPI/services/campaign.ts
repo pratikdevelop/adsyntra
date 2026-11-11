@@ -294,9 +294,9 @@ export const getCampaigns = async (
 
     const totalResults = numberOrNull(data.totalResultsCount);
 
-    console.log(
-      `Retrieved ${campaigns.length} campaigns for customer ${customerResourceName}.`,
-    );
+    // console.log(
+    //   `Retrieved ${campaigns.length} campaigns for customer ${customerResourceName}.`,
+    // );
 
     return {
       account,

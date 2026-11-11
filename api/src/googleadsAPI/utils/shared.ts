@@ -101,9 +101,9 @@ export const googleAdsRequest = async (
 }
 
 export function getErrorMessage(error: unknown): string {
-    console.log(
-        error
-    );
+    // console.log(
+    //     error
+    // );
 
     return error instanceof Error
         ? error.message
@@ -446,10 +446,10 @@ export async function associateAsset(
         );
 
         const googleError = failure?.errors?.[0];
-        console.log(
-            "google error:: ",
-            failure?.errors[0].location
-        );
+        // console.log(
+        //     "google error:: ",
+        //     failure?.errors[0].location
+        // );
 
         return res.status(400).json({
             success: false,
@@ -599,10 +599,10 @@ export async function createAssetAssociation(
             .trim()
             .toUpperCase();
 
-        console.log(
-            "assets ID:: ", assetId,
-            "targetId::   ", targetId
-        );
+        // console.log(
+        //     "assets ID:: ", assetId,
+        //     "targetId::   ", targetId
+        // );
 
 
         if (!/^\d+$/.test(targetId) || !/^\d+$/.test(assetId)) {

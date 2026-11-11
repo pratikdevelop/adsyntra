@@ -5,552 +5,66 @@ import Link from "next/link";
 import { useAuth } from "@clerk/nextjs";
 import {
   CAMPAIGNS_STORAGE_KEY,
+  ManagedCampaignRecord,
   readManagedCampaigns,
   writeManagedCampaigns,
 } from "../campaigns/_lib/campaigns";
+import {
+  initialConnection,
+  googlePerformanceGoalsByType,
+  googleAppGoalOptionsBySubtype,
+  metaOptimizationOptions,
+  metaBillingOptionsByGoal,
+  googleCampaignTypes,
+  metaObjectiveMap,
+  objectives,
+  googleObjectiveFromShared,
+  googleMarketingObjectiveOptions,
+  googleAppSubtypeOptions,
+  metaBuyingTypes,
+  metaBidStrategies,
+} from "./constant";
+import {
+  ProviderConnection,
+  LibraryAsset,
+  CreativeVariation,
+  DemoCreationJob,
+  ConnectionResponse,
+  DemoProviderResult,
+  DemoResourceResult,
+  GoogleCreativePack,
+} from "./interfaces";
+import {
+  ProviderName,
+  Objective,
+  GoogleMarketingObjective,
+  GoogleEuPoliticalStatus,
+  GoogleBiddingMode,
+  GooglePerformanceGoal,
+  GoogleBudgetMode,
+  GoogleBiddingScope,
+  GoogleHotelBidStrategy,
+  GoogleAppSubtype,
+  GoogleAppGoalType,
+  MetaBudgetLevel,
+  MetaBidStrategy,
+  WorkspaceView,
+  CampaignPlatformFilter,
+  CampaignLifecycleStatus,
+  AssetKind,
+  CreativeAspectRatio,
+  ManagedStatus,
+  CampaignExecutionMode,
+  PlatformMode,
+  CampaignExecutionPayload,
+  DemoScenario,
+  DemoProviderStatus,
+  DemoOverallStatus,
+  MetaBuyingType,
+} from "./type";
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:5000";
-
-type ProviderName = "googleAds" | "metaAds";
-type PlatformMode = "googleAds" | "metaAds" | "both";
-type Objective =
-  | "SALES"
-  | "LEADS"
-  | "WEBSITE_TRAFFIC"
-  | "AWARENESS"
-  | "ENGAGEMENT"
-  | "APP_PROMOTION";
-type MetaBudgetLevel = "CAMPAIGN" | "AD_SET";
-type GoogleBudgetMode = "DAILY" | "CAMPAIGN_TOTAL";
-type GoogleBiddingScope = "STANDARD" | "PORTFOLIO";
-type MetaBuyingType = "AUCTION" | "RESERVED";
-type MetaBidStrategy =
-  | "LOWEST_COST_WITHOUT_CAP"
-  | "LOWEST_COST_WITH_BID_CAP"
-  | "COST_CAP"
-  | "LOWEST_COST_WITH_MIN_ROAS";
-type GoogleMarketingObjective =
-  | "AWARENESS"
-  | "CONSIDERATION"
-  | "LEAD"
-  | "SALES"
-  | "WEBSITE_TRAFFIC"
-  | "APP_PROMOTION"
-  | "LOCAL_STORES_VISITS";
-type GoogleBiddingMode = "AUTOMATED" | "MANUAL_CPC" | "MANUAL_CPM";
-type GoogleEuPoliticalStatus =
-  | "CONTAINS_EU_POLITICAL_ADVERTISING"
-  | "DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING"
-  | "";
-type GooglePerformanceGoal =
-  | "CONVERSIONS"
-  | "CONVERSION_VALUE"
-  | "CLICKS"
-  | "IMPRESSION_SHARE"
-  | "IMPRESSIONS";
-type GoogleAppSubtype =
-  | "APP_CAMPAIGN"
-  | "APP_CAMPAIGN_FOR_ENGAGEMENT"
-  | "APP_CAMPAIGN_FOR_PRE_REGISTRATION";
-type GoogleAppGoalType =
-  | "OPTIMIZE_INSTALLS_TARGET_INSTALL_COST"
-  | "OPTIMIZE_INSTALLS_WITHOUT_TARGET_INSTALL_COST"
-  | "OPTIMIZE_IN_APP_CONVERSIONS_TARGET_CONVERSION_COST"
-  | "OPTIMIZE_IN_APP_CONVERSIONS_TARGET_INSTALL_COST"
-  | "OPTIMIZE_IN_APP_CONVERSIONS_WITHOUT_TARGET_CPA"
-  | "OPTIMIZE_PRE_REGISTRATION_CONVERSION_VOLUME"
-  | "OPTIMIZE_RETURN_ON_ADVERTISING_SPEND"
-  | "OPTIMIZE_TOTAL_VALUE_WITHOUT_TARGET_ROAS";
-type GoogleAppTargetKind = "CPA" | "ROAS" | null;
-type GoogleHotelBidStrategy = "MANUAL_CPC" | "PERCENT_CPC";
-
-interface ProviderConnection {
-  connected: boolean;
-  accounts: unknown[];
-  selectedAccountId: string | null;
-}
-
-type DemoScenario =
-  | "ALL_SUCCESS"
-  | "PROVIDER_FAILURE"
-  | "ALL_FAILURE"
-  | "RESOURCE_FAILURE"
-  | "TIMEOUT";
-type DemoResourceStatus =
-  | "SUCCESS"
-  | "FAILED"
-  | "TIMED_OUT"
-  | "BLOCKED"
-  | "NOT_STARTED";
-type DemoProviderStatus = "SUCCESS" | "FAILED" | "PARTIAL_SUCCESS";
-type DemoOverallStatus = "SUCCESS" | "FAILED" | "PARTIAL_SUCCESS";
-type WorkspaceView =
-  | "builder"
-  | "campaigns"
-  | "assets"
-  | "campaign"
-  | "ads"
-  | "creative";
-type CampaignLifecycleStatus =
-  | "ACTIVE"
-  | "PAUSED"
-  | "DRAFT"
-  | "FAILED"
-  | "ARCHIVED";
-type CampaignPlatformFilter = "ALL" | "GOOGLE" | "META" | "BOTH";
-interface ManagedCampaignRecord {
-  id: string;
-  groupId?: string;
-  name: string;
-  provider: ProviderName;
-  campaignType: string;
-  googleCampaignType?: string;
-  objective: Objective;
-  budgetLabel: string;
-  status: CampaignLifecycleStatus;
-  creationStatus: DemoOverallStatus | "DRAFT";
-  accountLabel: string;
-  createdAt: string;
-  updatedAt: string;
-  source: "SAMPLE" | "LOCAL";
-  jobId?: string;
-}
-type AssetKind = "IMAGE" | "VIDEO" | "LOGO" | "TEXT";
-type ManagedStatus = "PAUSED" | "ACTIVE";
-
-type CreativeAspectRatio = "1:1" | "4:5" | "9:16" | "16:9" | "1.91:1";
-
-interface GoogleCreativePack {
-  campaignType: string;
-  subFormat?: string;
-  formatLabel: string;
-  headlines: string[];
-  longHeadlines: string[];
-  descriptions: string[];
-  finalUrl: string;
-  imageUrl?: string;
-}
-
-interface CreativeVariation {
-  id: string;
-  name: string;
-  kind: "IMAGE" | "VIDEO";
-  prompt: string;
-  headline: string;
-  primaryText: string;
-  callToAction: string;
-  aspectRatio: CreativeAspectRatio;
-  googleAspectRatio: CreativeAspectRatio;
-  googleMediaUrl: string;
-  styleLabel: string;
-  previewLabel: string;
-  url: string;
-  generatedAt: string;
-  googlePack: GoogleCreativePack;
-}
-
-interface LibraryAsset {
-  id: string;
-  name: string;
-  kind: AssetKind;
-  url: string;
-  addedAt: string;
-  origin?: "MANUAL" | "AI_STUDIO";
-  prompt?: string;
-  aspectRatio?: string;
-  platformTargets?: ProviderName[];
-  googlePack?: GoogleCreativePack;
-}
-
-interface DemoResourceResult {
-  key: string;
-  label: string;
-  status: DemoResourceStatus;
-  resourceId: string | null;
-  errorCode?: string;
-  errorMessage?: string;
-  endpoint?: string;
-  attemptCount?: number;
-  requestId?: string;
-  responseSummary?: string;
-}
-
-interface DemoProviderResult {
-  provider: ProviderName;
-  status: DemoProviderStatus;
-  resources: DemoResourceResult[];
-}
-
-interface DemoCreationJob {
-  jobId: string;
-  createdAt: string;
-  scenario: DemoScenario;
-  overallStatus: DemoOverallStatus;
-  providers: DemoProviderResult[];
-}
-
-interface ConnectionResponse {
-  providers?: {
-    googleAds?: Partial<ProviderConnection>;
-    metaAds?: Partial<ProviderConnection>;
-  };
-  message?: string;
-}
-
-const initialConnection: ProviderConnection = {
-  connected: false,
-  accounts: [],
-  selectedAccountId: null,
-};
-
-const objectives: {
-  value: Objective;
-  label: string;
-  description: string;
-}[] = [
-  {
-    value: "SALES",
-    label: "Sales",
-    description: "Generate purchases and revenue.",
-  },
-  {
-    value: "LEADS",
-    label: "Leads",
-    description: "Collect enquiries and customer information.",
-  },
-  {
-    value: "WEBSITE_TRAFFIC",
-    label: "Website Traffic",
-    description: "Bring visitors to your website.",
-  },
-  {
-    value: "AWARENESS",
-    label: "Brand Awareness",
-    description: "Reach more people and build recognition.",
-  },
-  {
-    value: "ENGAGEMENT",
-    label: "Engagement",
-    description: "Encourage interactions with your content.",
-  },
-  {
-    value: "APP_PROMOTION",
-    label: "App Promotion",
-    description: "Drive app installs and app activity.",
-  },
-];
-
-const googleMarketingObjectiveOptions: {
-  value: GoogleMarketingObjective;
-  label: string;
-  description: string;
-}[] = [
-  {
-    value: "AWARENESS",
-    label: "Awareness",
-    description: "Build reach and brand recognition.",
-  },
-  {
-    value: "CONSIDERATION",
-    label: "Consideration",
-    description: "Encourage people to explore your offer.",
-  },
-  {
-    value: "LEAD",
-    label: "Lead generation",
-    description: "Generate enquiries and potential customers.",
-  },
-  {
-    value: "SALES",
-    label: "Sales",
-    description: "Drive purchases and conversion value.",
-  },
-  {
-    value: "WEBSITE_TRAFFIC",
-    label: "Website traffic",
-    description: "Bring relevant visitors to your site.",
-  },
-  {
-    value: "APP_PROMOTION",
-    label: "App promotion",
-    description: "Promote installs and in-app activity.",
-  },
-  {
-    value: "LOCAL_STORES_VISITS",
-    label: "Local store visits",
-    description: "Promote eligible physical store goals.",
-  },
-];
-
-const googleObjectiveFromShared: Record<Objective, GoogleMarketingObjective> = {
-  AWARENESS: "AWARENESS",
-  ENGAGEMENT: "CONSIDERATION",
-  LEADS: "LEAD",
-  SALES: "SALES",
-  WEBSITE_TRAFFIC: "WEBSITE_TRAFFIC",
-  APP_PROMOTION: "APP_PROMOTION",
-};
-
-const googleCampaignTypes = [
-  { value: "SEARCH", label: "Search", channelType: "SEARCH" },
-  { value: "DISPLAY", label: "Display", channelType: "DISPLAY" },
-  {
-    value: "PERFORMANCE_MAX",
-    label: "Performance Max",
-    channelType: "PERFORMANCE_MAX",
-  },
-  { value: "DEMAND_GEN", label: "Demand Gen", channelType: "DEMAND_GEN" },
-  { value: "SHOPPING", label: "Shopping", channelType: "SHOPPING" },
-  { value: "HOTEL", label: "Hotel", channelType: "HOTEL" },
-  { value: "APP", label: "App campaign", channelType: "MULTI_CHANNEL" },
-  {
-    value: "VIDEO",
-    label: "Classic Video campaign (read/report; no API write workflow)",
-    channelType: "VIDEO",
-    disabled: true,
-  },
-];
-
-const googlePerformanceGoalsByType: Record<
-  string,
-  { value: GooglePerformanceGoal; label: string; biddingStrategy: string }[]
-> = {
-  SEARCH: [
-    {
-      value: "CONVERSIONS",
-      label: "Conversions",
-      biddingStrategy: "MAXIMIZE_CONVERSIONS",
-    },
-    {
-      value: "CONVERSION_VALUE",
-      label: "Conversion value",
-      biddingStrategy: "MAXIMIZE_CONVERSION_VALUE",
-    },
-    {
-      value: "CLICKS",
-      label: "Website clicks",
-      biddingStrategy: "TARGET_SPEND",
-    },
-    {
-      value: "IMPRESSION_SHARE",
-      label: "Search impression share",
-      biddingStrategy: "TARGET_IMPRESSION_SHARE",
-    },
-  ],
-  PERFORMANCE_MAX: [
-    {
-      value: "CONVERSIONS",
-      label: "Conversions",
-      biddingStrategy: "MAXIMIZE_CONVERSIONS",
-    },
-    {
-      value: "CONVERSION_VALUE",
-      label: "Conversion value",
-      biddingStrategy: "MAXIMIZE_CONVERSION_VALUE",
-    },
-  ],
-  DISPLAY: [
-    {
-      value: "CONVERSIONS",
-      label: "Conversions",
-      biddingStrategy: "MAXIMIZE_CONVERSIONS",
-    },
-    {
-      value: "CLICKS",
-      label: "Website clicks",
-      biddingStrategy: "TARGET_SPEND",
-    },
-    {
-      value: "IMPRESSIONS",
-      label: "Impressions / reach",
-      biddingStrategy: "TARGET_CPM",
-    },
-  ],
-  DEMAND_GEN: [
-    {
-      value: "CONVERSIONS",
-      label: "Conversions",
-      biddingStrategy: "MAXIMIZE_CONVERSIONS",
-    },
-    {
-      value: "CONVERSION_VALUE",
-      label: "Conversion value",
-      biddingStrategy: "MAXIMIZE_CONVERSION_VALUE",
-    },
-    {
-      value: "CLICKS",
-      label: "Website clicks",
-      biddingStrategy: "TARGET_SPEND",
-    },
-  ],
-  SHOPPING: [
-    {
-      value: "CONVERSION_VALUE",
-      label: "Conversion value / Target ROAS",
-      biddingStrategy: "MAXIMIZE_CONVERSION_VALUE",
-    },
-    {
-      value: "CLICKS",
-      label: "Website clicks / Maximize clicks",
-      biddingStrategy: "TARGET_SPEND",
-    },
-  ],
-  HOTEL: [
-    {
-      value: "CLICKS",
-      label: "Hotel clicks (Percent CPC)",
-      biddingStrategy: "PERCENT_CPC",
-    },
-  ],
-};
-
-const googleAppSubtypeOptions: { value: GoogleAppSubtype; label: string }[] = [
-  { value: "APP_CAMPAIGN", label: "App installs / in-app actions" },
-  {
-    value: "APP_CAMPAIGN_FOR_ENGAGEMENT",
-    label: "Re-engage existing app users",
-  },
-  { value: "APP_CAMPAIGN_FOR_PRE_REGISTRATION", label: "App pre-registration" },
-];
-
-const googleAppGoalOptionsBySubtype: Record<
-  GoogleAppSubtype,
-  { value: GoogleAppGoalType; label: string; targetKind: GoogleAppTargetKind }[]
-> = {
-  APP_CAMPAIGN: [
-    {
-      value: "OPTIMIZE_INSTALLS_TARGET_INSTALL_COST",
-      label: "Maximize installs with target cost per install",
-      targetKind: "CPA",
-    },
-    {
-      value: "OPTIMIZE_INSTALLS_WITHOUT_TARGET_INSTALL_COST",
-      label: "Maximize installs without a target cost",
-      targetKind: null,
-    },
-    {
-      value: "OPTIMIZE_IN_APP_CONVERSIONS_TARGET_INSTALL_COST",
-      label: "Drive in-app actions using target install cost",
-      targetKind: "CPA",
-    },
-    {
-      value: "OPTIMIZE_IN_APP_CONVERSIONS_WITHOUT_TARGET_CPA",
-      label: "Maximize in-app actions without target CPA",
-      targetKind: null,
-    },
-    {
-      value: "OPTIMIZE_RETURN_ON_ADVERTISING_SPEND",
-      label: "Optimize for return on ad spend",
-      targetKind: "ROAS",
-    },
-    {
-      value: "OPTIMIZE_TOTAL_VALUE_WITHOUT_TARGET_ROAS",
-      label: "Maximize total conversion value",
-      targetKind: null,
-    },
-  ],
-  APP_CAMPAIGN_FOR_ENGAGEMENT: [
-    {
-      value: "OPTIMIZE_IN_APP_CONVERSIONS_TARGET_CONVERSION_COST",
-      label: "In-app conversions with target cost",
-      targetKind: "CPA",
-    },
-    {
-      value: "OPTIMIZE_IN_APP_CONVERSIONS_WITHOUT_TARGET_CPA",
-      label: "Maximize in-app conversions without target CPA",
-      targetKind: null,
-    },
-  ],
-  APP_CAMPAIGN_FOR_PRE_REGISTRATION: [
-    {
-      value: "OPTIMIZE_PRE_REGISTRATION_CONVERSION_VOLUME",
-      label: "Maximize pre-registrations",
-      targetKind: null,
-    },
-  ],
-};
-
-const metaBidStrategies: { value: MetaBidStrategy; label: string }[] = [
-  { value: "LOWEST_COST_WITHOUT_CAP", label: "Highest volume (no bid cap)" },
-  { value: "LOWEST_COST_WITH_BID_CAP", label: "Bid cap" },
-  { value: "COST_CAP", label: "Cost per result goal (Cost Cap)" },
-  { value: "LOWEST_COST_WITH_MIN_ROAS", label: "Minimum ROAS" },
-];
-
-const metaBuyingTypes = [
-  { value: "AUCTION", label: "Auction (standard buying)" },
-  { value: "RESERVED", label: "Reservation (Reach & Frequency)" },
-] as const;
-
-const metaObjectiveMap: Record<Objective, string> = {
-  SALES: "OUTCOME_SALES",
-  LEADS: "OUTCOME_LEADS",
-  WEBSITE_TRAFFIC: "OUTCOME_TRAFFIC",
-  AWARENESS: "OUTCOME_AWARENESS",
-  ENGAGEMENT: "OUTCOME_ENGAGEMENT",
-  APP_PROMOTION: "OUTCOME_APP_PROMOTION",
-};
-
-const metaOptimizationOptions: Record<
-  Objective,
-  { value: string; label: string }[]
-> = {
-  SALES: [
-    { value: "OFFSITE_CONVERSIONS", label: "Offsite Conversions" },
-    { value: "VALUE", label: "Conversion Value (for value bidding)" },
-  ],
-  LEADS: [
-    { value: "LEAD_GENERATION", label: "Lead Generation" },
-    { value: "OFFSITE_CONVERSIONS", label: "Offsite Conversions" },
-  ],
-  WEBSITE_TRAFFIC: [
-    { value: "LINK_CLICKS", label: "Link Clicks" },
-    { value: "LANDING_PAGE_VIEWS", label: "Landing Page Views" },
-  ],
-  AWARENESS: [
-    { value: "REACH", label: "Reach" },
-    { value: "IMPRESSIONS", label: "Impressions" },
-    { value: "AD_RECALL_LIFT", label: "Ad Recall Lift" },
-  ],
-  ENGAGEMENT: [
-    { value: "POST_ENGAGEMENT", label: "Post Engagement" },
-    { value: "PAGE_LIKES", label: "Page Likes" },
-    { value: "CONVERSATIONS", label: "Conversations" },
-  ],
-  APP_PROMOTION: [
-    { value: "APP_INSTALLS", label: "App Installs" },
-    { value: "OFFSITE_CONVERSIONS", label: "App Events / Conversions" },
-  ],
-};
-
-const metaBillingOptionsByGoal: Record<
-  string,
-  { value: string; label: string }[]
-> = {
-  LINK_CLICKS: [
-    { value: "LINK_CLICKS", label: "Link clicks" },
-    { value: "IMPRESSIONS", label: "Impressions" },
-  ],
-  LANDING_PAGE_VIEWS: [{ value: "IMPRESSIONS", label: "Impressions" }],
-  APP_INSTALLS: [
-    { value: "APP_INSTALLS", label: "App installs" },
-    { value: "IMPRESSIONS", label: "Impressions" },
-  ],
-  POST_ENGAGEMENT: [
-    { value: "POST_ENGAGEMENT", label: "Post engagement" },
-    { value: "IMPRESSIONS", label: "Impressions" },
-  ],
-  PAGE_LIKES: [
-    { value: "PAGE_LIKES", label: "Page likes" },
-    { value: "IMPRESSIONS", label: "Impressions" },
-  ],
-  THRUPLAY: [
-    { value: "THRUPLAY", label: "ThruPlay" },
-    { value: "IMPRESSIONS", label: "Impressions" },
-  ],
-  DEFAULT: [{ value: "IMPRESSIONS", label: "Impressions" }],
-};
 
 function normalizeConnection(
   provider?: Partial<ProviderConnection>,
@@ -1165,6 +679,15 @@ export default function CreateCampaignPage() {
   const [preparedPayload, setPreparedPayload] = useState("");
   const [copyNotice, setCopyNotice] = useState("");
   const [demoJob, setDemoJob] = useState<DemoCreationJob | null>(null);
+  const [executionMode, setExecutionMode] =
+    useState<CampaignExecutionMode>("VALIDATE_ONLY");
+  const [campaignSubmitting, setCampaignSubmitting] = useState(false);
+
+  const [campaignApiResponse, setCampaignApiResponse] = useState<unknown>(null);
+
+  const [campaignApiError, setCampaignApiError] = useState("");
+
+  const [apiPayloadPreview, setApiPayloadPreview] = useState("");
 
   const googleReady =
     connections.googleAds.connected &&
@@ -1318,7 +841,11 @@ export default function CreateCampaignPage() {
 
   const clearPreview = () => {
     setPreparedPayload("");
+    setApiPayloadPreview("");
     setCopyNotice("");
+
+    setCampaignApiResponse(null);
+    setCampaignApiError("");
   };
 
   const choosePlatformMode = (mode: PlatformMode) => {
@@ -1769,7 +1296,7 @@ export default function CreateCampaignPage() {
       return false;
     }
     if (selectedPlatforms.includes("metaAds")) {
-      const countryCodes = metaCountries
+      /*const countryCodes = metaCountries
         .split(",")
         .map((code) => code.trim().toUpperCase())
         .filter(Boolean);
@@ -1856,6 +1383,92 @@ export default function CreateCampaignPage() {
           "Enter a valid Meta age range from 18 to 65, with minimum age not greater than maximum age.",
         );
         return false;
+      }*/
+      const metaObjective = metaObjectiveMap[objective];
+      const metaCurrency = selectedCurrency(connections.metaAds);
+
+      const pageId = metaPageId.trim();
+      const instagramActorId = metaInstagramActorId.trim();
+
+      const hasRealPageId = isRealMetaId(pageId);
+      const hasRealInstagramActorId = isRealMetaId(instagramActorId);
+
+      const metaDestination = metaDestinationUrl.trim() || websiteUrl.trim();
+      const metaImageUrl = metaCreativeImageUrl.trim();
+
+      const metaPixel = metaPixelId.trim();
+      const metaConversionEventValue = metaConversionEvent.trim();
+
+      const hasRealPixel = isRealMetaId(metaPixel);
+
+      const requiresWebsiteConversionPixel = [
+        "OFFSITE_CONVERSIONS",
+        "VALUE",
+      ].includes(effectiveMetaOptimizationGoal);
+
+      const isHttpsUrl = (value: string) => {
+        try {
+          return new URL(value).protocol === "https:";
+        } catch {
+          return false;
+        }
+      };
+
+      if (!hasRealPageId) {
+        throw new Error(
+          "Enter a real Meta Page ID accessible to your connected Meta account.",
+        );
+      }
+
+      if (
+        requiresWebsiteConversionPixel &&
+        (!hasRealPixel || !metaConversionEventValue)
+      ) {
+        throw new Error(
+          "Website conversion optimization requires a real Meta Pixel ID and a conversion event such as PURCHASE.",
+        );
+      }
+
+      if (!/^[A-Z]{3}$/.test(metaCurrency)) {
+        throw new Error(
+          "Unable to determine a valid three-letter currency for the selected Meta account.",
+        );
+      }
+
+      if (!isHttpsUrl(metaImageUrl)) {
+        throw new Error("Enter a valid HTTPS URL for the Meta creative image.");
+      }
+
+      if (!isHttpsUrl(metaDestination)) {
+        throw new Error(
+          "Enter a valid HTTPS URL for the Meta website destination.",
+        );
+      }
+      const metaBudgetAmount =
+        metaBudgetMode === "DAILY"
+          ? Number(metaDailyBudget)
+          : Number(metaLifetimeBudget);
+
+      if (!Number.isFinite(metaBudgetAmount) || metaBudgetAmount <= 0) {
+        throw new Error("Enter a valid positive Meta campaign budget.");
+      }
+
+      // Current backend Campaign-level bidding input does not expose
+      // bid amount or minimum-ROAS constraints.
+      if (
+        metaBudgetLevel === "CAMPAIGN" &&
+        metaBidStrategy !== "LOWEST_COST_WITHOUT_CAP"
+      ) {
+        throw new Error(
+          "The current Campaign-level Meta budget flow supports LOWEST_COST_WITHOUT_CAP only. Select Ad Set-level budgeting to use Bid Cap, Cost Cap or Minimum ROAS.",
+        );
+      }
+
+      if (
+        metaBidStrategy === "LOWEST_COST_WITH_MIN_ROAS" &&
+        effectiveMetaOptimizationGoal !== "VALUE"
+      ) {
+        throw new Error("Meta Minimum ROAS requires VALUE optimization.");
       }
     }
     if (
@@ -2370,8 +1983,22 @@ export default function CreateCampaignPage() {
       !validateAdStructure() ||
       !validateAdCreation() ||
       !objective
-    )
+    ) {
       return;
+    }
+
+    let executionPayload: CampaignExecutionPayload;
+
+    try {
+      executionPayload = buildExecutionPayload();
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Unable to build the backend campaign request.",
+      );
+      return;
+    }
 
     const payload = {
       contractVersion: "campaign-builder.v1",
@@ -3308,8 +2935,559 @@ export default function CreateCampaignPage() {
     setDemoJob(null);
     setSavedDraft(null);
     setPreparedPayload(JSON.stringify(payload, null, 2));
+    setApiPayloadPreview(JSON.stringify(executionPayload, null, 2));
     setCopyNotice("");
     setError("");
+  };
+  const submitCampaignRequest = async () => {
+    if (!apiPayloadPreview) {
+      setCampaignApiError(
+        "Prepare the unified campaign request before submitting.",
+      );
+      return;
+    }
+
+    if (!isLoaded || !isSignedIn) {
+      setCampaignApiError(
+        "Please sign in before submitting the campaign request.",
+      );
+      return;
+    }
+
+    // Explicit confirmation is required before any live provider mutation.
+    if (executionMode === "LIVE") {
+      const confirmed = window.confirm(
+        [
+          "You are about to create real advertising resources.",
+          "",
+          "Google Ads and Meta Ads will be processed independently.",
+          "All successfully created resources are intended to start PAUSED.",
+          "",
+          "A provider failure may happen after some parent resources have already been created.",
+          "Inspect the result and provider accounts before retrying.",
+          "",
+          "Do you want to continue?",
+        ].join("\n"),
+      );
+
+      if (!confirmed) return;
+    }
+
+    try {
+      setCampaignSubmitting(true);
+      setCampaignApiError("");
+      setCampaignApiResponse(null);
+
+      const token = await getToken();
+
+      if (!token) {
+        throw new Error(
+          "Unable to retrieve your authentication token. Please sign in again.",
+        );
+      }
+
+      const response = await fetch(`${API_BASE_URL}/api/campaigns`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: apiPayloadPreview,
+        cache: "no-store",
+      });
+
+      const responseData = await response.json().catch(() => null);
+
+      setCampaignApiResponse(responseData);
+
+      if (!response.ok || responseData?.success === false) {
+        throw new Error(
+          responseData?.message ||
+            `Campaign API request failed with status ${response.status}.`,
+        );
+      }
+    } catch (err) {
+      setCampaignApiError(
+        err instanceof Error
+          ? err.message
+          : "Unable to submit the campaign request.",
+      );
+    } finally {
+      setCampaignSubmitting(false);
+    }
+  };
+  const placeholderMetaIds = new Set([
+    "123456789012345",
+    "123456789",
+    "987654321",
+    "600000000000001",
+    "600000000000002",
+    "600000000000003",
+  ]);
+  const isRealMetaId = (value: string) => {
+    const id = value.trim();
+    return /^\d+$/.test(id) && !placeholderMetaIds.has(id);
+  };
+
+  const buildExecutionPayload = (): CampaignExecutionPayload => {
+    if (!objective) {
+      throw new Error("Select a campaign objective.");
+    }
+
+    const splitValues = (value: string) =>
+      value
+        .split(/[\n,]+/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+
+    const usesExampleDomain = (value: string) => {
+      try {
+        const hostname = new URL(value).hostname.toLowerCase();
+        return hostname === "example.com" || hostname.endsWith(".example.com");
+      } catch {
+        return true;
+      }
+    };
+
+    const realMetaIds = (value: string) =>
+      splitValues(value).filter(isRealMetaId);
+
+    const providers: CampaignExecutionPayload["providers"] = {};
+
+    // --------------------------------------------------
+    // GOOGLE ADS — current global creation flow: SEARCH
+    // --------------------------------------------------
+    if (selectedPlatforms.includes("googleAds")) {
+      if (googleCampaignType !== "SEARCH") {
+        throw new Error(
+          "The current global Google Ads creation flow supports SEARCH campaigns only.",
+        );
+      }
+
+      if (effectiveGoogleBudgetMode !== "DAILY") {
+        throw new Error(
+          "The current Google Search creation flow supports a daily budget. Campaign-total budgets need a separate backend implementation.",
+        );
+      }
+
+      const googleFinalUrl = googleSearchFinalUrl.trim() || websiteUrl.trim();
+
+      if (
+        effectiveGooglePerformanceGoal === "IMPRESSION_SHARE" ||
+        effectiveGoogleBiddingStrategy === "TARGET_IMPRESSION_SHARE"
+      ) {
+        throw new Error(
+          "The current Google Search campaign flow does not yet support the Impression Share bidding configuration.",
+        );
+      }
+
+      // The UI uses Google's older Target Spend label for Maximize Clicks.
+      const biddingStrategy =
+        effectiveGoogleBiddingStrategy === "TARGET_SPEND"
+          ? "MAXIMIZE_CLICKS"
+          : effectiveGoogleBiddingStrategy;
+
+      const supportedStrategies = [
+        "MANUAL_CPC",
+        "MAXIMIZE_CLICKS",
+        "MAXIMIZE_CONVERSIONS",
+        "MAXIMIZE_CONVERSION_VALUE",
+      ];
+
+      if (!supportedStrategies.includes(biddingStrategy)) {
+        throw new Error(
+          `Google bidding strategy "${biddingStrategy}" is not supported by the current Search creation flow.`,
+        );
+      }
+
+      const biddingOptions = {
+        ...(effectiveGooglePerformanceGoal === "CONVERSIONS" &&
+          isPositiveAmount(googleTargetCpa) && {
+            targetCpa: Number(googleTargetCpa),
+          }),
+        ...(effectiveGooglePerformanceGoal === "CONVERSION_VALUE" &&
+          isPositiveAmount(googleTargetRoas) && {
+            targetRoas: Number(googleTargetRoas),
+          }),
+      };
+
+      const matchType = googleKeywordMatchType as "BROAD" | "PHRASE" | "EXACT";
+
+      const positiveKeywords = splitValues(googleKeywordLines).map((text) => ({
+        text,
+        matchType,
+      }));
+
+      const negativeKeywords = splitValues(googleNegativeKeywordLines).map(
+        (text) => ({
+          text,
+          matchType,
+        }),
+      );
+
+      if (executionMode === "LIVE" && usesExampleDomain(googleFinalUrl)) {
+        throw new Error(
+          "Replace the example.com Google final URL before live execution.",
+        );
+      }
+
+      providers.googleAds = {
+        accountId: connections.googleAds.selectedAccountId!,
+        providerObjective: googleMarketingObjective,
+        providerCampaignType: "SEARCH",
+
+        configuration: {
+          budget: {
+            name: `${campaignName.trim()} - Budget`,
+            amount: Number(googleDailyBudget),
+          },
+
+          campaign: {
+            name: campaignName.trim(),
+            biddingStrategy,
+            ...(Object.keys(biddingOptions).length > 0 && {
+              biddingOptions,
+            }),
+          },
+
+          adGroup: {
+            name: googleAdGroupName.trim(),
+          },
+
+          keywords: {
+            positive: positiveKeywords,
+            negative: negativeKeywords,
+          },
+
+          locations: geoResources.map((geoTargetConstantResourceName) => ({
+            geoTargetConstantResourceName,
+          })),
+
+          ad: {
+            finalUrl: googleFinalUrl,
+            headlines: splitValues(googleSearchHeadlines),
+            descriptions: splitValues(googleSearchDescriptions),
+            ...(googleSearchPath1.trim() && {
+              path1: googleSearchPath1.trim(),
+            }),
+            ...(googleSearchPath2.trim() && {
+              path2: googleSearchPath2.trim(),
+            }),
+          },
+        },
+      };
+    }
+
+    // --------------------------------------------------
+    // META ADS — current global creation flow:
+    // single-image website ad
+    // --------------------------------------------------
+    if (selectedPlatforms.includes("metaAds")) {
+      if (
+        metaCreativeFormat !== "SINGLE_IMAGE" ||
+        metaDestinationType !== "WEBSITE"
+      ) {
+        throw new Error(
+          "The current Meta global creation flow supports SINGLE_IMAGE creatives with a WEBSITE destination only.",
+        );
+      }
+
+      const metaObjective = metaObjectiveMap[objective];
+      const metaCurrency = selectedCurrency(connections.metaAds);
+      const pageId = metaPageId.trim();
+      const instagramActorId = metaInstagramActorId.trim();
+      const hasRealInstagramActorId = isRealMetaId(instagramActorId);
+      const metaDestination = metaDestinationUrl.trim() || websiteUrl.trim();
+
+      const metaImageUrl = metaCreativeImageUrl.trim();
+      const isHttpsUrl = (value: string) => {
+        try {
+          return new URL(value).protocol === "https:";
+        } catch {
+          return false;
+        }
+      };
+
+      if (!isHttpsUrl(metaImageUrl)) {
+        throw new Error("Enter a valid HTTPS URL for the Meta creative image.");
+      }
+
+      if (!isHttpsUrl(metaDestination)) {
+        throw new Error(
+          "Enter a valid HTTPS URL for the Meta website destination.",
+        );
+      }
+
+      const metaPixel = metaPixelId.trim();
+      const metaConversionEventValue = metaConversionEvent.trim();
+
+      const hasRealPixel = isRealMetaId(metaPixel);
+
+      const requiresWebsiteConversionPixel = [
+        "OFFSITE_CONVERSIONS",
+        "VALUE",
+      ].includes(effectiveMetaOptimizationGoal);
+
+      // Meta website conversion validation also runs in VALIDATE_ONLY mode.
+      if (
+        requiresWebsiteConversionPixel &&
+        (!hasRealPixel || !metaConversionEventValue)
+      ) {
+        throw new Error(
+          "Meta website conversion optimization requires a real Pixel ID and a conversion event, such as PURCHASE. Enter both before preparing the request.",
+        );
+      }
+
+      if (executionMode === "LIVE" && pageId === "123456789012345") {
+        throw new Error(
+          "Replace the placeholder Meta Page ID with a Page ID available to your connected Meta account.",
+        );
+      }
+
+      if (
+        executionMode === "LIVE" &&
+        requiresWebsiteConversionPixel &&
+        !hasRealPixel
+      ) {
+        throw new Error(
+          "Enter a real Meta Pixel ID for the selected website conversion optimization goal.",
+        );
+      }
+
+      if (
+        executionMode === "LIVE" &&
+        (usesExampleDomain(metaDestination) || usesExampleDomain(metaImageUrl))
+      ) {
+        throw new Error(
+          "Replace the example.com Meta image and destination URLs before live execution.",
+        );
+      }
+
+      const regionKeys = realMetaIds(metaRegionKeys);
+      const cityKeys = realMetaIds(metaCityKeys);
+      const interestIds = realMetaIds(metaAudienceInterestIds);
+      const includedAudienceIds = realMetaIds(metaIncludedCustomAudienceIds);
+      const excludedAudienceIds = realMetaIds(metaExcludedCustomAudienceIds);
+
+      const metaStartDate = metaStartTime ? new Date(metaStartTime) : null;
+
+      const metaEndDate = metaEndTime ? new Date(metaEndTime) : null;
+
+      if (metaStartDate && Number.isNaN(metaStartDate.getTime())) {
+        throw new Error("Enter a valid Meta start date.");
+      }
+
+      if (metaEndDate && Number.isNaN(metaEndDate.getTime())) {
+        throw new Error("Enter a valid Meta end date.");
+      }
+
+      if (metaStartDate && metaStartDate.getTime() <= Date.now()) {
+        throw new Error("Meta campaign start date must be in the future.");
+      }
+
+      if (
+        metaStartDate &&
+        metaEndDate &&
+        metaEndDate.getTime() <= metaStartDate.getTime()
+      ) {
+        throw new Error("Meta end date must be later than the start date.");
+      }
+
+      if (metaBudgetMode === "LIFETIME" && !metaEndDate) {
+        throw new Error(
+          "A Meta Ad Set end date is required for a lifetime budget.",
+        );
+      }
+
+      const targeting = {
+        geo_locations: {
+          countries: splitValues(metaCountries).map((code) =>
+            code.toUpperCase(),
+          ),
+          ...(regionKeys.length > 0 && {
+            regions: regionKeys.map((key) => ({ key })),
+          }),
+          ...(cityKeys.length > 0 && {
+            cities: cityKeys.map((key) => ({
+              key,
+              radius: Number(metaCityRadius),
+              distance_unit: metaCityDistanceUnit,
+            })),
+          }),
+          ...(splitValues(metaZipKeys).length > 0 && {
+            zips: splitValues(metaZipKeys).map((key) => ({
+              key: key.toUpperCase(),
+            })),
+          }),
+        },
+
+        ...(metaSpecialAdCategories.length === 0 && {
+          age_min: Number(metaAgeMin),
+          age_max: Number(metaAgeMax),
+          ...(metaGender !== "ALL" && {
+            genders: [metaGender === "MEN" ? 1 : 2],
+          }),
+        }),
+
+        ...(interestIds.length > 0 && {
+          flexible_spec: [
+            {
+              interests: interestIds.map((id) => ({ id })),
+            },
+          ],
+        }),
+
+        ...(includedAudienceIds.length > 0 && {
+          custom_audiences: includedAudienceIds.map((id) => ({ id })),
+        }),
+
+        ...(excludedAudienceIds.length > 0 && {
+          excluded_custom_audiences: excludedAudienceIds.map((id) => ({
+            id,
+          })),
+        }),
+      };
+
+      const placements = {
+        mode: metaPlacementMode,
+        ...(metaPlacementMode === "MANUAL" && {
+          publisherPlatforms: metaPublisherPlatforms,
+          ...(metaPublisherPlatforms.includes("facebook") && {
+            facebookPositions: metaFacebookPositions,
+          }),
+          ...(metaPublisherPlatforms.includes("instagram") && {
+            instagramPositions: metaInstagramPositions,
+          }),
+          ...(metaPublisherPlatforms.includes("messenger") && {
+            messengerPositions: metaMessengerPositions,
+          }),
+          ...(metaPublisherPlatforms.includes("audience_network") && {
+            audienceNetworkPositions: metaAudienceNetworkPositions,
+          }),
+        }),
+      };
+
+      providers.metaAds = {
+        accountId: connections.metaAds.selectedAccountId!,
+        providerObjective: metaObjective,
+        providerCampaignType: "CAMPAIGN",
+
+        configuration: {
+          campaign: {
+            name: campaignName.trim(),
+            objective: metaObjective,
+            buyingType: metaBuyingType,
+            specialAdCategories: metaSpecialAdCategories,
+            budgetLevel: metaBudgetLevel,
+            budgetCurrency: metaCurrency,
+
+            ...(metaBudgetLevel === "CAMPAIGN" &&
+              metaBudgetMode === "DAILY" && {
+                dailyBudgetAmount: Number(metaDailyBudget),
+              }),
+
+            ...(metaBudgetLevel === "CAMPAIGN" &&
+              metaBudgetMode === "LIFETIME" && {
+                lifetimeBudgetAmount: Number(metaLifetimeBudget),
+              }),
+
+            ...(metaBudgetLevel === "CAMPAIGN" && {
+              bidStrategy: metaBidStrategy,
+            }),
+          },
+
+          adSet: {
+            name: metaAdSetName.trim(),
+            campaignObjective: metaObjective,
+            optimization_goal: effectiveMetaOptimizationGoal,
+            billing_event: effectiveMetaBillingEvent,
+            targeting,
+            placements,
+            budgetLevel: metaBudgetLevel,
+            budgetCurrency: metaCurrency,
+
+            ...(metaBudgetLevel === "AD_SET" &&
+              metaBudgetMode === "DAILY" && {
+                dailyBudgetAmount: Number(metaDailyBudget),
+              }),
+
+            ...(metaBudgetLevel === "AD_SET" &&
+              metaBudgetMode === "LIFETIME" && {
+                lifetimeBudgetAmount: Number(metaLifetimeBudget),
+              }),
+
+            ...(metaBudgetLevel === "AD_SET" && {
+              bid_strategy: metaBidStrategy,
+            }),
+
+            ...(metaBudgetLevel === "AD_SET" &&
+              ["LOWEST_COST_WITH_BID_CAP", "COST_CAP"].includes(
+                metaBidStrategy,
+              ) && {
+                bidAmountInput: Number(metaBidAmount),
+              }),
+
+            ...(metaBudgetLevel === "AD_SET" &&
+              metaBidStrategy === "LOWEST_COST_WITH_MIN_ROAS" && {
+                bid_constraints: {
+                  roas_average_floor: Math.round(
+                    Number(metaMinimumRoas) * 10000,
+                  ),
+                },
+              }),
+            ...(metaStartTime && {
+              startTime: new Date(metaStartTime).toISOString(),
+            }),
+
+            ...(metaEndTime && {
+              endTime: new Date(metaEndTime).toISOString(),
+            }),
+
+            ...(hasRealPixel && {
+              promoted_object: {
+                pixel_id: metaPixel,
+                ...(metaConversionEventValue && {
+                  custom_event_type: metaConversionEventValue,
+                }),
+              },
+            }),
+
+            destinationType: "WEBSITE",
+          },
+
+          ad: {
+            name: `${metaAdSetName.trim()} - Ad`,
+            creativeDraft: {
+              format: "SINGLE_IMAGE",
+              pageId,
+              ...(hasRealInstagramActorId && {
+                instagramActorId,
+              }),
+              primaryText: metaPrimaryText.trim(),
+              headline: metaAdHeadline.trim(),
+              description: metaAdDescription.trim() || null,
+              imageUrl: metaImageUrl,
+              destinationUrl: metaDestination,
+              callToAction: metaCallToAction,
+            },
+          },
+        },
+      };
+    }
+
+    return {
+      name: campaignName.trim(),
+      businessName: businessName.trim(),
+      websiteUrl: websiteUrl.trim() || null,
+      description: description.trim() || null,
+      objective,
+      platforms: selectedPlatforms,
+      providers,
+      execution: {
+        validateOnly: executionMode === "VALIDATE_ONLY",
+        confirm: executionMode === "LIVE",
+      },
+    };
   };
 
   const buildDemoResources = (
@@ -4292,9 +4470,9 @@ export default function CreateCampaignPage() {
     );
   };
 
-  const editCampaignRecord = (record: ManagedCampaignRecord) => {
+  const editCampaignRecord = (record: any) => {
     setCampaignName(record.name);
-    setObjective(record.objective);
+    setObjective(record[`objective`]);
     if (record.provider === "both") {
       setSelectedPlatforms(["googleAds", "metaAds"]);
     } else {
@@ -4328,7 +4506,7 @@ export default function CreateCampaignPage() {
 
   const filteredCampaignRecords = useMemo(() => {
     const query = campaignSearch.trim().toLowerCase();
-    return campaignRecords.filter((record) => {
+    return campaignRecords.filter((record: any) => {
       const matchesQuery =
         !query ||
         [
@@ -8473,6 +8651,32 @@ export default function CreateCampaignPage() {
             </p>
           </div>
 
+          <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <label className="block text-sm font-semibold text-slate-800">
+              Backend execution mode
+            </label>
+
+            <select
+              value={executionMode}
+              onChange={(event) => {
+                setExecutionMode(event.target.value as CampaignExecutionMode);
+                setApiPayloadPreview("");
+              }}
+              className="mt-2 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            >
+              <option value="VALIDATE_ONLY">
+                Validate only — no provider mutations
+              </option>
+              <option value="LIVE">
+                Live execution — create paused provider resources
+              </option>
+            </select>
+
+            <p className="mt-2 text-xs leading-5 text-slate-500">
+              This setting controls the backend request preview. Preparing the
+              request does not submit it or create campaigns.
+            </p>
+          </div>
           <button
             type="button"
             onClick={prepareCampaign}
@@ -8502,25 +8706,19 @@ export default function CreateCampaignPage() {
                 <pre className="mt-4 max-h-96 overflow-auto rounded-xl bg-slate-950 p-4 text-xs leading-6 text-green-300">
                   {preparedPayload}
                 </pre>
-                <p className="mt-4 text-sm text-amber-700">
-                  This page prepares a normalized request preview only—no
-                  provider mutations are sent. Provider adapters must still
-                  validate API-version and account eligibility before mutation.
-                  Google budget creation is a separate CampaignBudget resource
-                  operation and its resource name must be attached to Campaign;
-                  standard bidding is configured through the Campaign bidding
-                  union, while portfolio bidding uses a BiddingStrategy
-                  resource. Meta budget and bid strategy fields belong to the
-                  selected Campaign (CBO) or Ad Set (ABO), never both;
-                  optimization_goal and billing_event remain Ad Set settings.
-                  Convert Google currency amounts to micros and Meta amounts to
-                  the account currency smallest unit using currency metadata.
-                  Google media URLs must be uploaded as Asset resources and
-                  linked with AssetGroupAsset operations; Meta creativeDraft
-                  must be translated into an AdCreative and then referenced by
-                  creative_id. Live creation and budget management remain
-                  disconnected until provider adapters and update/read endpoints
-                  are implemented.
+                <p className="mt-4 rounded-lg bg-amber-50 p-3 text-sm leading-6 text-amber-800">
+                  Preparing this preview does not submit the campaign request.
+                  The Backend API Request Preview below contains the separate
+                  payload submitted to POST /api/campaigns. Validate-only mode
+                  performs Google Ads validation and Meta local configuration
+                  validation without creating provider resources. Meta
+                  validation is not a remote Graph API dry run. Live execution
+                  sends real provider API mutations. Successfully created
+                  resources are intended to start PAUSED. A provider can
+                  partially succeed if a dependent resource fails. The current
+                  creation scope is Google Search campaigns and Meta
+                  single-image website campaigns. Settings not included in the
+                  backend request are not applied by this operation.
                 </p>
               </div>
 
@@ -8804,6 +9002,68 @@ export default function CreateCampaignPage() {
                       Endpoint names, IDs and responses are illustrative, not
                       live provider records.
                     </div>
+                  </div>
+                )}
+              </div>
+              {/* {apiPayloadPreview && (
+                <div className="mt-6 rounded-2xl border border-indigo-200 bg-indigo-50/40 p-5">
+                  <h3 className="font-bold text-slate-900">
+                    Backend API Request Preview
+                  </h3>
+
+                  <p className="mt-1 text-xs leading-5 text-slate-600">
+                    This is the separate request body for POST /api/campaigns.
+                    It contains only the fields needed by the backend provider
+                    adapters.
+                  </p>
+
+                  <pre className="mt-4 max-h-96 overflow-auto rounded-xl bg-slate-950 p-4 text-xs leading-6 text-green-300">
+                    {apiPayloadPreview}
+                  </pre>
+                </div>
+              )} */}
+
+              <div className="mt-5 border-t border-slate-200 pt-5">
+                <button
+                  type="button"
+                  onClick={submitCampaignRequest}
+                  disabled={campaignSubmitting || !apiPayloadPreview}
+                  className="w-full rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {campaignSubmitting
+                    ? "Submitting campaign request..."
+                    : executionMode === "LIVE"
+                      ? "Create Paused Campaigns"
+                      : "Validate Campaign Request"}
+                </button>
+
+                <p className="mt-2 text-xs leading-5 text-slate-500">
+                  {executionMode === "VALIDATE_ONLY"
+                    ? "This submits the request for backend validation. Google and Meta provider resources will not be created."
+                    : "This submits a live request. Successfully created provider resources will start PAUSED."}
+                </p>
+
+                {campaignApiError && (
+                  <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4">
+                    <p className="text-sm font-semibold text-red-800">
+                      Campaign request error
+                    </p>
+
+                    <p className="mt-1 text-sm text-red-700">
+                      {campaignApiError}
+                    </p>
+                  </div>
+                )}
+
+                {campaignApiResponse && (
+                  <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <h4 className="text-sm font-semibold text-slate-900">
+                      Backend Execution Result
+                    </h4>
+
+                    <pre className="mt-3 max-h-[500px] overflow-auto rounded-lg bg-slate-950 p-4 text-xs leading-5 text-slate-100">
+                      {JSON.stringify(campaignApiResponse, null, 2)}
+                    </pre>
                   </div>
                 )}
               </div>

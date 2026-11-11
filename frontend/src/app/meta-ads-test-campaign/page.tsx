@@ -29,6 +29,26 @@ function getResponseMessage(data: unknown): string | null {
   return typeof message === "string" ? message : null;
 }
 
+function getCampaignId(data: unknown): string | null {
+  if (typeof data !== "object" || data === null || !("campaign" in data)) {
+    return null;
+  }
+
+  const campaign = (data as { campaign?: unknown }).campaign;
+
+  if (
+    typeof campaign !== "object" ||
+    campaign === null ||
+    !("id" in campaign)
+  ) {
+    return null;
+  }
+
+  const id = (campaign as { id?: unknown }).id;
+
+  return typeof id === "string" ? id : null;
+}
+
 function splitCommaValues(value: string): string[] {
   return value
     .split(",")
@@ -87,10 +107,10 @@ const specialCategories: {
 ];
 
 export default function MetaAdsTestCampaignPage() {
-  const { isLoaded, isSignedIn } = useAuth();
+  const { isLoaded, isSignedIn, getToken } = useAuth();
 
   // Meta account and shared campaign details.
-  const [accountId, setAccountId] = useState("");
+  const [accountId, setAccountId] = useState("1820194389321017");
   const [businessName, setBusinessName] = useState("Demo Business");
   const [campaignName, setCampaignName] = useState(
     "Meta Website Traffic Validation Test",
@@ -127,7 +147,7 @@ export default function MetaAdsTestCampaignPage() {
   const [conversionEvent, setConversionEvent] = useState("PURCHASE");
 
   // Ad Creative configuration.
-  const [pageId, setPageId] = useState("");
+  const [pageId, setPageId] = useState("1383140784881581");
   const [instagramActorId, setInstagramActorId] = useState("");
 
   const [primaryText, setPrimaryText] = useState(
@@ -140,7 +160,9 @@ export default function MetaAdsTestCampaignPage() {
     "Shop online and explore our latest collection.",
   );
 
-  const [imageUrl, setImageUrl] = useState("");
+  const [imageUrl, setImageUrl] = useState(
+    "https://mamp.one/wp-content/uploads/2024/09/image-resources2.jpg",
+  );
   const [callToAction, setCallToAction] =
     useState<MetaCallToAction>("LEARN_MORE");
 
@@ -153,7 +175,7 @@ export default function MetaAdsTestCampaignPage() {
   const [error, setError] = useState("");
 
   const [retryLoading, setRetryLoading] = useState(false);
-  const [retryResult, setRetryResult] = useState<any>(null);
+  const [retryResult, setRetryResult] = useState<unknown>(null);
   const [retryError, setRetryError] = useState("");
   const [campaignIdForRetry, setCampaignIdForRetry] = useState("");
 
@@ -165,7 +187,11 @@ export default function MetaAdsTestCampaignPage() {
       setError("");
       setResult(null);
 
-      const normalizedAccountId = accountId.trim();
+      const accountIdValue = accountId.trim();
+
+      const normalizedAccountId = accountIdValue.startsWith("act_")
+        ? accountIdValue
+        : `act_${accountIdValue}`;
       const normalizedBusinessName = businessName.trim();
       const normalizedCampaignName = campaignName.trim();
       const normalizedWebsiteUrl = websiteUrl.trim();
@@ -379,23 +405,39 @@ export default function MetaAdsTestCampaignPage() {
         body: JSON.stringify(payload),
       });
 
-      const data: unknown = await response.json().catch(() => null);
+      const responseText = await response.text();
 
-      // Keep the full backend response visible even on failure.
+      let data: unknown = null;
+
+      try {
+        data = responseText ? JSON.parse(responseText) : null;
+      } catch {
+        data = responseText;
+      }
+
+      console.log("Meta Campaign HTTP Status:", response.status);
+      console.log("Meta Campaign Response:", data);
+
       setResult(data);
 
       if (!response.ok) {
-        throw new Error(
+        const message =
           getResponseMessage(data) ??
-            `Meta campaign request failed with status ${response.status}.`,
+          (typeof data === "string" && data.trim()
+            ? data
+            : response.statusText);
+
+        throw new Error(
+          `HTTP ${response.status}: ${message || "Meta campaign request failed."}`,
         );
       }
-      //   const data = await response.json();
 
-      setResult(data);
+      const campaignId = getCampaignId(data);
 
-      if (data?.campaign?.id) {
-        setCampaignIdForRetry(data.campaign.id);
+      if (campaignId) {
+        setCampaignIdForRetry(campaignId);
+      } else {
+        setCampaignIdForRetry("");
       }
     } catch (err) {
       setError(
@@ -408,13 +450,6 @@ export default function MetaAdsTestCampaignPage() {
     }
   };
 
-  if (!isLoaded) {
-    return <p className="p-8">Loading authentication...</p>;
-  }
-
-  if (!isSignedIn) {
-    return <p className="p-8">Please sign in first.</p>;
-  }
   const handleRetryMetaAdSet = async () => {
     if (!campaignIdForRetry) {
       setRetryError("Campaign ID is missing.");
@@ -428,6 +463,10 @@ export default function MetaAdsTestCampaignPage() {
 
       const token = await getToken();
 
+      if (!token) {
+        throw new Error("Unable to retrieve your authentication token.");
+      }
+
       const response = await fetch(
         `/api/campaigns/${campaignIdForRetry}/meta/ad-set/retry`,
         {
@@ -436,6 +475,7 @@ export default function MetaAdsTestCampaignPage() {
             "Content-Type": "application/json",
             Authorization: `Bearer ${token}`,
           },
+          cache: "no-store",
           body: JSON.stringify({
             confirm: true,
             billing_event: "IMPRESSIONS",
@@ -443,22 +483,31 @@ export default function MetaAdsTestCampaignPage() {
         },
       );
 
-      const data = await response.json();
-
-      if (!response.ok) {
-        throw new Error(data?.error || data?.message || "Ad Set retry failed.");
-      }
+      const data: unknown = await response.json().catch(() => null);
 
       setRetryResult(data);
-    } catch (error) {
+
+      if (!response.ok) {
+        throw new Error(
+          getResponseMessage(data) ??
+            `Ad Set retry failed with status ${response.status}.`,
+        );
+      }
+    } catch (err) {
       setRetryError(
-        error instanceof Error ? error.message : "Something went wrong.",
+        err instanceof Error ? err.message : "Something went wrong.",
       );
     } finally {
       setRetryLoading(false);
     }
   };
+  if (!isLoaded) {
+    return <p className="p-8">Loading authentication...</p>;
+  }
 
+  if (!isSignedIn) {
+    return <p className="p-8">Please sign in first.</p>;
+  }
   return (
     <main className="mx-auto max-w-4xl space-y-6 p-6 md:p-8">
       <div>
@@ -955,62 +1004,109 @@ export default function MetaAdsTestCampaignPage() {
           disabled={loading}
           className="rounded-lg bg-blue-600 px-6 py-3 font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {loading
-            ? "Validating Meta Ads Campaign..."
-            : "Validate Meta Campaign"}
+          {loading ? "Creating Meta Campaign..." : "Create Meta Campaign"}
         </button>
       </form>
 
       {result !== null && (
-        <section className="space-y-3">
-          <div>
-            <h2 className="text-lg font-semibold text-gray-900">
-              API Response
-            </h2>
+        <>
+          <section className="space-y-3">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">
+                API Response
+              </h2>
 
-            <p className="text-sm text-gray-600">
-              Review the global campaign response, Meta validation status and
-              any provider errors.
-            </p>
-          </div>
+              <p className="text-sm text-gray-600">
+                Review the global campaign response, Meta creation status and
+                provider errors. with retry
+              </p>
+            </div>
 
-          <pre className="max-h-[600px] overflow-auto rounded-xl bg-gray-950 p-5 text-xs text-green-300">
-            {JSON.stringify(result, null, 2)}
-          </pre>
-        </section>
-        {campaignIdForRetry && (
-  <div className="mt-6 rounded-lg border p-4">
-    <h3 className="text-lg font-semibold">
-      Retry Meta Ad Set Creation
-    </h3>
+            <pre className="max-h-[600px] overflow-auto rounded-xl bg-gray-950 p-5 text-xs text-green-300">
+              {JSON.stringify(result, null, 2)}
+            </pre>
+          </section>
 
-    <p className="mt-2 text-sm text-gray-500">
-      Campaign ID: {campaignIdForRetry}
-    </p>
+          {campaignIdForRetry && (
+            <section className="space-y-4 rounded-xl border border-orange-200 bg-orange-50 p-5">
+              <div>
+                <h2 className="text-lg font-semibold text-orange-900">
+                  Retry Meta Ad Set Creation
+                </h2>
+                <p className="mt-2 text-sm text-orange-800">
+                  This retries only Ad Set creation using the existing Campaign
+                  ID. It will not create another Campaign.
+                </p>
+                <p className="mt-2 break-all text-xs text-gray-700">
+                  Campaign ID: {campaignIdForRetry}
+                </p>{" "}
+              </div>
 
-    <button
-      type="button"
-      onClick={handleRetryMetaAdSet}
-      disabled={retryLoading}
-      className="mt-4 rounded-md bg-blue-600 px-4 py-2 text-white disabled:opacity-50"
-    >
-      {retryLoading ? "Retrying Ad Set..." : "Retry Meta Ad Set"}
-    </button>
+              <button
+                type="button"
+                onClick={handleRetryMetaAdSet}
+                disabled={retryLoading}
+                className="rounded-lg bg-orange-600 px-5 py-3 font-medium text-white hover:bg-orange-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {retryLoading ? "Retrying Ad Set..." : "Retry Meta Ad Set"}
+              </button>
 
-    {retryError && (
-      <pre className="mt-4 whitespace-pre-wrap text-sm text-red-500">
-        {retryError}
-      </pre>
-    )}
+              {retryError && (
+                <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+                  <p className="font-medium text-red-800">Retry Failed</p>
+                  <p className="mt-1 whitespace-pre-wrap text-sm text-red-700">
+                    {retryError}
+                  </p>
+                </div>
+              )}
 
-    {retryResult && (
-      <pre className="mt-4 overflow-auto rounded-md bg-gray-100 p-3 text-sm">
-        {JSON.stringify(retryResult, null, 2)}
-      </pre>
-    )}
-  </div>
-)}
+              {retryResult !== null && (
+                <div>
+                  <h3 className="mb-2 font-semibold text-gray-900">
+                    Retry API Response
+                  </h3>
+
+                  <pre className="max-h-[500px] overflow-auto rounded-lg bg-gray-950 p-4 text-xs text-green-300">
+                    {JSON.stringify(retryResult, null, 2)}
+                  </pre>
+                </div>
+              )}
+            </section>
+          )}
+        </>
       )}
+      {/* {campaignIdForRetry && (
+<div className="mt-6 rounded-lg border p-4">
+  <h3 className="text-lg font-semibold">
+    Retry Meta Ad Set Creation
+  </h3>
+
+  <p className="mt-2 text-sm text-gray-500">
+    Campaign ID: {campaignIdForRetry}
+  </p>
+
+  <button
+    type="button"
+    onClick={handleRetryMetaAdSet}
+    disabled={retryLoading}
+    className="mt-4 rounded-md bg-blue-600 px-4 py-2 text-white disabled:opacity-50"
+  >
+    {retryLoading ? "Retrying Ad Set..." : "Retry Meta Ad Set"}
+  </button>
+
+  {retryError && (
+    <pre className="mt-4 whitespace-pre-wrap text-sm text-red-500">
+      {retryError}
+    </pre>
+  )}
+
+  {retryResult && (
+    <pre className="mt-4 overflow-auto rounded-md bg-gray-100 p-3 text-sm">
+      {JSON.stringify(retryResult, null, 2)}
+    </pre>
+  )}
+</div>
+)} */}
     </main>
   );
 }

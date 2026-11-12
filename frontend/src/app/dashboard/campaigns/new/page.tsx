@@ -225,6 +225,227 @@ function selectedCurrency(connection: ProviderConnection): string {
   return getAccountCurrency(account) || "account currency";
 }
 
+function asObject(value: unknown): Record<string, any> {
+  return value && typeof value === "object"
+    ? (value as Record<string, any>)
+    : {};
+}
+
+function normalizeProviderCampaignStatus(
+  provider: ProviderName,
+  row: Record<string, any>,
+): CampaignLifecycleStatus {
+  const rawStatus = String(row.status ?? "").toUpperCase();
+  const effectiveStatus = String(row.effective_status ?? "").toUpperCase();
+
+  if (
+    ["REMOVED", "ARCHIVED", "DELETED"].includes(rawStatus) ||
+    ["REMOVED", "ARCHIVED", "DELETED"].includes(effectiveStatus)
+  ) {
+    return "ARCHIVED";
+  }
+
+  if (
+    rawStatus === "PAUSED" ||
+    (provider === "metaAds" &&
+      ["PAUSED", "CAMPAIGN_PAUSED", "ADSET_PAUSED"].includes(effectiveStatus))
+  ) {
+    return "PAUSED";
+  }
+
+  if (["ENABLED", "ACTIVE"].includes(rawStatus)) return "ACTIVE";
+  return "DRAFT";
+}
+
+function formatCurrencyAmount(amount: number, currencyCode: string): string {
+  if (!Number.isFinite(amount)) return "Not reported";
+  if (!/^[A-Z]{3}$/.test(currencyCode)) return String(amount);
+
+  try {
+    return new Intl.NumberFormat("en-IN", {
+      style: "currency",
+      currency: currencyCode,
+      maximumFractionDigits: 2,
+    }).format(amount);
+  } catch {
+    return `${currencyCode} ${amount.toFixed(2)}`;
+  }
+}
+
+// Meta campaign budget fields are expressed in the currency's smallest unit.
+function formatMetaBudgetAmount(
+  value: unknown,
+  currencyCode: string,
+): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  const minorUnits = Number(value);
+  if (!Number.isFinite(minorUnits)) return null;
+  if (!/^[A-Z]{3}$/.test(currencyCode)) {
+    return `${minorUnits} minor units`;
+  }
+
+  try {
+    const fractionDigits = new Intl.NumberFormat("en", {
+      style: "currency",
+      currency: currencyCode,
+    }).resolvedOptions().maximumFractionDigits;
+    return formatCurrencyAmount(
+      minorUnits / 10 ** fractionDigits,
+      currencyCode,
+    );
+  } catch {
+    return `${minorUnits} minor units`;
+  }
+}
+
+function formatCampaignDate(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function mapCampaignListResponse(
+  responseData: unknown,
+  connections: { googleAds: ProviderConnection; metaAds: ProviderConnection },
+): ManagedCampaignRecord[] {
+  const response = asObject(responseData);
+  const providerResults = asObject(response.providers);
+  const savedCampaigns = Array.isArray(response.savedCampaigns)
+    ? response.savedCampaigns.map(asObject)
+    : [];
+
+  const providers: ProviderName[] = ["googleAds", "metaAds"];
+  const records: any[] = [];
+
+  for (const provider of providers) {
+    const providerResult = asObject(providerResults[provider]);
+    if (providerResult.success !== true) continue;
+
+    const campaigns = asObject(providerResult.data).campaigns;
+    if (!Array.isArray(campaigns)) continue;
+
+    const currencyCode = selectedCurrency(connections[provider]);
+    const accountLabel = selectedAccountLabel(connections[provider]);
+
+    for (const item of campaigns) {
+      const row = asObject(item);
+      const providerCampaignId = String(
+        row.id ?? row.campaign?.id ?? "",
+      ).trim();
+      if (!providerCampaignId) continue;
+
+      const savedCampaign = savedCampaigns.find((saved) => {
+        const savedProvider = asObject(asObject(saved.providers)[provider]);
+        const savedId = String(
+          savedProvider.providerCampaignId ?? savedProvider.campaignId ?? "",
+        );
+        const savedAccountId = String(savedProvider.accountId ?? "");
+        const responseAccountId = String(providerResult.accountId ?? "");
+        return (
+          savedId === providerCampaignId &&
+          (!savedAccountId ||
+            !responseAccountId ||
+            savedAccountId === responseAccountId)
+        );
+      });
+
+      const savedProvider = savedCampaign
+        ? asObject(asObject(savedCampaign.providers)[provider])
+        : {};
+      const campaignName = String(
+        savedCampaign?.name ??
+          row.name ??
+          row.campaign?.name ??
+          "Unnamed campaign",
+      );
+
+      let budgetLabel = "Not reported";
+      if (provider === "googleAds") {
+        const budget = asObject(row.budget);
+        const amount = Number(budget.amount);
+        if (
+          budget.amount !== null &&
+          budget.amount !== undefined &&
+          Number.isFinite(amount)
+        ) {
+          const currency = String(budget.currencyCode ?? currencyCode);
+          const rendered = formatCurrencyAmount(amount, currency);
+          budgetLabel = `${rendered}${budget.type === "daily" ? " / day" : budget.type === "lifetime" ? " total" : ""}`;
+        }
+      } else {
+        const daily = formatMetaBudgetAmount(row.daily_budget, currencyCode);
+        const lifetime = formatMetaBudgetAmount(
+          row.lifetime_budget,
+          currencyCode,
+        );
+        if (daily) budgetLabel = `${daily} / day`;
+        else if (lifetime) budgetLabel = `${lifetime} lifetime`;
+        else budgetLabel = "Budget managed at Ad Set level or not reported";
+      }
+
+      const objective =
+        savedCampaign?.objective ?? row.objective ?? row.channelType ?? "—";
+      const campaignType =
+        provider === "googleAds"
+          ? `Google ${String(row.channelType ?? "Campaign").replaceAll("_", " ")}`
+          : `Meta ${String(row.buying_type ?? "Campaign").replaceAll("_", " ")}`;
+      const creationStatusRaw = String(
+        savedProvider.creationStatus ?? "created",
+      ).toLowerCase();
+      const creationStatus =
+        creationStatusRaw === "partial" ||
+        creationStatusRaw === "partial_success"
+          ? "PARTIAL_SUCCESS"
+          : creationStatusRaw === "failed"
+            ? "FAILED"
+            : "SUCCESS";
+
+      records.push({
+        id: `${provider}:${providerCampaignId}`,
+        groupId: String(
+          savedCampaign?._id ??
+            savedCampaign?.id ??
+            `${provider}:${providerCampaignId}`,
+        ),
+        name: campaignName,
+        provider,
+        campaignType,
+        googleCampaignType:
+          provider === "googleAds" ? (row.channelType ?? undefined) : undefined,
+        objective,
+        budgetLabel,
+        status: normalizeProviderCampaignStatus(provider, row),
+        creationStatus,
+        accountLabel:
+          accountLabel === "No account selected"
+            ? String(providerResult.accountId ?? accountLabel)
+            : accountLabel,
+        createdAt: formatCampaignDate(
+          savedCampaign?.createdAt ?? row.created_time ?? row.createdAt,
+        ),
+        updatedAt: formatCampaignDate(
+          row.updated_time ??
+            savedCampaign?.updatedAt ??
+            savedCampaign?.createdAt,
+        ),
+        source: "LIVE",
+        providerCampaignId,
+        providerAccountId: providerResult.accountId ?? row.account_id ?? null,
+        providerStatus: row.status ?? null,
+        effectiveStatus:
+          row.effective_status ??
+          row.primaryStatus ??
+          row.servingStatus ??
+          null,
+        objectiveRaw: row.objective ?? null,
+        metrics: row.metrics ?? null,
+      });
+    }
+  }
+
+  return records as unknown as ManagedCampaignRecord[];
+}
+
 function isPositiveAmount(value: string): boolean {
   const amount = Number(value);
   return Number.isFinite(amount) && amount > 0;
@@ -247,10 +468,10 @@ export default function CreateCampaignPage() {
 
   // Shared campaign brief.
   const [campaignName, setCampaignName] = useState(
-    "Demo - Summer Sale Campaign-56",
+    "Demo - Summer Sale Campaign",
   );
   const [businessName, setBusinessName] = useState("Acme Demo Store");
-  const [websiteUrl, setWebsiteUrl] = useState("https://recomind.onrender.com");
+  const [websiteUrl, setWebsiteUrl] = useState("https://example.com");
   const [description, setDescription] = useState(
     "Promote the summer collection and drive online purchases.",
   );
@@ -279,7 +500,7 @@ export default function CreateCampaignPage() {
     googlePortfolioStrategyResourceName,
     setGooglePortfolioStrategyResourceName,
   ] = useState("customers/1234567890/biddingStrategies/123456789");
-  const [googleStartDate, setGoogleStartDate] = useState("2026-11-13");
+  const [googleStartDate, setGoogleStartDate] = useState("2026-11-12");
   const [googleEndDate, setGoogleEndDate] = useState("2026-12-12");
   const [googleGeoTargetResources, setGoogleGeoTargetResources] = useState(
     "geoTargetConstants/2356",
@@ -580,100 +801,30 @@ export default function CreateCampaignPage() {
   const [workspaceView, setWorkspaceView] = useState<WorkspaceView>("builder");
   const [campaignRecords, setCampaignRecords] = useState<
     ManagedCampaignRecord[]
-  >(() => [
-    {
-      id: "DEMO-CMP-001-GOOGLE",
-      groupId: "DEMO-GROUP-001",
-      name: "Summer Search | Website Sales",
-      provider: "googleAds",
-      campaignType: "Google Search",
-      googleCampaignType: "SEARCH",
-      objective: "SALES",
-      budgetLabel: "₹1,500 / day",
-      status: "ACTIVE",
-      creationStatus: "SUCCESS",
-      accountLabel: "Demo Google Ads account",
-      createdAt: "Nov 01, 2026",
-      updatedAt: "Nov 03, 2026 · 10:15 AM",
-      source: "SAMPLE",
-    },
-    {
-      id: "DEMO-CMP-002-META",
-      groupId: "DEMO-GROUP-002",
-      name: "New Arrivals | Instagram & Facebook",
-      provider: "metaAds",
-      campaignType: "Meta Auction",
-      objective: "SALES",
-      budgetLabel: "₹1,200 / day",
-      status: "ACTIVE",
-      creationStatus: "SUCCESS",
-      accountLabel: "Demo Meta ad account",
-      createdAt: "Oct 29, 2026",
-      updatedAt: "Nov 03, 2026 · 09:40 AM",
-      source: "SAMPLE",
-    },
-    {
-      id: "DEMO-CMP-003-GOOGLE",
-      groupId: "DEMO-GROUP-003",
-      name: "Brand Awareness | Google + Meta",
-      provider: "googleAds",
-      campaignType: "Google Display",
-      googleCampaignType: "DISPLAY",
-      objective: "AWARENESS",
-      budgetLabel: "₹1,000 / day",
-      status: "PAUSED",
-      creationStatus: "SUCCESS",
-      accountLabel: "Demo Google Ads account",
-      createdAt: "Oct 25, 2026",
-      updatedAt: "Nov 02, 2026 · 04:20 PM",
-      source: "SAMPLE",
-    },
-    {
-      id: "DEMO-CMP-003-META",
-      groupId: "DEMO-GROUP-003",
-      name: "Brand Awareness | Google + Meta",
-      provider: "metaAds",
-      campaignType: "Meta Auction",
-      objective: "AWARENESS",
-      budgetLabel: "₹800 / day",
-      status: "PAUSED",
-      creationStatus: "PARTIAL_SUCCESS",
-      accountLabel: "Demo Meta ad account",
-      createdAt: "Oct 25, 2026",
-      updatedAt: "Nov 02, 2026 · 04:20 PM",
-      source: "SAMPLE",
-    },
-    {
-      id: "DEMO-CMP-004-GOOGLE",
-      groupId: "DEMO-GROUP-004",
-      name: "Performance Max | Winter Catalogue",
-      provider: "googleAds",
-      campaignType: "Google Performance Max",
-      googleCampaignType: "PERFORMANCE_MAX",
-      objective: "SALES",
-      budgetLabel: "₹2,000 / day",
-      status: "FAILED",
-      creationStatus: "FAILED",
-      accountLabel: "Demo Google Ads account",
-      createdAt: "Oct 22, 2026",
-      updatedAt: "Oct 22, 2026 · 02:10 PM",
-      source: "SAMPLE",
-    },
-  ]);
+  >([]);
   const [campaignRecordsLoaded, setCampaignRecordsLoaded] = useState(false);
+  const [campaignListLoading, setCampaignListLoading] = useState(false);
+  const [campaignListError, setCampaignListError] = useState("");
+  const [campaignListRefresh, setCampaignListRefresh] = useState(0);
 
-  // Keep campaign records shared with /dashboard/campaigns. The browser store
-  // is prototype persistence only; it is not a provider database.
+  // Only local drafts remain in browser storage. Live campaign rows always
+  // come from the authenticated backend listing endpoint.
   useEffect(() => {
-    const savedRecords = readManagedCampaigns();
-    if (savedRecords.length > 0) {
-      setCampaignRecords(savedRecords as ManagedCampaignRecord[]);
-    }
+    const savedDrafts = readManagedCampaigns().filter(
+      (record: any) => record.source === "LOCAL",
+    );
+    setCampaignRecords(savedDrafts as ManagedCampaignRecord[]);
     setCampaignRecordsLoaded(true);
 
     const handleStorage = (event: StorageEvent) => {
       if (event.key !== CAMPAIGNS_STORAGE_KEY) return;
-      setCampaignRecords(readManagedCampaigns() as ManagedCampaignRecord[]);
+      const nextDrafts = readManagedCampaigns().filter(
+        (record: any) => record.source === "LOCAL",
+      );
+      setCampaignRecords((current) => [
+        ...current.filter((record: any) => record.source === "LIVE"),
+        ...(nextDrafts as ManagedCampaignRecord[]),
+      ]);
     };
     window.addEventListener("storage", handleStorage);
     return () => window.removeEventListener("storage", handleStorage);
@@ -681,7 +832,10 @@ export default function CreateCampaignPage() {
 
   useEffect(() => {
     if (!campaignRecordsLoaded) return;
-    writeManagedCampaigns(campaignRecords);
+    const localDrafts = campaignRecords.filter(
+      (record: any) => record.source === "LOCAL",
+    );
+    writeManagedCampaigns(localDrafts);
   }, [campaignRecords, campaignRecordsLoaded]);
 
   const [campaignSearch, setCampaignSearch] = useState("");
@@ -944,6 +1098,132 @@ export default function CreateCampaignPage() {
       cancelled = true;
     };
   }, [getToken, isLoaded, isSignedIn]);
+
+  // Load live campaigns from the backend after provider connections are known.
+  useEffect(() => {
+    if (
+      !isLoaded ||
+      !isSignedIn ||
+      loadingConnections ||
+      !campaignRecordsLoaded
+    ) {
+      return;
+    }
+
+    const hasGoogleAccount = Boolean(connections.googleAds.selectedAccountId);
+    const hasMetaAccount = Boolean(connections.metaAds.selectedAccountId);
+
+    if (!hasGoogleAccount && !hasMetaAccount) {
+      setCampaignListLoading(false);
+      setCampaignListError(
+        "Connect and select a Google Ads or Meta Ads account to load campaigns.",
+      );
+      setCampaignRecords((current) =>
+        current.filter((record: any) => record.source !== "LIVE"),
+      );
+      return;
+    }
+
+    let cancelled = false;
+    const loadCampaignList = async () => {
+      try {
+        setCampaignListLoading(true);
+        setCampaignListError("");
+        const token = await getToken();
+        if (!token)
+          throw new Error(
+            "Unable to retrieve your authentication token. Please sign in again.",
+          );
+
+        const response = await fetch(`${API_BASE_URL}/api/campaigns`, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/json",
+          },
+          cache: "no-store",
+        });
+        const responseData = await response.json().catch(() => null);
+        if (!response.ok || responseData?.success === false) {
+          const failedProviderDetails = (
+            [
+              ["Google Ads", "googleAds"],
+              ["Meta Ads", "metaAds"],
+            ] as const
+          )
+            .map(([label, key]) => {
+              const providerResult = asObject(
+                asObject(responseData?.providers)[key],
+              );
+              if (providerResult.success === true) return null;
+              const detail =
+                providerResult.message ??
+                providerResult.error ??
+                providerResult.errorMessage;
+              return detail ? `${label}: ${String(detail)}` : null;
+            })
+            .filter(Boolean);
+          throw new Error(
+            [
+              responseData?.message ||
+                `Campaign listing failed with HTTP ${response.status}.`,
+              ...failedProviderDetails,
+            ].join(" "),
+          );
+        }
+
+        const liveRecords = mapCampaignListResponse(responseData, connections);
+        const providerResults = asObject(responseData?.providers);
+        const providerErrors = (
+          [
+            ["Google Ads", "googleAds", hasGoogleAccount],
+            ["Meta Ads", "metaAds", hasMetaAccount],
+          ] as const
+        )
+          .filter(
+            ([, key, selected]) =>
+              selected && asObject(providerResults[key]).success !== true,
+          )
+          .map(([label, key]) => {
+            const providerResult = asObject(providerResults[key]);
+            return `${label}: ${String(providerResult.message ?? providerResult.error ?? "Unable to retrieve campaigns.")}`;
+          });
+
+        if (cancelled) return;
+        setCampaignRecords((current) => [
+          ...liveRecords,
+          ...current.filter((record: any) => record.source !== "LIVE"),
+        ]);
+        if (liveRecords.length > 0) setSelectedCampaignId(liveRecords[0].id);
+        setCampaignListError(providerErrors.join(" "));
+      } catch (err) {
+        if (!cancelled) {
+          setCampaignListError(
+            err instanceof Error ? err.message : "Unable to load campaigns.",
+          );
+          setCampaignRecords((current) =>
+            current.filter((record: any) => record.source !== "LIVE"),
+          );
+        }
+      } finally {
+        if (!cancelled) setCampaignListLoading(false);
+      }
+    };
+
+    void loadCampaignList();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    getToken,
+    isLoaded,
+    isSignedIn,
+    loadingConnections,
+    campaignRecordsLoaded,
+    campaignListRefresh,
+    connections.googleAds.selectedAccountId,
+    connections.metaAds.selectedAccountId,
+  ]);
 
   const clearPreview = () => {
     setPreparedPayload("");
@@ -3064,6 +3344,9 @@ export default function CreateCampaignPage() {
       const responseData = await response.json().catch(() => null);
 
       setCampaignApiResponse(responseData);
+      // Refresh the listing because the request may have created parent
+      // resources even when a later provider step failed.
+      if (responseData) setCampaignListRefresh((value) => value + 1);
 
       if (!response.ok || responseData?.success === false) {
         throw new Error(
@@ -4498,6 +4781,12 @@ export default function CreateCampaignPage() {
   };
 
   const toggleCampaignLifecycle = (record: ManagedCampaignRecord) => {
+    if ((record as any).source === "LIVE") {
+      setCampaignNotice(
+        "Live Pause/Resume actions are not connected yet. Campaign status is read directly from the provider.",
+      );
+      return;
+    }
     if (record.status !== "ACTIVE" && record.status !== "PAUSED") return;
     const nextStatus = record.status === "ACTIVE" ? "PAUSED" : "ACTIVE";
     setCampaignRecords((records) =>
@@ -4535,6 +4824,12 @@ export default function CreateCampaignPage() {
   };
 
   const archiveCampaignRecord = (record: ManagedCampaignRecord) => {
+    if ((record as any).source === "LIVE") {
+      setCampaignNotice(
+        "Archiving live provider campaigns is not connected yet.",
+      );
+      return;
+    }
     setCampaignRecords((records) =>
       records.map((item) =>
         item.id === record.id
@@ -4596,13 +4891,23 @@ export default function CreateCampaignPage() {
           record.campaignType,
           record.objective,
           record.accountLabel,
-        ].some((value) => value.toLowerCase().includes(query));
+        ].some((value) =>
+          String(value ?? "")
+            .toLowerCase()
+            .includes(query),
+        );
       const matchesPlatform =
         campaignPlatformFilter === "ALL" ||
         (campaignPlatformFilter === "GOOGLE" &&
           record.provider === "googleAds") ||
         (campaignPlatformFilter === "META" && record.provider === "metaAds") ||
-        (campaignPlatformFilter === "BOTH" && record.provider === "both");
+        (campaignPlatformFilter === "BOTH" &&
+          (record.provider === "both" ||
+            campaignRecords.some(
+              (candidate: any) =>
+                candidate.groupId === record.groupId &&
+                candidate.provider !== record.provider,
+            )));
       const matchesStatus =
         campaignStatusFilter === "ALL" ||
         record.status === campaignStatusFilter;
@@ -10615,26 +10920,45 @@ export default function CreateCampaignPage() {
                 drafts from one workspace.
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                setWorkspaceView("builder");
-                setStep(1);
-                setError("");
-                clearPreview();
-              }}
-              className="w-fit shrink-0 whitespace-nowrap rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700"
-            >
-              + Create campaign
-            </button>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setCampaignListRefresh((value) => value + 1)}
+                disabled={campaignListLoading}
+                className="w-fit shrink-0 whitespace-nowrap rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-50"
+              >
+                {campaignListLoading ? "Refreshing..." : "Refresh"}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setWorkspaceView("builder");
+                  setStep(1);
+                  setError("");
+                  clearPreview();
+                }}
+                className="w-fit shrink-0 whitespace-nowrap rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-blue-700"
+              >
+                + Create campaign
+              </button>
+            </div>
           </div>
 
-          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
-            <strong>Prototype workspace:</strong> sample records are clearly
-            marked. Search, filters, pause/resume, duplicate and archive actions
-            update local page state only; no live Google Ads or Meta Ads
-            campaign is changed.
+          <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-xs leading-5 text-blue-900">
+            <strong>Live campaign listing:</strong> campaign data is fetched
+            from your connected Google Ads and Meta Ads accounts. Pause/Resume
+            and Archive are read-only for live records until their provider
+            mutation APIs are connected. Draft duplication remains local.
           </div>
+          {(campaignListLoading || campaignListError) && (
+            <div
+              className={`rounded-xl border p-3 text-sm ${campaignListError ? "border-amber-200 bg-amber-50 text-amber-900" : "border-slate-200 bg-slate-50 text-slate-600"}`}
+            >
+              {campaignListLoading
+                ? "Loading campaigns from connected ad accounts..."
+                : campaignListError}
+            </div>
+          )}
 
           {campaignNotice && (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
@@ -10742,10 +11066,16 @@ export default function CreateCampaignPage() {
             {filteredCampaignRecords.length === 0 ? (
               <div className="p-10 text-center">
                 <p className="font-semibold text-slate-800">
-                  No campaigns match these filters
+                  {campaignListLoading
+                    ? "Loading campaigns..."
+                    : campaignRecords.length === 0
+                      ? "No campaigns found"
+                      : "No campaigns match these filters"}
                 </p>
                 <p className="mt-1 text-sm text-slate-500">
-                  Change the search or filters to see more campaigns.
+                  {campaignRecords.length === 0
+                    ? "No live campaigns were returned for the currently selected ad accounts."
+                    : "Change the search or filters to see more campaigns."}
                 </p>
                 <button
                   type="button"
@@ -10809,11 +11139,13 @@ export default function CreateCampaignPage() {
                             </p>
                             <div className="mt-1 flex flex-wrap gap-1.5">
                               <span
-                                className={`rounded px-1.5 py-0.5 text-[9px] font-bold ${record.source === "SAMPLE" ? "bg-violet-50 text-violet-700" : "bg-slate-100 text-slate-600"}`}
+                                className={`rounded px-1.5 py-0.5 text-[9px] font-bold ${(record as any).source === "LIVE" ? "bg-emerald-50 text-emerald-700" : record.source === "SAMPLE" ? "bg-violet-50 text-violet-700" : "bg-slate-100 text-slate-600"}`}
                               >
-                                {record.source === "SAMPLE"
-                                  ? "SAMPLE DATA"
-                                  : "LOCAL RECORD"}
+                                {(record as any).source === "LIVE"
+                                  ? "LIVE PROVIDER"
+                                  : record.source === "SAMPLE"
+                                    ? "SAMPLE DATA"
+                                    : "LOCAL DRAFT"}
                               </span>
                               {record.creationStatus === "PARTIAL_SUCCESS" && (
                                 <span className="rounded bg-amber-50 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">
@@ -10871,8 +11203,9 @@ export default function CreateCampaignPage() {
                           <button
                             type="button"
                             disabled={
-                              record.status !== "ACTIVE" &&
-                              record.status !== "PAUSED"
+                              (record as any).source === "LIVE" ||
+                              (record.status !== "ACTIVE" &&
+                                record.status !== "PAUSED")
                             }
                             onClick={() => toggleCampaignLifecycle(record)}
                             className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-40"
@@ -10886,15 +11219,16 @@ export default function CreateCampaignPage() {
                           >
                             Duplicate
                           </button>
-                          {record.status !== "ARCHIVED" && (
-                            <button
-                              type="button"
-                              onClick={() => archiveCampaignRecord(record)}
-                              className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700"
-                            >
-                              Archive
-                            </button>
-                          )}
+                          {record.status !== "ARCHIVED" &&
+                            (record as any).source !== "LIVE" && (
+                              <button
+                                type="button"
+                                onClick={() => archiveCampaignRecord(record)}
+                                className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700"
+                              >
+                                Archive
+                              </button>
+                            )}
                         </div>
                       </div>
                     );
@@ -10904,8 +11238,8 @@ export default function CreateCampaignPage() {
             )}
             <div className="border-t border-slate-100 bg-slate-50 px-5 py-3 text-xs text-slate-500">
               Showing {filteredCampaignRecords.length} of{" "}
-              {campaignRecords.length} local campaign records. Provider sync and
-              live performance metrics are not connected in this prototype.
+              {campaignRecords.length} campaign records, including live provider
+              records and locally saved drafts.
             </div>
           </div>
         </section>
@@ -10956,16 +11290,19 @@ export default function CreateCampaignPage() {
                           : "GOOGLE + META"}
                     </span>
                     <span className="rounded-full bg-blue-50 px-2.5 py-1 text-[10px] font-bold text-blue-700">
-                      {selectedCampaign.source === "SAMPLE"
-                        ? "SAMPLE DATA"
-                        : "LOCAL RECORD"}
+                      {(selectedCampaign as any).source === "LIVE"
+                        ? "LIVE PROVIDER"
+                        : selectedCampaign.source === "SAMPLE"
+                          ? "SAMPLE DATA"
+                          : "LOCAL DRAFT"}
                     </span>
                   </div>
                   <h3 className="mt-2 text-xl font-bold text-slate-900">
                     {selectedCampaign.name}
                   </h3>
                   <p className="mt-1 break-all font-mono text-[10px] text-slate-400">
-                    {selectedCampaign.id}
+                    {(selectedCampaign as any).providerCampaignId ??
+                      selectedCampaign.id}
                   </p>
                   <p className="mt-2 text-sm text-slate-500">
                     {selectedCampaign.campaignType} ·{" "}
@@ -11030,17 +11367,18 @@ export default function CreateCampaignPage() {
                   Duplicate as draft
                 </button>
                 {(selectedCampaign.status === "ACTIVE" ||
-                  selectedCampaign.status === "PAUSED") && (
-                  <button
-                    type="button"
-                    onClick={() => toggleCampaignLifecycle(selectedCampaign)}
-                    className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700"
-                  >
-                    {selectedCampaign.status === "ACTIVE"
-                      ? "Pause campaign"
-                      : "Resume campaign"}
-                  </button>
-                )}
+                  selectedCampaign.status === "PAUSED") &&
+                  (selectedCampaign as any).source !== "LIVE" && (
+                    <button
+                      type="button"
+                      onClick={() => toggleCampaignLifecycle(selectedCampaign)}
+                      className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700"
+                    >
+                      {selectedCampaign.status === "ACTIVE"
+                        ? "Pause campaign"
+                        : "Resume campaign"}
+                    </button>
+                  )}
               </div>
               {selectedCampaign.jobId && (
                 <p className="mt-4 text-xs text-slate-500">

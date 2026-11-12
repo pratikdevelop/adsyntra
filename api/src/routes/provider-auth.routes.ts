@@ -225,7 +225,7 @@ function getFrontendProviderUrl(
   status: "connected" | "error",
   accountSync?: "success" | "error"
 ): string {
-  const url = new URL("/provider", FRONTEND_URL);
+  const url = new URL("/dashboard/provider", FRONTEND_URL);
 
   url.searchParams.set(provider, status);
 

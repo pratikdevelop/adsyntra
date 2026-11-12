@@ -226,16 +226,16 @@ function buildMetaCampaignBundleInput(
 
     const budgetLevel = rawBudgetLevel;
     const requestedAdSetBudgetLevel =
-  getConfigValue(adSetConfig, "budgetLevel");
+        getConfigValue(adSetConfig, "budgetLevel");
 
-if (
-  requestedAdSetBudgetLevel !== undefined &&
-  requestedAdSetBudgetLevel !== budgetLevel
-) {
-  throw new CampaignRequestValidationError(
-    "Meta Campaign and Ad Set budget levels must match.",
-  );
-}
+    if (
+        requestedAdSetBudgetLevel !== undefined &&
+        requestedAdSetBudgetLevel !== budgetLevel
+    ) {
+        throw new CampaignRequestValidationError(
+            "Meta Campaign and Ad Set budget levels must match.",
+        );
+    }
 
     // Buying type
     const buyingType = (

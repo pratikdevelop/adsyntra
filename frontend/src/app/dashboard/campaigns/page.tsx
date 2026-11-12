@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import axios from "axios";
 import {
   Alert,
@@ -59,6 +59,7 @@ interface ProviderResult {
   data?: unknown;
   error?: unknown;
   campaigns?: GlobalCampaign[];
+  pagination?: ProviderPagination;
   account?: {
     id?: string;
     name?: string;
@@ -111,6 +112,59 @@ function extractProviderCampaigns(
   return [];
 }
 
+function normalizeProviderCampaign(
+  value: GlobalCampaign,
+  provider: ProviderKey,
+  fallbackAccountId?: string | null,
+): GlobalCampaign {
+  const raw = asRecord(value) ?? {};
+  const rawSource = asRecord(raw.source);
+  const source = rawSource ?? raw;
+  const idValue = raw.id ?? raw.resourceName ?? raw.resource_name;
+  const id = typeof idValue === "string" ? idValue : String(idValue ?? "");
+  const accountIdValue =
+    raw.accountId ?? raw.account_id ?? fallbackAccountId ?? null;
+  const effectiveStatus =
+    raw.effectiveStatus ?? raw.effective_status ?? raw.status ?? null;
+  const campaignType =
+    raw.campaignType ??
+    raw.advertisingChannelType ??
+    raw.advertising_channel_type ??
+    (provider === "metaAds" ? "Meta campaign" : null);
+
+  return {
+    ...raw,
+    id,
+    provider,
+    accountId: typeof accountIdValue === "string" ? accountIdValue : null,
+    name: typeof raw.name === "string" ? raw.name : "Untitled campaign",
+    status: typeof raw.status === "string" ? raw.status : null,
+    effectiveStatus:
+      typeof effectiveStatus === "string" ? effectiveStatus : null,
+    objective: typeof raw.objective === "string" ? raw.objective : null,
+    campaignType: typeof campaignType === "string" ? campaignType : null,
+    createdAt:
+      typeof (raw.createdAt ?? raw.created_time) === "string"
+        ? String(raw.createdAt ?? raw.created_time)
+        : null,
+    updatedAt:
+      typeof (raw.updatedAt ?? raw.updated_time) === "string"
+        ? String(raw.updatedAt ?? raw.updated_time)
+        : null,
+    source,
+  };
+}
+
+function getProviderPagination(
+  providerResult: ProviderResult | undefined,
+): ProviderPagination | undefined {
+  if (!providerResult) return undefined;
+  if (providerResult.pagination) return providerResult.pagination;
+  return asRecord(providerResult.data)?.pagination as
+    | ProviderPagination
+    | undefined;
+}
+
 function readNumber(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim() !== "") {
@@ -155,7 +209,15 @@ function getCampaignBudget(campaign: GlobalCampaign): number | null {
   const amountMicros = readNumber(
     normalizedBudget?.amountMicros ?? apiBudget?.amountMicros,
   );
-  return amountMicros !== null ? amountMicros / 1_000_000 : null;
+  if (amountMicros !== null) return amountMicros / 1_000_000;
+
+  // Meta Marketing API returns daily_budget / lifetime_budget in minor units.
+  const metaDailyBudget = readNumber(source?.daily_budget);
+  if (metaDailyBudget !== null) return metaDailyBudget / 100;
+  const metaLifetimeBudget = readNumber(source?.lifetime_budget);
+  if (metaLifetimeBudget !== null) return metaLifetimeBudget / 100;
+
+  return null;
 }
 
 function formatCurrency(value: number | null, currency: string | null): string {
@@ -189,8 +251,14 @@ function getCampaignType(campaign: GlobalCampaign): string {
   if (campaign.campaignType) return campaign.campaignType;
   const source = asRecord(campaign.source);
   const rawCampaign = asRecord(source?.campaign);
-  const channel = rawCampaign?.advertisingChannelType ?? source?.buying_type;
-  return typeof channel === "string" ? channel : "—";
+  const channel =
+    rawCampaign?.advertisingChannelType ??
+    rawCampaign?.advertising_channel_type;
+  return typeof channel === "string"
+    ? channel
+    : campaign.provider === "metaAds"
+      ? "Meta campaign"
+      : "—";
 }
 
 function getProviderLabel(provider: string): string {
@@ -235,18 +303,45 @@ function getErrorMessage(error: unknown): string {
 // ── Icons (inline SVGs to avoid extra deps) ─────────────────────────────
 const Icon = {
   Search: () => (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <circle cx="11" cy="11" r="7" />
       <path d="m21 21-4.3-4.3" />
     </svg>
   ),
   Plus: () => (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M12 5v14M5 12h14" />
     </svg>
   ),
   Refresh: () => (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
       <path d="M21 3v5h-5" />
       <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
@@ -254,17 +349,44 @@ const Icon = {
     </svg>
   ),
   ChevronDown: () => (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="m6 9 6 6 6-6" />
     </svg>
   ),
   ChevronUp: () => (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="m18 15-6-6-6 6" />
     </svg>
   ),
   Layers: () => (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="m12 2 9 5-9 5-9-5 9-5Z" />
       <path d="m3 12 9 5 9-5" />
       <path d="m3 17 9 5 9-5" />
@@ -281,7 +403,16 @@ const Icon = {
     </svg>
   ),
   Wallet: () => (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M21 12V7H5a2 2 0 0 1 0-4h14v4" />
       <path d="M3 5v14a2 2 0 0 0 2 2h16v-5" />
       <path d="M18 12a2 2 0 0 0 0 4h4v-4Z" />
@@ -333,10 +464,19 @@ function MetricCard({
             {label}
           </Typography>
         </Stack>
-        <Typography variant="h4" component="p" fontWeight={700} sx={{ mt: 1.5, letterSpacing: "-0.02em" }}>
+        <Typography
+          variant="h4"
+          component="p"
+          fontWeight={700}
+          sx={{ mt: 1.5, letterSpacing: "-0.02em" }}
+        >
           {value}
         </Typography>
-        <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, display: "block" }}>
+        <Typography
+          variant="caption"
+          color="text.secondary"
+          sx={{ mt: 0.5, display: "block" }}
+        >
           {detail}
         </Typography>
       </CardContent>
@@ -380,33 +520,27 @@ export default function CampaignsPage({
   const [providers, setProviders] = useState<
     Partial<Record<ProviderKey, ProviderResult>>
   >({});
-  const providersRef = useRef<Partial<Record<ProviderKey, ProviderResult>>>({});
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
 
   // Filter / search state
   const [search, setSearch] = useState("");
-  const [platformFilter, setPlatformFilter] = useState<"all" | ProviderKey>("all");
+  const [platformFilter, setPlatformFilter] = useState<"all" | ProviderKey>(
+    "all",
+  );
   const [statusFilter, setStatusFilter] = useState<string>("all");
 
-  const loadCampaigns = useCallback(async (append = false) => {
-    if (append) setLoadingMore(true);
-    else setLoading(true);
+  const loadCampaigns = useCallback(async () => {
+    setLoading(true);
 
     try {
-      const params: Record<string, string> = {};
-      if (append) {
-        const googleToken = providersRef.current.googleAds?.pagination?.nextToken;
-        const metaToken = providersRef.current.metaAds?.pagination?.nextToken;
-        if (googleToken) params.googlePageToken = googleToken;
-        if (metaToken) params.metaPageToken = metaToken;
-      }
-
+      // This endpoint returns both providers in one response.
+      // Pagination is intentionally not requested until the GET route forwards
+      // googlePageToken / metaPageToken to the provider services.
       const response = await axios.get<GlobalCampaignsApiResponse>(
         "/api/campaigns",
-        { params },
+        { withCredentials: true },
       );
       const payload = response.data;
 
@@ -420,51 +554,58 @@ export default function CampaignsPage({
       const googleResult = providerResults.googleAds;
       const metaResult = providerResults.metaAds;
 
-      const googleCampaigns = extractProviderCampaigns(googleResult);
-      const metaCampaigns = extractProviderCampaigns(metaResult);
+      const googleCampaigns = extractProviderCampaigns(googleResult).map(
+        (campaign) =>
+          normalizeProviderCampaign(
+            campaign,
+            "googleAds",
+            googleResult?.accountId,
+          ),
+      );
+      const metaCampaigns = extractProviderCampaigns(metaResult).map(
+        (campaign) =>
+          normalizeProviderCampaign(campaign, "metaAds", metaResult?.accountId),
+      );
 
-      const incomingCampaigns: GlobalCampaign[] = [
-        ...googleCampaigns.map((campaign) => ({
-          ...campaign,
-          provider: "googleAds" as const,
-          accountId: campaign.accountId ?? googleResult?.accountId ?? null,
-        })),
-        ...metaCampaigns.map((campaign) => ({
-          ...campaign,
-          provider: "metaAds" as const,
-          accountId: campaign.accountId ?? metaResult?.accountId ?? null,
-        })),
-      ];
+      // Prefer a combined list if the backend adds one in a future response;
+      // otherwise use the provider-specific data returned by this route.
+      const combinedCampaigns = Array.isArray(payload.campaigns)
+        ? payload.campaigns
+        : [...googleCampaigns, ...metaCampaigns];
 
-      setCampaigns((current) => {
-        if (!append) return incomingCampaigns;
-        const merged = new Map<string, GlobalCampaign>();
-        [...current, ...incomingCampaigns].forEach((campaign) => {
-          merged.set(`${campaign.provider}:${campaign.id}`, campaign);
-        });
-        return [...merged.values()];
-      });
+      setCampaigns(
+        combinedCampaigns.map((campaign) => {
+          const provider =
+            campaign.provider === "metaAds" ? "metaAds" : "googleAds";
+          const result = providerResults[provider];
+          return normalizeProviderCampaign(
+            campaign,
+            provider,
+            result?.accountId,
+          );
+        }),
+      );
 
-      const newProviders = {
+      const newProviders: Partial<Record<ProviderKey, ProviderResult>> = {
         googleAds: {
           ...googleResult,
+          pagination: getProviderPagination(googleResult),
           connected: googleResult?.success === true,
           status: googleResult?.success ? "connected" : "disconnected",
         },
         metaAds: {
           ...metaResult,
+          pagination: getProviderPagination(metaResult),
           connected: metaResult?.success === true,
           status: metaResult?.success ? "connected" : "disconnected",
         },
       };
       setProviders(newProviders);
-      providersRef.current = newProviders;
       setError(null);
     } catch (requestError) {
       setError(getErrorMessage(requestError));
     } finally {
       setLoading(false);
-      setLoadingMore(false);
     }
   }, []);
 
@@ -499,7 +640,7 @@ export default function CampaignsPage({
       return formatCurrency(amount, currency);
     }
     if (totalsByCurrency.size === 0 && !hasUnknownCurrencySpend) {
-      return formatCurrency(0, null);
+      return "—";
     }
     if (totalsByCurrency.size === 0) {
       return formatCurrency(unknownCurrencyTotal, null);
@@ -507,16 +648,13 @@ export default function CampaignsPage({
     return "Multiple currencies";
   }, [campaigns, providers]);
 
-  const googleCount = campaigns.filter((c) => c.provider === "googleAds").length;
+  const googleCount = campaigns.filter(
+    (c) => c.provider === "googleAds",
+  ).length;
   const metaCount = campaigns.filter((c) => c.provider === "metaAds").length;
   const connectedProviders = ["googleAds", "metaAds"].filter(
     (provider) => providers[provider as ProviderKey]?.connected,
   ).length;
-
-  const hasMore = Boolean(
-    providers.googleAds?.pagination?.hasMore ||
-      providers.metaAds?.pagination?.hasMore,
-  );
 
   // Available statuses for filter
   const availableStatuses = useMemo(() => {
@@ -532,13 +670,15 @@ export default function CampaignsPage({
   const filteredCampaigns = useMemo(() => {
     const q = search.trim().toLowerCase();
     return campaigns.filter((c) => {
-      if (platformFilter !== "all" && c.provider !== platformFilter) return false;
+      if (platformFilter !== "all" && c.provider !== platformFilter)
+        return false;
       if (statusFilter !== "all") {
         const s = (c.effectiveStatus || c.status || "").toUpperCase();
         if (s !== statusFilter) return false;
       }
       if (q) {
-        const haystack = `${c.name} ${c.id} ${c.accountId ?? ""} ${c.objective ?? ""}`.toLowerCase();
+        const haystack =
+          `${c.name} ${c.id} ${c.accountId ?? ""} ${c.objective ?? ""}`.toLowerCase();
         if (!haystack.includes(q)) return false;
       }
       return true;
@@ -559,7 +699,7 @@ export default function CampaignsPage({
   return (
     <Box sx={{ width: "100%", maxWidth: 1700, mx: "auto" }}>
       {/* Header */}
-           {/* Header */}
+      {/* Header */}
       <Box
         sx={{
           display: "flex",
@@ -699,7 +839,10 @@ export default function CampaignsPage({
         </Alert>
       )}
 
-      <Paper variant="outlined" sx={{ width: "100%", overflow: "hidden", borderRadius: 2 }}>
+      <Paper
+        variant="outlined"
+        sx={{ width: "100%", overflow: "hidden", borderRadius: 2 }}
+      >
         {/* Toolbar */}
         <Stack
           direction={{ xs: "column", md: "row" }}
@@ -719,7 +862,11 @@ export default function CampaignsPage({
                 sx={{ fontWeight: 700, height: 22 }}
               />
             </Stack>
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25 }}>
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{ mt: 0.25 }}
+            >
               {connectedProviders} of 2 providers connected
             </Typography>
           </Box>
@@ -858,21 +1005,49 @@ export default function CampaignsPage({
                   <TableCell sx={{ fontWeight: 700 }}>Objective</TableCell>
                   <TableCell sx={{ fontWeight: 700 }}>Type</TableCell>
                   <TableCell sx={{ fontWeight: 700 }}>Bid strategy</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>Budget</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>Spend</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>Impressions</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>Reach</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>Clicks</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>CTR</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>CPC</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>CPM</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>Conversions</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>Conv. rate</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>Cost / conv.</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>Conv. value</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>ROAS</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    Budget
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    Spend
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    Impressions
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    Reach
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    Clicks
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    CTR
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    CPC
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    CPM
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    Conversions
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    Conv. rate
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    Cost / conv.
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    Conv. value
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    ROAS
+                  </TableCell>
                   <TableCell sx={{ fontWeight: 700 }}>Status</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700 }}>Actions</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700 }}>
+                    Actions
+                  </TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -885,12 +1060,15 @@ export default function CampaignsPage({
                   const source = asRecord(campaign.source);
                   const rawCampaign = asRecord(source?.campaign);
                   const budget =
-                    asRecord(source?.budget) ?? asRecord(source?.campaignBudget);
+                    asRecord(source?.budget) ??
+                    asRecord(source?.campaignBudget);
                   const bidding = asRecord(source?.bidding);
                   const specialCategories = source?.special_ad_categories;
                   const startTime = source?.start_time;
-                  const createdTime = source?.created_time ?? campaign.createdAt;
-                  const updatedTime = source?.updated_time ?? campaign.updatedAt;
+                  const createdTime =
+                    source?.created_time ?? campaign.createdAt;
+                  const updatedTime =
+                    source?.updated_time ?? campaign.updatedAt;
 
                   const metricCurrency = currency;
                   const formatPercent = (value: unknown) => {
@@ -967,25 +1145,40 @@ export default function CampaignsPage({
                           <Typography variant="body2">
                             {displayValue(
                               bidding?.strategy ??
-                                rawCampaign?.biddingStrategyType,
+                                rawCampaign?.biddingStrategyType ??
+                                rawCampaign?.bid_strategy,
                             )}
                           </Typography>
                         </TableCell>
                         <TableCell align="right">
                           <Typography variant="body2" fontWeight={500}>
-                            {formatCurrency(getCampaignBudget(campaign), currency)}
+                            {formatCurrency(
+                              getCampaignBudget(campaign),
+                              currency,
+                            )}
                           </Typography>
                           <Typography
                             variant="caption"
                             color="text.secondary"
                             display="block"
                           >
-                            {displayValue(budget?.period ?? budget?.type)}
+                            {displayValue(
+                              budget?.period ??
+                                budget?.type ??
+                                (source?.daily_budget != null
+                                  ? "Daily"
+                                  : source?.lifetime_budget != null
+                                    ? "Lifetime"
+                                    : null),
+                            )}
                           </Typography>
                         </TableCell>
                         <TableCell align="right">
                           <Typography variant="body2" fontWeight={500}>
-                            {formatCurrency(getCampaignSpend(campaign), currency)}
+                            {formatCurrency(
+                              getCampaignSpend(campaign),
+                              currency,
+                            )}
                           </Typography>
                         </TableCell>
                         <TableCell align="right">
@@ -1020,7 +1213,9 @@ export default function CampaignsPage({
                         </TableCell>
                         <TableCell align="right">
                           {formatCurrency(
-                            readNumber(getMetric(campaign, "costPerConversion")),
+                            readNumber(
+                              getMetric(campaign, "costPerConversion"),
+                            ),
                             metricCurrency,
                           )}
                         </TableCell>
@@ -1052,7 +1247,11 @@ export default function CampaignsPage({
                               }))
                             }
                             endIcon={
-                              isExpanded ? <Icon.ChevronUp /> : <Icon.ChevronDown />
+                              isExpanded ? (
+                                <Icon.ChevronUp />
+                              ) : (
+                                <Icon.ChevronDown />
+                              )
                             }
                             sx={{ textTransform: "none", minWidth: 0 }}
                           >
@@ -1082,7 +1281,11 @@ export default function CampaignsPage({
                             bgcolor: "action.hover",
                           }}
                         >
-                          <Collapse in={isExpanded} timeout="auto" unmountOnExit>
+                          <Collapse
+                            in={isExpanded}
+                            timeout="auto"
+                            unmountOnExit
+                          >
                             <Box sx={{ py: 2.5, px: 2 }}>
                               <Typography
                                 variant="subtitle2"
@@ -1102,8 +1305,14 @@ export default function CampaignsPage({
                                   gap: 2,
                                 }}
                               >
-                                <DetailItem label="Campaign ID" value={campaign.id} />
-                                <DetailItem label="Account ID" value={campaign.accountId} />
+                                <DetailItem
+                                  label="Campaign ID"
+                                  value={campaign.id}
+                                />
+                                <DetailItem
+                                  label="Account ID"
+                                  value={campaign.accountId}
+                                />
                                 <DetailItem
                                   label="Effective status"
                                   value={campaign.effectiveStatus}
@@ -1120,7 +1329,8 @@ export default function CampaignsPage({
                                   label="Bidding strategy"
                                   value={
                                     bidding?.strategy ??
-                                    rawCampaign?.biddingStrategyType
+                                    rawCampaign?.biddingStrategyType ??
+                                    rawCampaign?.bid_strategy
                                   }
                                 />
                                 <DetailItem
@@ -1130,7 +1340,10 @@ export default function CampaignsPage({
                                     rawCampaign?.biddingStrategySystemStatus
                                   }
                                 />
-                                <DetailItem label="Budget name" value={budget?.name} />
+                                <DetailItem
+                                  label="Budget name"
+                                  value={budget?.name}
+                                />
                                 <DetailItem
                                   label="Budget amount"
                                   value={formatCurrency(
@@ -1140,7 +1353,15 @@ export default function CampaignsPage({
                                 />
                                 <DetailItem
                                   label="Budget period"
-                                  value={budget?.period ?? budget?.type}
+                                  value={
+                                    budget?.period ??
+                                    budget?.type ??
+                                    (source?.daily_budget != null
+                                      ? "Daily"
+                                      : source?.lifetime_budget != null
+                                        ? "Lifetime"
+                                        : null)
+                                  }
                                 />
                                 <DetailItem
                                   label="Budget delivery"
@@ -1148,11 +1369,22 @@ export default function CampaignsPage({
                                 />
                                 <DetailItem
                                   label="Buying type"
-                                  value={source?.buying_type}
+                                  value={
+                                    source?.buying_type ?? source?.buyingType
+                                  }
                                 />
-                                <DetailItem label="Start time" value={startTime} />
-                                <DetailItem label="Created" value={createdTime} />
-                                <DetailItem label="Last updated" value={updatedTime} />
+                                <DetailItem
+                                  label="Start time"
+                                  value={startTime}
+                                />
+                                <DetailItem
+                                  label="Created"
+                                  value={createdTime}
+                                />
+                                <DetailItem
+                                  label="Last updated"
+                                  value={updatedTime}
+                                />
                                 <DetailItem
                                   label="Special ad categories"
                                   value={specialCategories}
@@ -1168,29 +1400,6 @@ export default function CampaignsPage({
               </TableBody>
             </Table>
           </TableContainer>
-        )}
-
-        {!loading && hasMore && (
-          <Box
-            sx={{
-              display: "flex",
-              justifyContent: "center",
-              p: 2,
-              borderTop: 1,
-              borderColor: "divider",
-            }}
-          >
-            <Button
-              onClick={() => void loadCampaigns(true)}
-              disabled={loadingMore}
-              sx={{ textTransform: "none" }}
-            >
-              {loadingMore ? (
-                <CircularProgress size={18} sx={{ mr: 1 }} />
-              ) : null}
-              Load more campaigns
-            </Button>
-          </Box>
         )}
       </Paper>
     </Box>

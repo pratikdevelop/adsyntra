@@ -25,18 +25,18 @@ function isRecord(
 async function listMetaPages(): Promise<void> {
 
     const mongoUri =
-        process.env.MONGODB_URI ??
+        process.env[`MONGODB_URI`] ??
         process.env.MONGO_URI ??
-        process.env.MONGO_URL;
+        process.env[`MONGO_URL`];
 
-    const userId = process.env.META_DIAGNOSTIC_USER_ID;
+    const userId = process.env[`META_DIAGNOSTIC_USER_ID`];
 
     const accountId =
-        process.env.META_AD_ACCOUNT_ID ??
+        process.env[`META_AD_ACCOUNT_ID`] ??
         "act_1820194389321017";
 
     const expectedPageId =
-        process.env.META_TEST_PAGE_ID ?? "61595416382719";
+        process.env.META_TEST_PAGE_ID ?? "1383140784881581";
 
     if (!mongoUri) {
         throw new Error(

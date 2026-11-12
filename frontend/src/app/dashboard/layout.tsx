@@ -61,7 +61,7 @@ export default function DashboardLayout({
     }
 
     if (href === "/dashboard/campaigns") {
-      if (pathname === "/dashboard/create-campaign") return true;
+      if (pathname === "/dashboard/campaigns/new") return true;
       // Keep the dedicated Drafts item active on the drafts screen.
       if (
         pathname === "/dashboard/campaigns/drafts" ||
@@ -207,8 +207,7 @@ export default function DashboardLayout({
         <header className="hidden h-16 items-center justify-between border-b border-slate-200 bg-white px-8 md:flex">
           <div>
             <p className="text-sm font-semibold">
-              {pathname === "/dashboard/create-campaign" ||
-              pathname === "/dashboard/campaigns/new"
+              {pathname === "/dashboard/campaigns/new"
                 ? "Create campaign"
                 : ([...navigation]
                     .filter((item) => isActive(item.href))

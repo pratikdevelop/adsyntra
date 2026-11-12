@@ -134,15 +134,13 @@ export interface CreateMetaAdsAdCreativeInput {
   name: string;
   pageId: string;
   instagramActorId?: string;
-
+  existingPostId?: string;
   primaryText: string;
   headline: string;
   description?: string;
-
   imageUrl: string;
   destinationUrl: string;
   callToAction: MetaAdsCallToAction;
-
   validateOnly?: boolean;
   confirm?: boolean;
 }
@@ -2639,7 +2637,31 @@ export async function createMetaAdsAdSet(
     );
   }
 
+  console.info("[META AD SET REQUEST DIAGNOSTICS]", {
+    apiVersion: context.apiVersion,
+    adAccountId: context.adAccountId,
+    campaignId,
+    name,
 
+    optimizationGoal,
+    billingEvent,
+
+    destinationType:
+      objectiveValidation.destinationType ?? null,
+
+    budgetLevel,
+    bidStrategy: bidStrategy ?? null,
+
+    targeting: normalizedTargeting,
+
+    promotedObject: input.promoted_object ?? null,
+
+    startTime: normalizedSchedule.startTime ?? null,
+    endTime: normalizedSchedule.endTime ?? null,
+
+    dailyBudgetMinorUnits: dailyBudgetMinorUnits ?? null,
+    lifetimeBudgetMinorUnits: lifetimeBudgetMinorUnits ?? null,
+  });
   // 11. Call Meta API
   let response: Response;
   let responseBody: unknown;
@@ -2838,42 +2860,114 @@ export async function createMetaAdsAdCreative(
     };
   }
 
-  // 9. Build the Meta Ad Creative payload
-  const objectStorySpec = {
-    page_id: pageId,
+  // Build Meta Ad Creative request
+  const existingPostId = input.existingPostId?.trim() || "1383140784881581_122114448579513879".trim();
 
-    ...(instagramActorId && {
-      instagram_actor_id: instagramActorId,
-    }),
+  const form = new URLSearchParams({
+    name,
+  });
 
-    link_data: {
-      picture: imageUrl,
-      link: destinationUrl,
-      message: primaryText,
-      name: headline,
+  if (existingPostId) {
+    // Existing Page post creative
+    const match = /^(\d+)_(\d+)$/.exec(existingPostId);
 
-      ...(description && {
-        description,
+    if (!match) {
+      throw new MetaAdsCampaignCreationError(
+        "Existing post ID must use the PageID_PostID format.",
+        400,
+      );
+    }
+
+    if (match[1] !== pageId) {
+      throw new MetaAdsCampaignCreationError(
+        "Existing post does not belong to the selected Facebook Page.",
+        400,
+      );
+    }
+
+    form.set("object_story_id", existingPostId);
+
+    console.info("[META CREATIVE EXISTING POST MODE]", {
+      pageId,
+      existingPostId,
+    });
+  } else {
+    // New unpublished Page post creative
+    const primaryText = input.primaryText?.trim();
+    const headline = input.headline?.trim();
+    const description = input.description?.trim();
+
+    if (!primaryText || !headline) {
+      throw new MetaAdsCampaignCreationError(
+        "Primary text and headline are required.",
+        400,
+      );
+    }
+
+    const imageUrl = validateMetaHttpsUrl(
+      input.imageUrl,
+      "Creative image URL",
+    );
+
+    const destinationUrl = validateMetaHttpsUrl(
+      input.destinationUrl,
+      "Destination URL",
+    );
+
+    const supportedCtas: MetaAdsCallToAction[] = [
+      "LEARN_MORE",
+      "SHOP_NOW",
+      "SIGN_UP",
+      "CONTACT_US",
+      "GET_QUOTE",
+      "DOWNLOAD",
+    ];
+
+    if (!supportedCtas.includes(input.callToAction)) {
+      throw new MetaAdsCampaignCreationError(
+        "Unsupported Meta Ads call-to-action type.",
+        400,
+      );
+    }
+
+    const objectStorySpec = {
+      page_id: pageId,
+
+      ...(instagramActorId && {
+        instagram_actor_id: instagramActorId,
       }),
 
-      call_to_action: {
-        type: input.callToAction,
-        value: {
-          link: destinationUrl,
+      link_data: {
+        picture: imageUrl,
+        link: destinationUrl,
+        message: primaryText,
+        name: headline,
+
+        ...(description && { description }),
+
+        call_to_action: {
+          type: input.callToAction,
+          value: {
+            link: destinationUrl,
+          },
         },
       },
-    },
-  };
+    };
 
+    form.set(
+      "object_story_spec",
+      JSON.stringify(objectStorySpec),
+    );
+  }
   // 10. Prepare Graph API request
   const url = new URL(
     `https://graph.facebook.com/${context.apiVersion}/${context.adAccountId}/adcreatives`,
   );
 
-  const form = new URLSearchParams({
-    name,
-    object_story_spec: JSON.stringify(objectStorySpec),
-  });
+  // const form = new URLSearchParams({
+  //   name,
+  //   object_story_spec: JSON.stringify(objectStorySpec),
+  // });
 
   // 11. Create Ad Creative
   let response: Response;

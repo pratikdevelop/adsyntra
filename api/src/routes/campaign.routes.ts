@@ -2799,7 +2799,7 @@ router.post("/rename", async (req: Request, res: Response) => {
                 return (
                     providerData &&
                     normalizeAccountId(providerData.accountId) ===
-                        normalizeAccountId(accountId)
+                    normalizeAccountId(accountId)
                 );
             });
 

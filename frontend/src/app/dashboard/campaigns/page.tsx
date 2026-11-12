@@ -43,7 +43,7 @@ interface GlobalCampaign {
   createdAt?: string | null;
   updatedAt?: string | null;
   source?: JsonRecord | null;
-    bidStrategy?: string | null;
+  bidStrategy?: string | null;
   biddingSystemStatus?: string | null;
 }
 
@@ -122,7 +122,6 @@ function firstString(...values: unknown[]): string | null {
   return null;
 }
 
-
 function normalizeProviderCampaign(
   value: GlobalCampaign,
   provider: ProviderKey,
@@ -181,8 +180,7 @@ function normalizeProviderCampaign(
     effectiveStatus:
       typeof effectiveStatus === "string" ? effectiveStatus : null,
     objective: typeof raw.objective === "string" ? raw.objective : null,
-    campaignType:
-      campaignType,
+    campaignType: campaignType,
     bidStrategy,
     biddingSystemStatus,
     createdAt:
@@ -196,7 +194,6 @@ function normalizeProviderCampaign(
     source,
   };
 }
-
 
 function getProviderPagination(
   providerResult: ProviderResult | undefined,
@@ -304,7 +301,7 @@ function getCampaignType(campaign: GlobalCampaign): string {
       source?.advertising_channel_type,
       rawCampaign?.advertisingChannelType,
       rawCampaign?.advertising_channel_type,
-    ) ?? (campaign.provider === "metaAds" ? source.buying_type: "—")
+    ) ?? (campaign.provider === "metaAds" ? source.buying_type : "—")
   );
 }
 
@@ -675,6 +672,14 @@ export default function CampaignsPage({
       setLoading(false);
     }
   }, []);
+  const [editingCampaignKey, setEditingCampaignKey] = useState<string | null>(
+    null,
+  );
+  const [editingName, setEditingName] = useState("");
+  const [renamingCampaignKey, setRenamingCampaignKey] = useState<string | null>(
+    null,
+  );
+  const [renameError, setRenameError] = useState<string | null>(null);
 
   useEffect(() => {
     void loadCampaigns();
@@ -715,6 +720,81 @@ export default function CampaignsPage({
     return "Multiple currencies";
   }, [campaigns, providers]);
 
+  const startRename = (campaign: GlobalCampaign, rowKey: string) => {
+    setEditingCampaignKey(rowKey);
+    setEditingName(campaign.name);
+    setRenameError(null);
+  };
+
+  const cancelRename = () => {
+    setEditingCampaignKey(null);
+    setEditingName("");
+    setRenameError(null);
+  };
+
+  const saveCampaignName = async (campaign: GlobalCampaign, rowKey: string) => {
+    const newName = editingName.trim();
+
+    if (!newName) {
+      setRenameError("Campaign name is required.");
+      return;
+    }
+
+    if (newName === campaign.name) {
+      cancelRename();
+      return;
+    }
+
+    try {
+      setRenamingCampaignKey(rowKey);
+      setRenameError(null);
+      const response = await axios.get("/api/token");
+      if (!response.data) {
+        console.log("eer");
+      }
+
+      const { token, userId } = response.data;
+      const backendUrl = process.env.BACKEND_API_URL || "http://localhost:5000";
+
+      await axios.post(
+        "/api/campaigns/rename",
+        {
+          provider: campaign.provider,
+          campaignId: campaign.id,
+          accountId: campaign.accountId,
+          name: newName,
+          userId: userId,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        },
+      );
+
+      setCampaigns((current) =>
+        current.map((item) =>
+          `${item.provider}:${item.id}` === rowKey
+            ? {
+                ...item,
+                name: newName,
+                source: {
+                  ...(asRecord(item.source) ?? {}),
+                  name: newName,
+                },
+              }
+            : item,
+        ),
+      );
+
+      cancelRename();
+    } catch (error) {
+      setRenameError(getErrorMessage(error));
+    } finally {
+      setRenamingCampaignKey(null);
+    }
+  };
   const googleCount = campaigns.filter(
     (c) => c.provider === "googleAds",
   ).length;
@@ -1172,9 +1252,88 @@ export default function CampaignsPage({
                             borderColor: "divider",
                           }}
                         >
-                          <Typography variant="body2" fontWeight={600}>
-                            {campaign.name || "Untitled campaign"}
-                          </Typography>
+                          {editingCampaignKey === rowKey ? (
+                            <Stack spacing={1} sx={{ minWidth: 200 }}>
+                              <TextField
+                                size="small"
+                                value={editingName}
+                                autoFocus
+                                disabled={renamingCampaignKey === rowKey}
+                                error={Boolean(renameError)}
+                                helperText={renameError}
+                                onChange={(event) => {
+                                  setEditingName(event.target.value);
+                                  setRenameError(null);
+                                }}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") {
+                                    event.preventDefault();
+                                    void saveCampaignName(campaign, rowKey);
+                                  }
+
+                                  if (event.key === "Escape") {
+                                    cancelRename();
+                                  }
+                                }}
+                              />
+
+                              <Stack direction="row" spacing={1}>
+                                <Button
+                                  size="small"
+                                  variant="contained"
+                                  disableElevation
+                                  disabled={
+                                    renamingCampaignKey === rowKey ||
+                                    !editingName.trim()
+                                  }
+                                  onClick={() =>
+                                    void saveCampaignName(campaign, rowKey)
+                                  }
+                                  sx={{ textTransform: "none" }}
+                                >
+                                  {renamingCampaignKey === rowKey ? (
+                                    <CircularProgress
+                                      size={16}
+                                      color="inherit"
+                                    />
+                                  ) : (
+                                    "Save"
+                                  )}
+                                </Button>
+
+                                <Button
+                                  size="small"
+                                  disabled={renamingCampaignKey === rowKey}
+                                  onClick={cancelRename}
+                                  sx={{ textTransform: "none" }}
+                                >
+                                  Cancel
+                                </Button>
+                              </Stack>
+                            </Stack>
+                          ) : (
+                            <Stack
+                              direction="row"
+                              alignItems="center"
+                              spacing={0.5}
+                            >
+                              <Typography variant="body2" fontWeight={600}>
+                                {campaign.name || "Untitled campaign"}
+                              </Typography>
+
+                              <Tooltip title="Rename campaign">
+                                <IconButton
+                                  size="small"
+                                  onClick={() => startRename(campaign, rowKey)}
+                                  aria-label="Rename campaign"
+                                >
+                                  <Typography component="span" fontSize={15}>
+                                    ✎
+                                  </Typography>
+                                </IconButton>
+                              </Tooltip>
+                            </Stack>
+                          )}
                           <Typography
                             variant="caption"
                             color="text.secondary"
@@ -1217,8 +1376,8 @@ export default function CampaignsPage({
                             )}
                           </Typography> */}
                           <Typography variant="body2">
-  {getCampaignBidStrategy(campaign)}
-</Typography>
+                            {getCampaignBidStrategy(campaign)}
+                          </Typography>
                         </TableCell>
                         <TableCell align="right">
                           <Typography variant="body2" fontWeight={500}>
@@ -1397,18 +1556,16 @@ export default function CampaignsPage({
                                 />
                                 <DetailItem
                                   label="Bidding strategy"
-                                  value={
-                                   getCampaignBidStrategy(campaign)
-                                  }
+                                  value={getCampaignBidStrategy(campaign)}
                                 />
                                 <DetailItem
                                   label="Bidding system status"
-                                 value={
-  campaign.biddingSystemStatus ??
-  asRecord(source?.bidding)?.systemStatus ??
-  rawCampaign?.biddingStrategySystemStatus ??
-  rawCampaign?.bidding_strategy_system_status
-}
+                                  value={
+                                    campaign.biddingSystemStatus ??
+                                    asRecord(source?.bidding)?.systemStatus ??
+                                    rawCampaign?.biddingStrategySystemStatus ??
+                                    rawCampaign?.bidding_strategy_system_status
+                                  }
                                 />
                                 <DetailItem
                                   label="Budget name"

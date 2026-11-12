@@ -217,3 +217,61 @@ export const getCampaigns = async (
             : new Error("Failed to retrieve Meta Ads campaigns.");
     }
 };
+
+export const renameCampaign = async (campaignId,  name,userId ) =>{ 
+    const accessToken = await getProviderAccessToken(userId, "metaAds");
+
+    // 1. Check whether the user has connected Meta.
+    if (!accessToken) {
+        return res.status(401).json({
+            error: "Connect your Meta account first.",
+        });
+    }
+
+    // 2. Validate the campaign ID.
+    if (!/^\d+$/.test(campaignId)) {
+        return res.status(400).json({
+            error: "Invalid campaign ID.",
+        });
+    }
+
+
+
+    // 4. Send the update request to Meta Graph API.
+    try {
+        const url = new URL(
+            `https://graph.facebook.com/${META_GRAPH_API_VERSION}/${campaignId}`,
+        );
+
+        const response = await fetch(url, {
+            method: "POST",
+            headers: {
+                Authorization: `Bearer ${accessToken}`,
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body: new URLSearchParams({ name }).toString(),
+        });
+
+        const data = await response.json();
+
+        // 5. Handle Meta API errors.
+        if (!response.ok) {
+            console.error("Meta campaign update error:", data);
+
+         throw new Error("Meta campaign update failed.");
+        }
+
+        // 6. Return the successful response.
+        return {
+            message: "Campaign name updated successfully.",
+            data,
+        };
+    } catch (error) {
+        console.error(
+            "Meta campaign update request failed:",
+            error instanceof Error ? error.message : "Unknown error",
+        );
+
+         throw new Error("Could not reach Meta Graph API.");
+    }
+}

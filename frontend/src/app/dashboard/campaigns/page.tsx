@@ -43,6 +43,8 @@ interface GlobalCampaign {
   createdAt?: string | null;
   updatedAt?: string | null;
   source?: JsonRecord | null;
+    bidStrategy?: string | null;
+  biddingSystemStatus?: string | null;
 }
 
 interface ProviderPagination {
@@ -111,6 +113,15 @@ function extractProviderCampaigns(
   }
   return [];
 }
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
 
 function normalizeProviderCampaign(
   value: GlobalCampaign,
@@ -120,17 +131,45 @@ function normalizeProviderCampaign(
   const raw = asRecord(value) ?? {};
   const rawSource = asRecord(raw.source);
   const source = rawSource ?? raw;
+  const nestedRaw = asRecord(raw.raw);
+  const nestedCampaign =
+    asRecord(raw.campaign) ?? asRecord(nestedRaw?.campaign);
+  const rawBidding = asRecord(raw.bidding);
+
   const idValue = raw.id ?? raw.resourceName ?? raw.resource_name;
   const id = typeof idValue === "string" ? idValue : String(idValue ?? "");
   const accountIdValue =
     raw.accountId ?? raw.account_id ?? fallbackAccountId ?? null;
   const effectiveStatus =
     raw.effectiveStatus ?? raw.effective_status ?? raw.status ?? null;
-  const campaignType =
-    raw.campaignType ??
-    raw.advertisingChannelType ??
-    raw.advertising_channel_type ??
-    (provider === "metaAds" ? "Meta campaign" : null);
+
+  // Google campaign type is exposed by the service as channelType.
+  // Meta campaign listing does not expose a matching channel-type field.
+  const campaignType = firstString(
+    raw.campaignType,
+    raw.channelType,
+    raw.advertisingChannelType,
+    raw.advertising_channel_type,
+    nestedCampaign?.advertisingChannelType,
+    nestedCampaign?.advertising_channel_type,
+    raw.providerCampaignType,
+  );
+
+  // Google uses bidding.strategy; Meta exposes bid_strategy directly.
+  const bidStrategy = firstString(
+    rawBidding?.strategy,
+    raw.bid_strategy,
+    raw.bidStrategy,
+    raw.biddingStrategyType,
+    nestedCampaign?.biddingStrategyType,
+    nestedCampaign?.bid_strategy,
+  );
+
+  const biddingSystemStatus = firstString(
+    rawBidding?.systemStatus,
+    raw.biddingStrategySystemStatus,
+    nestedCampaign?.biddingStrategySystemStatus,
+  );
 
   return {
     ...raw,
@@ -142,7 +181,10 @@ function normalizeProviderCampaign(
     effectiveStatus:
       typeof effectiveStatus === "string" ? effectiveStatus : null,
     objective: typeof raw.objective === "string" ? raw.objective : null,
-    campaignType: typeof campaignType === "string" ? campaignType : null,
+    campaignType:
+      campaignType,
+    bidStrategy,
+    biddingSystemStatus,
     createdAt:
       typeof (raw.createdAt ?? raw.created_time) === "string"
         ? String(raw.createdAt ?? raw.created_time)
@@ -154,6 +196,7 @@ function normalizeProviderCampaign(
     source,
   };
 }
+
 
 function getProviderPagination(
   providerResult: ProviderResult | undefined,
@@ -248,17 +291,41 @@ function getMetric(campaign: GlobalCampaign, key: string): unknown {
 }
 
 function getCampaignType(campaign: GlobalCampaign): string {
-  if (campaign.campaignType) return campaign.campaignType;
   const source = asRecord(campaign.source);
-  const rawCampaign = asRecord(source?.campaign);
-  const channel =
-    rawCampaign?.advertisingChannelType ??
-    rawCampaign?.advertising_channel_type;
-  return typeof channel === "string"
-    ? channel
-    : campaign.provider === "metaAds"
-      ? "Meta campaign"
-      : "—";
+  const nestedRaw = asRecord(source?.raw);
+  const rawCampaign =
+    asRecord(source?.campaign) ?? asRecord(nestedRaw?.campaign);
+
+  return (
+    firstString(
+      campaign.campaignType,
+      source?.channelType,
+      source?.advertisingChannelType,
+      source?.advertising_channel_type,
+      rawCampaign?.advertisingChannelType,
+      rawCampaign?.advertising_channel_type,
+    ) ?? (campaign.provider === "metaAds" ? source.buying_type: "—")
+  );
+}
+
+function getCampaignBidStrategy(campaign: GlobalCampaign): string {
+  const source = asRecord(campaign.source);
+  const bidding = asRecord(source?.bidding);
+  const nestedRaw = asRecord(source?.raw);
+  const rawCampaign =
+    asRecord(source?.campaign) ?? asRecord(nestedRaw?.campaign);
+
+  return (
+    firstString(
+      campaign.bidStrategy,
+      bidding?.strategy,
+      source?.bid_strategy,
+      source?.bidStrategy,
+      source?.biddingStrategyType,
+      rawCampaign?.biddingStrategyType,
+      rawCampaign?.bid_strategy,
+    ) ?? "—"
+  );
 }
 
 function getProviderLabel(provider: string): string {
@@ -610,7 +677,7 @@ export default function CampaignsPage({
   }, []);
 
   useEffect(() => {
-    void loadCampaigns(false);
+    void loadCampaigns();
   }, [loadCampaigns]);
 
   // Derived stats
@@ -739,7 +806,7 @@ export default function CampaignsPage({
           <Tooltip title="Refresh campaigns">
             <span>
               <IconButton
-                onClick={() => void loadCampaigns(false)}
+                onClick={() => void loadCampaigns()}
                 disabled={loading}
                 sx={{
                   border: 1,
@@ -829,7 +896,7 @@ export default function CampaignsPage({
             <Button
               color="inherit"
               size="small"
-              onClick={() => void loadCampaigns(false)}
+              onClick={() => void loadCampaigns()}
             >
               Retry
             </Button>
@@ -1142,13 +1209,16 @@ export default function CampaignsPage({
                           </Typography>
                         </TableCell>
                         <TableCell>
-                          <Typography variant="body2">
+                          {/* <Typography variant="body2">
                             {displayValue(
                               bidding?.strategy ??
                                 rawCampaign?.biddingStrategyType ??
                                 rawCampaign?.bid_strategy,
                             )}
-                          </Typography>
+                          </Typography> */}
+                          <Typography variant="body2">
+  {getCampaignBidStrategy(campaign)}
+</Typography>
                         </TableCell>
                         <TableCell align="right">
                           <Typography variant="body2" fontWeight={500}>
@@ -1328,17 +1398,17 @@ export default function CampaignsPage({
                                 <DetailItem
                                   label="Bidding strategy"
                                   value={
-                                    bidding?.strategy ??
-                                    rawCampaign?.biddingStrategyType ??
-                                    rawCampaign?.bid_strategy
+                                   getCampaignBidStrategy(campaign)
                                   }
                                 />
                                 <DetailItem
                                   label="Bidding system status"
-                                  value={
-                                    bidding?.systemStatus ??
-                                    rawCampaign?.biddingStrategySystemStatus
-                                  }
+                                 value={
+  campaign.biddingSystemStatus ??
+  asRecord(source?.bidding)?.systemStatus ??
+  rawCampaign?.biddingStrategySystemStatus ??
+  rawCampaign?.bidding_strategy_system_status
+}
                                 />
                                 <DetailItem
                                   label="Budget name"

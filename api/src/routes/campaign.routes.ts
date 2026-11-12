@@ -1,9 +1,6 @@
 import { Router, type Request, type Response } from "express";
 import { getAuth } from "@clerk/express";
 
-import { getCampaigns as getGoogleCampaigns } from "../googleadsAPI/services/campaign.js";
-import { getCampaigns as getMetaCampaigns } from "../metaadsAPI/services/campaign.js";
-
 import CampaignModel, {
     type CampaignProviders,
     type AdvertisingProvider,
@@ -39,7 +36,16 @@ import {
     searchMetaDetailedTargeting,
     MetaTargetingSearchError,
 } from "../metaadsAPI/services/targeting.js";
-// import {
+import { parseMutationMode } from '../googleadsAPI/utils/safety.js'
+import {
+    getCampaigns as getGoogleCampaigns,
+    renameCampaign as renameGoogleCampaign,
+} from "../googleadsAPI/services/campaign.js";
+
+import {
+    getCampaigns as getMetaCampaigns,
+    renameCampaign as renameMetaCampaign,
+} from "../metaadsAPI/services/campaign.js";
 const router = Router();
 
 interface ProviderCampaignResult {
@@ -2667,4 +2673,218 @@ router.get(
     },
 );
 
+/**
+ * POST /api/campaigns/rename
+ *
+ * Renames a campaign on Google Ads or Meta Ads.
+ * Updates the matching MongoDB provider configuration after provider success.
+ */
+router.post("/rename", async (req: Request, res: Response) => {
+    try {
+        // 1. Authenticate the user.
+        const { userId } = getAuth(req);
+
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Authentication required.",
+            });
+        }
+
+        // 2. Validate request body.
+        const { provider, campaignId, name } = req.body ?? {};
+
+        if (provider !== "googleAds" && provider !== "metaAds") {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid provider. Use googleAds or metaAds.",
+            });
+        }
+
+        if (
+            typeof campaignId !== "string" ||
+            !/^\d+$/.test(campaignId.trim())
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "A valid provider campaign ID is required.",
+            });
+        }
+
+        if (
+            typeof name !== "string" ||
+            !name.trim() ||
+            name.trim().length > 255
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "Campaign name must contain 1–255 characters.",
+            });
+        }
+
+        const normalizedCampaignId = campaignId.trim();
+        const newName = name.trim();
+
+        // 3. Resolve the authenticated user's selected provider account.
+        const selectedAccount = await AdAccountModel.findOne({
+            userId,
+            provider,
+            isSelected: true,
+        })
+            .select("externalAccountId")
+            .lean();
+
+        if (!selectedAccount?.externalAccountId) {
+            return res.status(409).json({
+                success: false,
+                message: `No selected ${provider} account found. Please select an account first.`,
+            });
+        }
+
+        const accountId = selectedAccount.externalAccountId;
+
+        // 4. Rename the campaign on the actual advertising platform.
+        let providerResponse: unknown;
+
+        try {
+            if (provider === "googleAds") {
+                providerResponse = await renameGoogleCampaign(
+                    userId,
+                    normalizedCampaignId,
+                    newName,
+                    accountId,
+                    false,
+                );
+            } else {
+                providerResponse = await renameMetaCampaign(
+                    normalizedCampaignId,
+                    newName,
+                    userId,
+                );
+            }
+        } catch (providerError) {
+            console.error(
+                `${provider} campaign rename failed:`,
+                providerError,
+            );
+
+            return res.status(502).json({
+                success: false,
+                message: getErrorMessage(providerError),
+                provider,
+                campaignId: normalizedCampaignId,
+                providerUpdated: false,
+                databaseUpdated: false,
+            });
+        }
+
+        // 5. Find the matching MongoDB campaign document.
+        let databaseUpdated = false;
+
+        try {
+            const campaignDocuments = await CampaignModel.find({
+                ownerUserId: userId,
+                [`providers.${provider}.providerCampaignId`]:
+                    normalizedCampaignId,
+            });
+
+            const normalizeAccountId = (value: unknown) =>
+                provider === "googleAds"
+                    ? normalizeGoogleAccountId(value)
+                    : normalizeMetaAccountId(value);
+
+            const campaignDocument = campaignDocuments.find((document) => {
+                const providerData = document.providers?.[provider];
+
+                return (
+                    providerData &&
+                    normalizeAccountId(providerData.accountId) ===
+                        normalizeAccountId(accountId)
+                );
+            });
+
+            // 6. Update local provider configuration only after API success.
+            if (campaignDocument) {
+                const providerData =
+                    campaignDocument.providers[provider];
+
+                if (providerData) {
+                    const configuration =
+                        providerData.configuration ?? {};
+
+                    const existingCampaignConfiguration = isRecord(
+                        configuration.campaign,
+                    )
+                        ? configuration.campaign
+                        : {};
+
+                    providerData.configuration = {
+                        ...configuration,
+                        campaign: {
+                            ...existingCampaignConfiguration,
+                            name: newName,
+                        },
+                    };
+
+                    providerData.lastSyncedAt = new Date();
+
+                    // Only update the shared name when there is no
+                    // other provider configuration in this document.
+                    const otherProvider =
+                        provider === "googleAds"
+                            ? "metaAds"
+                            : "googleAds";
+
+                    if (!campaignDocument.providers[otherProvider]) {
+                        campaignDocument.name = newName;
+                    }
+
+                    campaignDocument.markModified(
+                        `providers.${provider}.configuration`,
+                    );
+
+                    await campaignDocument.save();
+
+                    databaseUpdated = true;
+                }
+            }
+        } catch (databaseError) {
+            console.error(
+                "Campaign renamed on provider, but MongoDB update failed:",
+                databaseError,
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Campaign was renamed on the provider, but the local database update failed.",
+                provider,
+                campaignId: normalizedCampaignId,
+                newName,
+                providerUpdated: true,
+                databaseUpdated: false,
+                error: getErrorMessage(databaseError),
+            });
+        }
+
+        // 7. Return final response.
+        return res.status(200).json({
+            success: true,
+            message: `${provider === "googleAds" ? "Google Ads" : "Meta Ads"} campaign renamed successfully.`,
+            provider,
+            campaignId: normalizedCampaignId,
+            newName,
+            providerUpdated: true,
+            databaseUpdated,
+            providerResponse,
+        });
+    } catch (error) {
+        console.error("Global campaign rename error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: getErrorMessage(error),
+        });
+    }
+});
 export default router;

@@ -320,3 +320,85 @@ export const getCampaigns = async (
       : new Error("Failed to retrieve Google Ads campaigns.");
   }
 };
+export const renameCampaign = async (
+  userId: string,
+  name,
+  customerId: string,
+  validateOnly: boolean
+) => {
+    try {
+       
+
+
+        if (!campaignId) {
+            return res.status(400).json({
+                message: "Missing campaignId",
+            });
+        }
+
+        if (typeof name !== "string" || name.trim().length === 0) {
+            return res.status(400).json({
+                message: "A valid campaign name is required",
+            });
+        }
+
+
+        if (!customerId) {
+            return res.status(400).json({
+                message: "Missing GOOGLE_ADS_CUSTOMER_ID",
+            });
+        }
+
+        const accessToken = await  getProviderAccessToken(userId, "googleAds");
+
+
+        const resourceName = `customers/${customerId}/campaigns/${campaignId}`;
+
+        const response = await fetch(
+            `https://googleads.googleapis.com/v25/customers/${customerId}/campaigns:mutate`,
+            {
+                method: "POST",
+                headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                    "Content-Type": "application/json",
+                    "developer-token": process.env.GOOGLE_ADS_DEVELOPER_TOKEN!,
+                },
+                body: JSON.stringify({
+                    operations: [
+                        {
+                            updateMask: "name",
+                            update: {
+                                resourceName,
+                                name: name.trim(),
+                            },
+                        },
+                    ],
+                    validateOnly,
+                }),
+            },
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            console.error("Rename campaign error:", JSON.stringify(data, null, 2));
+
+             throw new Error(getGoogleApiErrorMessage(data, response.status));
+    }
+            // return res.status(response.status).json(data);
+
+        return {
+            message: validateOnly
+                ? "Rename is valid. Campaign was NOT changed."
+                : "Campaign renamed successfully.",
+            validateOnly,
+            campaignId,
+            newName: name.trim(),
+            googleResponse: data,
+        };
+    } catch (error) {
+        console.error(error);
+
+        throw new Error( getGoogleApiErrorMessage( error, "Failed to rename campaign"));
+    }
+};

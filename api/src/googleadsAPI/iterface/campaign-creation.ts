@@ -345,6 +345,84 @@ export interface CreateGoogleAdsSearchCampaignFlowInput {
     validateOnly?: boolean;
     confirm?: boolean;
 }
+export interface CreateGoogleAdsDisplayCampaignFlowInput {
+    budget: {
+        name: string;
+        amount: number;
+    };
+
+    campaign: {
+        name: string;
+        biddingStrategy: string;
+        biddingOptions?: BiddingOptions;
+        startDate?: string;
+        endDate?: string;
+        containsEuPoliticalAdvertising?: string;
+    };
+
+    adGroup: {
+        name: string;
+        defaultCpcBidAmount?: number;
+        defaultCpmBidAmount?: number;
+        audienceCriteria?: Array<{
+            type: "USER_LIST";
+            userListResourceName: string;
+        }>;
+    };
+
+    locations?: GoogleAdsLocationTargetInput[];
+
+    languages?: Array<{
+        languageConstantResourceName: string;
+    }>;
+
+    adCreativeDraft: {
+        format: "RESPONSIVE_DISPLAY_AD";
+        finalUrl: string;
+        headlines: string[];
+        longHeadline: string;
+        descriptions: string[];
+        businessName: string;
+
+        imageAssets: {
+            landscapeImageUrl: string;
+            squareImageUrl: string;
+
+            // These fields are populated only after real Google Ads uploads.
+            marketingImageAssetResourceNames?: string[];
+            squareMarketingImageAssetResourceNames?: string[];
+        };
+    };
+
+    validateOnly?: boolean;
+    confirm?: boolean;
+}
+export interface GoogleAdsDisplayCampaignFlowResult {
+    validateOnly: boolean;
+    operationCount: number;
+
+    assetUploadRequired: boolean;
+
+    validationWarnings: string[];
+
+    temporaryResourceNames: {
+        budget: string;
+        campaign: string;
+        adGroup: string;
+    };
+
+    createdResources: null | {
+        budget: string;
+        campaign: string;
+        adGroup: string;
+        locationCriteria: string[];
+        languageCriteria: string[];
+        audienceCriteria: string[];
+        responsiveDisplayAd: string | null;
+    };
+
+    googleResponse: GoogleAdsBulkMutateResponse;
+}
 
 // ==========================================
 // SEARCH CAMPAIGN FLOW RESULT

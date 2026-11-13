@@ -465,6 +465,167 @@ function isPositiveAmount(value: string): boolean {
   return Number.isFinite(amount) && amount > 0;
 }
 
+type GoogleAdsLookupOption = {
+  id?: string | number;
+  name?: string;
+  canonicalName?: string;
+  canonical_name?: string;
+  descriptiveName?: string;
+  descriptive_name?: string;
+  resourceName?: string;
+  resource_name?: string;
+  countryCode?: string;
+  country_code?: string;
+  targetType?: string;
+  target_type?: string;
+  type?: string;
+  status?: string;
+  membershipStatus?: string;
+  accessReason?: string;
+};
+
+function normalizeGoogleCustomerId(value: string): string {
+  return value
+    .trim()
+    .replace(/^customers\//i, "")
+    .replace(/-/g, "");
+}
+
+function getGoogleLookupRows(
+  payload: unknown,
+  keys: string[],
+): GoogleAdsLookupOption[] {
+  const root = asObject(payload);
+  const data = asObject(root.data);
+  const nested = asObject(data.data);
+
+  const candidates = [
+    root.items,
+    root.results,
+    Array.isArray(root.data) ? root.data : null,
+    data.items,
+    data.results,
+    ...keys.map((key) => root[key]),
+    ...keys.map((key) => data[key]),
+    ...keys.map((key) => nested[key]),
+  ];
+
+  const rows = candidates.find(Array.isArray);
+
+  return (rows ?? []) as GoogleAdsLookupOption[];
+}
+
+function getGoogleLookupResourceName(
+  option: GoogleAdsLookupOption,
+  prefix?: string,
+): string {
+  const resourceName = option.resourceName ?? option.resource_name;
+
+  if (typeof resourceName === "string" && resourceName.trim()) {
+    return resourceName.trim();
+  }
+
+  const id = String(option.id ?? "").trim();
+
+  if (!id) return "";
+  if (id.includes("/")) return id;
+
+  return prefix && /^\d+$/.test(id) ? `${prefix}/${id}` : "";
+}
+
+function getGoogleLookupLabel(option: GoogleAdsLookupOption): string {
+  return String(
+    option.canonicalName ??
+      option.canonical_name ??
+      option.name ??
+      option.descriptiveName ??
+      option.descriptive_name ??
+      option.resourceName ??
+      option.resource_name ??
+      "",
+  );
+}
+
+function toggleGoogleResourceName(
+  current: string,
+  resourceName: string,
+  checked: boolean,
+): string {
+  const values = current
+    .split(/[\n,]+/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+
+  const next = new Set(values);
+
+  if (checked) {
+    next.add(resourceName);
+  } else {
+    next.delete(resourceName);
+  }
+
+  return [...next].join("\n");
+}
+async function fetchGoogleLookupOptions(
+  apiBaseUrl: string,
+  token: string,
+  customerId: string,
+  endpoint: string,
+  responseKeys: string[],
+  resourcePrefix?: string,
+  params: Record<string, string> = {},
+): Promise<GoogleAdsLookupOption[]> {
+  const url = new URL(
+    `${apiBaseUrl.replace(/\/+$/, "")}/api/campaigns/lookups/google/${endpoint}`,
+  );
+
+  url.searchParams.set("customerId", customerId);
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value) url.searchParams.set(key, value);
+  });
+
+  const response = await fetch(url.toString(), {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+    },
+    cache: "no-store",
+  });
+
+  const payload = await response.json().catch(() => null);
+  const root = asObject(payload);
+  const data = asObject(root.data);
+
+  if (!response.ok || root.success === false) {
+    const message =
+      root.message ??
+      (typeof root.error === "string" ? root.error : "") ??
+      asObject(root.error).message;
+
+    throw new Error(
+      String(
+        message || `Google Ads ${endpoint} lookup failed (${response.status}).`,
+      ),
+    );
+  }
+
+  const returnedAccountId = root.accountId ?? data.accountId ?? data.customerId;
+
+  if (
+    returnedAccountId &&
+    normalizeGoogleCustomerId(String(returnedAccountId)) !== customerId
+  ) {
+    throw new Error(
+      "Google Ads lookup returned data for a different customer account.",
+    );
+  }
+
+  return getGoogleLookupRows(payload, responseKeys).filter((item) =>
+    Boolean(getGoogleLookupResourceName(item, resourcePrefix)),
+  );
+}
 export default function CreateCampaignPage() {
   const { getToken, isLoaded, isSignedIn } = useAuth();
 
@@ -487,7 +648,7 @@ export default function CreateCampaignPage() {
     "Demo - Summer Sale Campaign",
   );
   const [businessName, setBusinessName] = useState("Acme Demo Store");
-  const [websiteUrl, setWebsiteUrl] = useState("https://example.com");
+  const [websiteUrl, setWebsiteUrl] = useState("https://recomind.onrender.com");
   const [description, setDescription] = useState(
     "Promote the summer collection and drive online purchases.",
   );
@@ -518,16 +679,16 @@ export default function CreateCampaignPage() {
   ] = useState("customers/1234567890/biddingStrategies/123456789");
   const [googleStartDate, setGoogleStartDate] = useState("2026-11-12");
   const [googleEndDate, setGoogleEndDate] = useState("2026-12-12");
-  const [googleGeoTargetResources, setGoogleGeoTargetResources] = useState(
-    "geoTargetConstants/2356",
-  );
-  const [googleLanguageResources, setGoogleLanguageResources] = useState("");
-  const [googleTargetCpa, setGoogleTargetCpa] = useState("500");
-  const [googleTargetRoas, setGoogleTargetRoas] = useState("3.0");
+  const [googleGeoTargetResources, setGoogleGeoTargetResources] = useState("");
+
   const [
     googleCustomConversionGoalResourceName,
     setGoogleCustomConversionGoalResourceName,
-  ] = useState("customers/1234567890/customConversionGoals/123456789");
+  ] = useState("");
+  const [googleLanguageResources, setGoogleLanguageResources] = useState("");
+  const [googleTargetCpa, setGoogleTargetCpa] = useState("500");
+  const [googleTargetRoas, setGoogleTargetRoas] = useState("3.0");
+  const [googleAdGroupUserLists, setGoogleAdGroupUserLists] = useState("");
   const [googleImpressionSharePercent, setGoogleImpressionSharePercent] =
     useState("80");
   const [googleImpressionShareLocation, setGoogleImpressionShareLocation] =
@@ -705,9 +866,6 @@ export default function CreateCampaignPage() {
   const [pmaxAudienceResourceNames, setPmaxAudienceResourceNames] = useState(
     "customers/1234567890/audiences/123456789",
   );
-  const [googleAdGroupUserLists, setGoogleAdGroupUserLists] = useState(
-    "customers/1234567890/userLists/123456789",
-  );
   const [
     googleDemandGenAudienceResources,
     setGoogleDemandGenAudienceResources,
@@ -822,7 +980,33 @@ export default function CreateCampaignPage() {
   const [campaignListLoading, setCampaignListLoading] = useState(false);
   const [campaignListError, setCampaignListError] = useState("");
   const [campaignListRefresh, setCampaignListRefresh] = useState(0);
+  const [googleLocationQuery, setGoogleLocationQuery] = useState("");
+  const [googleLocationOptions, setGoogleLocationOptions] = useState<
+    GoogleAdsLookupOption[]
+  >([]);
+  const [googleLocationLoading, setGoogleLocationLoading] = useState(false);
+  const [googleLocationError, setGoogleLocationError] = useState("");
 
+  const [googleLanguageOptions, setGoogleLanguageOptions] = useState<
+    GoogleAdsLookupOption[]
+  >([]);
+  const [googleLanguageSearch, setGoogleLanguageSearch] = useState("");
+  const [googleLanguageLoading, setGoogleLanguageLoading] = useState(false);
+  const [googleLanguageError, setGoogleLanguageError] = useState("");
+
+  const [googleUserListOptions, setGoogleUserListOptions] = useState<
+    GoogleAdsLookupOption[]
+  >([]);
+  const [googleUserListSearch, setGoogleUserListSearch] = useState("");
+  const [googleUserListLoading, setGoogleUserListLoading] = useState(false);
+  const [googleUserListError, setGoogleUserListError] = useState("");
+
+  const [googleConversionGoalOptions, setGoogleConversionGoalOptions] =
+    useState<GoogleAdsLookupOption[]>([]);
+  const [googleConversionGoalLoading, setGoogleConversionGoalLoading] =
+    useState(false);
+  const [googleConversionGoalError, setGoogleConversionGoalError] =
+    useState("");
   // Only local drafts remain in browser storage. Live campaign rows always
   // come from the authenticated backend listing endpoint.
   useEffect(() => {
@@ -845,6 +1029,17 @@ export default function CreateCampaignPage() {
     window.addEventListener("storage", handleStorage);
     return () => window.removeEventListener("storage", handleStorage);
   }, []);
+
+  useEffect(() => {
+    setGoogleDisplayLandscapeAssetResourceName("");
+    setGoogleDisplaySquareAssetResourceName("");
+
+    setGoogleDisplayLandscapeFile(null);
+    setGoogleDisplaySquareFile(null);
+
+    setGoogleDisplayAssetUploadError("");
+    clearPreview();
+  }, [connections.googleAds.selectedAccountId]);
 
   useEffect(() => {
     if (!campaignRecordsLoaded) return;
@@ -932,7 +1127,27 @@ export default function CreateCampaignPage() {
   const [campaignApiError, setCampaignApiError] = useState("");
 
   const [apiPayloadPreview, setApiPayloadPreview] = useState("");
+  const [googleDisplayLandscapeFile, setGoogleDisplayLandscapeFile] =
+    useState<File | null>(null);
 
+  const [googleDisplaySquareFile, setGoogleDisplaySquareFile] =
+    useState<File | null>(null);
+
+  const [
+    googleDisplayLandscapeAssetResourceName,
+    setGoogleDisplayLandscapeAssetResourceName,
+  ] = useState("");
+
+  const [
+    googleDisplaySquareAssetResourceName,
+    setGoogleDisplaySquareAssetResourceName,
+  ] = useState("");
+
+  const [googleDisplayAssetUploading, setGoogleDisplayAssetUploading] =
+    useState<"LANDSCAPE" | "SQUARE" | null>(null);
+
+  const [googleDisplayAssetUploadError, setGoogleDisplayAssetUploadError] =
+    useState("");
   // Campaign results are derived from the real POST /api/campaigns response.
   const liveApiResponse =
     campaignApiResponse && typeof campaignApiResponse === "object"
@@ -1250,6 +1465,196 @@ export default function CreateCampaignPage() {
     setCampaignApiError("");
   };
 
+  useEffect(() => {
+    const selectedAccountId = connections.googleAds.selectedAccountId;
+
+    if (!isLoaded || !isSignedIn || !selectedAccountId) {
+      setGoogleLanguageOptions([]);
+      setGoogleUserListOptions([]);
+      setGoogleConversionGoalOptions([]);
+      return;
+    }
+
+    const customerId = normalizeGoogleCustomerId(selectedAccountId);
+
+    if (!/^\d+$/.test(customerId)) {
+      const message = "Invalid selected Google Ads customer ID.";
+
+      setGoogleLanguageError(message);
+      setGoogleUserListError(message);
+      setGoogleConversionGoalError(message);
+      return;
+    }
+
+    let cancelled = false;
+
+    // Never carry account-specific selections into another Google account.
+    setGoogleAdGroupUserLists("");
+    setGoogleCustomConversionGoalResourceName("");
+
+    setGoogleLanguageLoading(true);
+    setGoogleUserListLoading(true);
+    setGoogleConversionGoalLoading(true);
+
+    setGoogleLanguageError("");
+    setGoogleUserListError("");
+    setGoogleConversionGoalError("");
+
+    const loadGoogleLookups = async () => {
+      try {
+        const token = await getToken();
+
+        if (!token) {
+          throw new Error(
+            "Unable to retrieve your Clerk authentication token.",
+          );
+        }
+
+        const results = await Promise.allSettled([
+          fetchGoogleLookupOptions(
+            API_BASE_URL,
+            token,
+            customerId,
+            "languages",
+            ["languages"],
+            "languageConstants",
+          ),
+          fetchGoogleLookupOptions(
+            API_BASE_URL,
+            token,
+            customerId,
+            "user-lists",
+            ["userLists", "user_lists"],
+          ),
+          fetchGoogleLookupOptions(
+            API_BASE_URL,
+            token,
+            customerId,
+            "conversion-goals",
+            ["goals", "conversionGoals", "customConversionGoals"],
+          ),
+        ]);
+
+        if (cancelled) return;
+
+        const [languages, userLists, goals] = results;
+
+        if (languages.status === "fulfilled") {
+          setGoogleLanguageOptions(languages.value);
+        } else {
+          setGoogleLanguageOptions([]);
+          setGoogleLanguageError(
+            languages.reason instanceof Error
+              ? languages.reason.message
+              : "Unable to load Google Ads languages.",
+          );
+        }
+
+        if (userLists.status === "fulfilled") {
+          setGoogleUserListOptions(userLists.value);
+        } else {
+          setGoogleUserListOptions([]);
+          setGoogleUserListError(
+            userLists.reason instanceof Error
+              ? userLists.reason.message
+              : "Unable to load Google Ads user lists.",
+          );
+        }
+
+        if (goals.status === "fulfilled") {
+          setGoogleConversionGoalOptions(goals.value);
+        } else {
+          setGoogleConversionGoalOptions([]);
+          setGoogleConversionGoalError(
+            goals.reason instanceof Error
+              ? goals.reason.message
+              : "Unable to load Google Ads conversion goals.",
+          );
+        }
+      } catch (err) {
+        if (!cancelled) {
+          const message =
+            err instanceof Error
+              ? err.message
+              : "Unable to load Google Ads lookup data.";
+
+          setGoogleLanguageError(message);
+          setGoogleUserListError(message);
+          setGoogleConversionGoalError(message);
+        }
+      } finally {
+        if (!cancelled) {
+          setGoogleLanguageLoading(false);
+          setGoogleUserListLoading(false);
+          setGoogleConversionGoalLoading(false);
+        }
+      }
+    };
+
+    void loadGoogleLookups();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [getToken, isLoaded, isSignedIn, connections.googleAds.selectedAccountId]);
+  const searchGoogleLocations = async () => {
+    const query = googleLocationQuery.trim();
+
+    if (query.length < 2) {
+      setGoogleLocationError(
+        "Enter at least two characters to search locations.",
+      );
+      return;
+    }
+
+    const customerId = normalizeGoogleCustomerId(
+      connections.googleAds.selectedAccountId || "",
+    );
+
+    if (!/^\d+$/.test(customerId)) {
+      setGoogleLocationError("Select a valid Google Ads account first.");
+      return;
+    }
+
+    try {
+      setGoogleLocationLoading(true);
+      setGoogleLocationError("");
+
+      const token = await getToken();
+
+      if (!token) {
+        throw new Error("Unable to retrieve your Clerk authentication token.");
+      }
+
+      const locations = await fetchGoogleLookupOptions(
+        API_BASE_URL,
+        token,
+        customerId,
+        "locations",
+        ["locations"],
+        "geoTargetConstants",
+        {
+          q: query,
+          locale: "en",
+        },
+      );
+
+      setGoogleLocationOptions(locations);
+
+      if (!locations.length) {
+        setGoogleLocationError("No matching Google Ads locations were found.");
+      }
+    } catch (err) {
+      setGoogleLocationOptions([]);
+      setGoogleLocationError(
+        err instanceof Error
+          ? err.message
+          : "Unable to search Google Ads locations.",
+      );
+    } finally {
+      setGoogleLocationLoading(false);
+    }
+  };
   const choosePlatformMode = (mode: PlatformMode) => {
     setError("");
     clearPreview();
@@ -1271,6 +1676,91 @@ export default function CreateCampaignPage() {
     );
   };
 
+  const uploadGoogleDisplayImage = async (
+    role: "LANDSCAPE" | "SQUARE",
+    file: File | null,
+  ) => {
+    if (!file) {
+      setGoogleDisplayAssetUploadError(
+        `Select a ${role.toLowerCase()} image first.`,
+      );
+      return;
+    }
+
+    const accountId = connections.googleAds.selectedAccountId;
+
+    if (!accountId) {
+      setGoogleDisplayAssetUploadError("Select a Google Ads account first.");
+      return;
+    }
+
+    try {
+      setGoogleDisplayAssetUploading(role);
+      setGoogleDisplayAssetUploadError("");
+
+      const token = await getToken();
+
+      if (!token) {
+        throw new Error("Please sign in again.");
+      }
+
+      const formData = new FormData();
+
+      formData.append("image", file);
+      formData.append("accountId", accountId);
+      formData.append("role", role);
+      formData.append("name", file.name.replace(/\.[^/.]+$/, ""));
+      formData.append("confirm", "true");
+
+      const response = await fetch(
+        `${API_BASE_URL}/api/campaigns/google/display/assets/upload`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+          body: formData,
+          cache: "no-store",
+        },
+      );
+
+      const responseData: any = await response.json().catch(() => null);
+
+      if (!response.ok || responseData?.success !== true) {
+        throw new Error(
+          responseData?.message || "Google Ads image upload failed.",
+        );
+      }
+
+      const resourceName = responseData?.asset?.resourceName;
+
+      if (typeof resourceName !== "string" || !resourceName.trim()) {
+        throw new Error(
+          "Google Ads did not return an image asset resource name.",
+        );
+      }
+
+      if (role === "LANDSCAPE") {
+        setGoogleDisplayLandscapeAssetResourceName(resourceName);
+      } else {
+        setGoogleDisplaySquareAssetResourceName(resourceName);
+      }
+
+      setAssetNotice(
+        `${role === "LANDSCAPE" ? "Landscape" : "Square"} image uploaded to Google Ads successfully.`,
+      );
+
+      clearPreview();
+    } catch (error) {
+      setGoogleDisplayAssetUploadError(
+        error instanceof Error
+          ? error.message
+          : "Unable to upload Google Display image.",
+      );
+    } finally {
+      setGoogleDisplayAssetUploading(null);
+    }
+  };
   const validateBasics = () => {
     if (!selectedPlatforms.length) {
       setError("Select Google Ads, Meta Ads, or both connected platforms.");
@@ -1607,6 +2097,27 @@ export default function CreateCampaignPage() {
       !isPositiveAmount(googleTargetCpa)
     ) {
       setError("Target CPA must be a positive amount.");
+      return false;
+    }
+
+    if (executionMode === "LIVE") {
+      if (
+        !googleDisplayLandscapeAssetResourceName ||
+        !googleDisplaySquareAssetResourceName
+      ) {
+        setError(
+          "Upload both landscape and square images to Google Ads before live campaign creation.",
+        );
+        return false;
+      }
+    } else if (
+      ![googleDisplayImageUrl, googleDisplaySquareImageUrl].every(
+        isValidHttpUrl,
+      )
+    ) {
+      setError(
+        "Validate Only requires landscape and square image URL references.",
+      );
       return false;
     }
     if (
@@ -3595,14 +4106,12 @@ export default function CreateCampaignPage() {
 
       const biddingOptions = {
         ...(isPositiveAmount(googleTargetCpa) &&
-          ["MAXIMIZE_CONVERSIONS", "TARGET_CPA"].includes(biddingStrategy) && {
+          biddingStrategy === "TARGET_CPA" && {
             targetCpa: Number(googleTargetCpa),
           }),
 
         ...(isPositiveAmount(googleTargetRoas) &&
-          ["MAXIMIZE_CONVERSION_VALUE", "TARGET_ROAS"].includes(
-            biddingStrategy,
-          ) && {
+          biddingStrategy === "TARGET_ROAS" && {
             targetRoas: Number(googleTargetRoas),
           }),
       };
@@ -3679,20 +4188,28 @@ export default function CreateCampaignPage() {
         throw new Error("Invalid selected Google Ads customer ID.");
       }
 
-      const userListPrefix = `customers/${customerId}/userLists/`;
+      const availableUserListResourceNames = new Set(
+        googleUserListOptions
+          .map((option) => getGoogleLookupResourceName(option))
+          .filter(Boolean),
+      );
 
       for (const resourceName of audienceResources) {
-        if (!resourceName.startsWith(userListPrefix)) {
+        if (!availableUserListResourceNames.has(resourceName)) {
           throw new Error(
-            `User list ${resourceName} does not belong to the selected Google Ads account.`,
+            `User list ${resourceName} is not available in the current Google Ads account lookup results. Reload the audience lists and select an available list.`,
           );
         }
       }
 
       // Demo assets cannot be submitted as live Google Ads image assets.
-      if (executionMode === "LIVE") {
+      if (
+        executionMode === "LIVE" &&
+        (!googleDisplayLandscapeAssetResourceName ||
+          !googleDisplaySquareAssetResourceName)
+      ) {
         throw new Error(
-          "Google Display live creation requires uploaded Google Ads Image Asset resource names. The current Asset Library stores demo URLs only. Use Validate Only for the prototype until provider asset uploading is integrated.",
+          "Upload both landscape and square images to Google Ads before creating a live Display campaign.",
         );
       }
 
@@ -3700,6 +4217,7 @@ export default function CreateCampaignPage() {
         accountId,
         providerObjective: googleMarketingObjective,
         providerCampaignType: "DISPLAY",
+        containsEuPoliticalAdvertising: googleEuPoliticalStatus,
 
         configuration: {
           budget: {
@@ -3753,6 +4271,16 @@ export default function CreateCampaignPage() {
             imageAssets: {
               landscapeImageUrl,
               squareImageUrl,
+
+              marketingImageAssetResourceNames:
+                googleDisplayLandscapeAssetResourceName
+                  ? [googleDisplayLandscapeAssetResourceName]
+                  : [],
+
+              squareMarketingImageAssetResourceNames:
+                googleDisplaySquareAssetResourceName
+                  ? [googleDisplaySquareAssetResourceName]
+                  : [],
             },
 
             providerUploadRequired: true,
@@ -4211,373 +4739,6 @@ export default function CreateCampaignPage() {
       },
     };
   };
-
-  /*
-   * MOCK SCENARIO TESTING DISABLED.
-   * These local fake-result builders/actions are retained for reference only.
-   * The Campaign Builder now displays results from the real POST /api/campaigns response.
-
-  const buildDemoResources = (
-    provider: ProviderName,
-    scenario: DemoScenario,
-    jobSuffix: string,
-  ): DemoProviderResult => {
-    const isGoogle = provider === "googleAds";
-    const middleLabel = isGoogle
-      ? googleCampaignType === "PERFORMANCE_MAX"
-        ? "Asset Group"
-        : googleCampaignType === "HOTEL"
-          ? "Hotel Ad Group"
-          : googleCampaignType === "APP"
-            ? "App Ad Group"
-            : "Ad Group"
-      : "Ad Set";
-    const finalLabel = isGoogle
-      ? googleCampaignType === "PERFORMANCE_MAX"
-        ? "Asset links"
-        : googleCampaignType === "HOTEL"
-          ? "Hotel Listing Group"
-          : googleCampaignType === "APP"
-            ? "App assets"
-            : googleCampaignType === "SHOPPING"
-              ? "Product listing"
-              : googleCampaignType === "SEARCH"
-                ? "Responsive Search Ad"
-                : googleCampaignType === "DISPLAY"
-                  ? "Responsive Display Ad"
-                  : "Demand Gen Ad"
-      : "Ad";
-    const resourceLabels = isGoogle
-      ? ["Campaign Budget", "Campaign", middleLabel, finalLabel]
-      : ["Campaign", "Ad Set", "Ad Creative", finalLabel];
-    const resources: DemoResourceResult[] = resourceLabels.map(
-      (label, index) => ({
-        key: `${provider}-${index + 1}`,
-        label,
-        status: "SUCCESS",
-        resourceId: `DEMO-${isGoogle ? "GADS" : "META"}-${index + 1}-${jobSuffix}`,
-        endpoint: isGoogle
-          ? [
-              "CampaignBudgetService.MutateCampaignBudgets (or GoogleAdsService.Mutate with a temporary resource name)",
-              "CampaignService.MutateCampaigns (references the created CampaignBudget)",
-              "AdGroupService.MutateAdGroups or AssetGroupService.MutateAssetGroups",
-              "AdGroupAdService.MutateAdGroupAds / AssetGroupAssetService.MutateAssetGroupAssets",
-            ][Math.min(index, 3)]
-          : [
-              "POST /act_{ad_account_id}/campaigns",
-              "POST /act_{ad_account_id}/adsets",
-              "POST /act_{ad_account_id}/adcreatives",
-              "POST /act_{ad_account_id}/ads",
-            ][Math.min(index, 3)],
-        attemptCount: 1,
-        requestId: `REQ-${provider}-${jobSuffix}-${index + 1}`,
-        responseSummary:
-          "Mock provider response: resource created and identifier returned.",
-      }),
-    );
-
-    const markFailedFrom = (index: number, code: string, message: string) => {
-      resources[index] = {
-        ...resources[index],
-        status: "FAILED",
-        resourceId: null,
-        errorCode: code,
-        errorMessage: message,
-      };
-      for (let next = index + 1; next < resources.length; next += 1) {
-        resources[next] = {
-          ...resources[next],
-          status: "NOT_STARTED",
-          resourceId: null,
-          errorCode: undefined,
-          errorMessage: undefined,
-        };
-      }
-    };
-
-    if (scenario === "TIMEOUT") {
-      const timeoutIndex = Math.min(1, resources.length - 1);
-      resources[timeoutIndex] = {
-        ...resources[timeoutIndex],
-        status: "TIMED_OUT",
-        resourceId: null,
-        errorCode: "REQUEST_TIMEOUT_UNKNOWN_OUTCOME",
-        errorMessage:
-          "The request timed out. The provider may still have created the resource; reconcile by querying the account before retrying.",
-        responseSummary:
-          "No definitive response received. Creation outcome is unknown.",
-      };
-      for (let next = timeoutIndex + 1; next < resources.length; next += 1) {
-        resources[next] = {
-          ...resources[next],
-          status: "BLOCKED",
-          resourceId: null,
-          errorCode: "DEPENDENCY_NOT_CONFIRMED",
-          errorMessage:
-            "Waiting until the timed-out parent resource is reconciled.",
-        };
-      }
-    } else if (scenario === "ALL_FAILURE") {
-      markFailedFrom(
-        0,
-        isGoogle ? "GOOGLE_ADS_MUTATE_ERROR" : "META_GRAPH_API_ERROR",
-        isGoogle
-          ? "Demo error: Google Ads rejected the Campaign Budget create operation. The Campaign and its dependent resources were not started."
-          : "Demo error: Meta rejected the campaign because of an invalid parameter.",
-      );
-    } else if (scenario === "PROVIDER_FAILURE" && provider === "metaAds") {
-      markFailedFrom(
-        0,
-        "META_INVALID_PARAMETER",
-        "Demo error: the selected optimization goal is incompatible with this billing event.",
-      );
-    } else if (
-      scenario === "PROVIDER_FAILURE" &&
-      provider === "googleAds" &&
-      !selectedPlatforms.includes("metaAds")
-    ) {
-      markFailedFrom(
-        0,
-        "GOOGLE_ADS_INVALID_ARGUMENT",
-        "Demo error: one of the selected campaign settings is not valid for this campaign type.",
-      );
-    } else if (
-      scenario === "RESOURCE_FAILURE" &&
-      provider ===
-        (selectedPlatforms.includes("googleAds") ? "googleAds" : "metaAds")
-    ) {
-      markFailedFrom(
-        isGoogle ? 2 : 1,
-        isGoogle ? "AD_GROUP_CREATION_FAILED" : "AD_SET_CREATION_FAILED",
-        isGoogle
-          ? "Demo error: the Campaign Budget and Campaign were created, but the Ad Group / Asset Group configuration was rejected."
-          : "Demo error: the campaign was created, but the Ad Set targeting configuration was rejected.",
-      );
-    }
-
-    const successCount = resources.filter(
-      (resource) => resource.status === "SUCCESS",
-    ).length;
-    const failedCount = resources.filter(
-      (resource) => resource.status === "FAILED",
-    ).length;
-    const status: DemoProviderStatus =
-      successCount === resources.length
-        ? "SUCCESS"
-        : successCount > 0
-          ? "PARTIAL_SUCCESS"
-          : failedCount > 0
-            ? "FAILED"
-            : "PARTIAL_SUCCESS";
-
-    return { provider, status, resources };
-  };
-
-  const updateDemoJob = (
-    providers: DemoProviderResult[],
-    current: DemoCreationJob,
-  ) => {
-    const providerStatuses = providers.map((provider) => provider.status);
-    const overallStatus: DemoOverallStatus = providerStatuses.every(
-      (status) => status === "SUCCESS",
-    )
-      ? "SUCCESS"
-      : providerStatuses.every((status) => status === "FAILED")
-        ? "FAILED"
-        : "PARTIAL_SUCCESS";
-    setDemoJob({ ...current, providers, overallStatus });
-    setCampaignRecords((records) =>
-      records.map((record) =>
-        record.jobId === current.jobId
-          ? {
-              ...record,
-              creationStatus: overallStatus,
-              updatedAt: new Date().toLocaleString(),
-            }
-          : record,
-      ),
-    );
-  };
-
-  const runDemoScenario = (scenario: DemoScenario) => {
-    if (!preparedPayload) {
-      setError(
-        "Prepare the unified campaign request before running a creation scenario.",
-      );
-      return;
-    }
-    if (selectedPlatforms.length === 0) {
-      setError(
-        "Select at least one advertising platform before running the demo.",
-      );
-      return;
-    }
-
-    const suffix = String(Date.now()).slice(-6);
-    const providers = selectedPlatforms.map((provider) =>
-      buildDemoResources(provider, scenario, suffix),
-    );
-    const statuses = providers.map((provider) => provider.status);
-    const overallStatus: DemoOverallStatus = statuses.every(
-      (status) => status === "SUCCESS",
-    )
-      ? "SUCCESS"
-      : statuses.every((status) => status === "FAILED")
-        ? "FAILED"
-        : "PARTIAL_SUCCESS";
-
-    const jobId = `DEMO-JOB-${suffix}`;
-    const createdAt = new Date().toLocaleString();
-    const recordId = `LOCAL-${jobId}`;
-    const groupId = recordId;
-    const records: any[] = selectedPlatforms.map((platform) => {
-      const providerResult = providers.find(
-        (item) => item.provider === platform,
-      );
-      const providerStatus = providerResult?.status ?? "FAILED";
-      const providerBudget =
-        platform === "googleAds"
-          ? `Google ${effectiveGoogleBudgetMode === "DAILY" ? googleDailyBudget + "/day" : googleCampaignTotalBudget + " total"}`
-          : `Meta ${metaBudgetMode === "DAILY" ? metaDailyBudget + "/day" : metaLifetimeBudget + " lifetime"}`;
-      return {
-        id: `${recordId}-${platform === "googleAds" ? "GOOGLE" : "META"}`,
-        groupId,
-        name: campaignName.trim() || "Untitled campaign",
-        provider: platform,
-        campaignType:
-          platform === "googleAds"
-            ? `Google ${googleCampaignType}`
-            : `Meta ${metaBuyingType}`,
-        googleCampaignType:
-          platform === "googleAds" ? googleCampaignType : undefined,
-        objective: (objective || "SALES") as Objective,
-        budgetLabel: providerBudget,
-        status:
-          providerStatus === "SUCCESS"
-            ? "ACTIVE"
-            : providerStatus === "FAILED"
-              ? "FAILED"
-              : "PAUSED",
-        creationStatus: providerStatus,
-        accountLabel: selectedAccountLabel(connections[platform]),
-        createdAt,
-        updatedAt: createdAt,
-        source: "LOCAL",
-        jobId,
-      };
-    });
-    setDemoJob({ jobId, createdAt, scenario, overallStatus, providers });
-    setCampaignRecords((current) => [
-      ...records,
-      ...current.filter(
-        (item) =>
-          item.groupId !== groupId &&
-          item.id !== recordId &&
-          !item.id.startsWith(`${recordId}-`),
-      ),
-    ]);
-    setSelectedCampaignId(records[0]?.id ?? recordId);
-    setCampaignNotice(
-      `${campaignName.trim() || "Untitled campaign"} was added as ${records.length} separate provider campaign record(s), linked under one shared initiative. This is a demo record, not a live provider campaign.`,
-    );
-    setError("");
-  };
-
-  const retryDemoFailedSteps = (providerName: ProviderName) => {
-    if (!demoJob) return;
-    const suffix = String(Date.now()).slice(-6);
-    const providers = demoJob.providers.map((provider) => {
-      if (provider.provider !== providerName) return provider;
-      const resources = provider.resources.map((resource) =>
-        resource.status === "FAILED"
-          ? {
-              ...resource,
-              status: "SUCCESS" as const,
-              resourceId: `DEMO-RETRY-${providerName}-${resource.key}-${suffix}`,
-              errorCode: undefined,
-              errorMessage: undefined,
-            }
-          : resource,
-      );
-      const status: DemoProviderStatus = resources.every(
-        (resource) => resource.status === "SUCCESS",
-      )
-        ? "SUCCESS"
-        : resources.some((resource) => resource.status === "SUCCESS")
-          ? "PARTIAL_SUCCESS"
-          : "FAILED";
-      return { ...provider, resources, status };
-    });
-    updateDemoJob(providers, demoJob);
-  };
-
-  const reconcileDemoTimeout = (providerName: ProviderName) => {
-    if (!demoJob) return;
-    const suffix = String(Date.now()).slice(-6);
-    const providers = demoJob.providers.map((provider) => {
-      if (provider.provider !== providerName) return provider;
-      const resources = provider.resources.map((resource) =>
-        resource.status === "TIMED_OUT"
-          ? {
-              ...resource,
-              status: "SUCCESS" as const,
-              resourceId: `DEMO-RECONCILED-${providerName}-${suffix}`,
-              errorCode: undefined,
-              errorMessage: undefined,
-              responseSummary:
-                "Reconciliation lookup found the resource in the provider account; no duplicate create request was sent.",
-            }
-          : resource.status === "BLOCKED"
-            ? {
-                ...resource,
-                status: "NOT_STARTED" as const,
-                errorCode: undefined,
-                errorMessage: undefined,
-              }
-            : resource,
-      );
-      const status: DemoProviderStatus = resources.every(
-        (resource) => resource.status === "SUCCESS",
-      )
-        ? "SUCCESS"
-        : resources.some((resource) => resource.status === "SUCCESS")
-          ? "PARTIAL_SUCCESS"
-          : "FAILED";
-      return { ...provider, resources, status };
-    });
-    updateDemoJob(providers, demoJob);
-  };
-
-  const continueDemoProvider = (providerName: ProviderName) => {
-    if (!demoJob) return;
-    const suffix = String(Date.now()).slice(-6);
-    const providers = demoJob.providers.map((provider) => {
-      if (provider.provider !== providerName) return provider;
-      const resources = provider.resources.map((resource) =>
-        resource.status === "NOT_STARTED"
-          ? {
-              ...resource,
-              status: "SUCCESS" as const,
-              resourceId: `DEMO-CONTINUE-${providerName}-${resource.key}-${suffix}`,
-            }
-          : resource,
-      );
-      const status: DemoProviderStatus = resources.every(
-        (resource) => resource.status === "SUCCESS",
-      )
-        ? "SUCCESS"
-        : resources.some((resource) => resource.status === "SUCCESS")
-          ? "PARTIAL_SUCCESS"
-          : "FAILED";
-      return { ...provider, resources, status };
-    });
-    updateDemoJob(providers, demoJob);
-  };
-
-  // Mock scenario handlers are intentionally not connected to the Campaign Builder UI.
-  // The old scenario controls are commented out; campaign results now come from POST /api/campaigns.
-
-  */
 
   const saveCurrentDraft = () => {
     if (!validateBasics() || !validatePlatformSettings()) return;
@@ -6484,41 +6645,191 @@ export default function CreateCampaignPage() {
                         className={inputClass}
                       />
                     </div>
+
+                    {/* Google Ads Location Lookup */}
                     <div>
-                      <label className={labelClass}>
-                        Location resource names (one per line)
-                      </label>
-                      <textarea
-                        rows={2}
-                        value={googleGeoTargetResources}
-                        onChange={(e) => {
-                          setGoogleGeoTargetResources(e.target.value);
-                          clearPreview();
-                        }}
-                        placeholder="geoTargetConstants/2356"
+                      <label className={labelClass}>Locations</label>
+
+                      <div className="mt-2 flex gap-2">
+                        <input
+                          value={googleLocationQuery}
+                          onChange={(e) =>
+                            setGoogleLocationQuery(e.target.value)
+                          }
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              void searchGoogleLocations();
+                            }
+                          }}
+                          placeholder="Search city, state or country"
+                          className={inputClass}
+                        />
+
+                        <button
+                          type="button"
+                          onClick={() => void searchGoogleLocations()}
+                          disabled={googleLocationLoading}
+                          className="shrink-0 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                        >
+                          {googleLocationLoading ? "Searching..." : "Search"}
+                        </button>
+                      </div>
+
+                      {googleLocationError && (
+                        <p className="mt-2 text-xs text-red-600">
+                          {googleLocationError}
+                        </p>
+                      )}
+
+                      {googleLocationOptions.length > 0 && (
+                        <div className="mt-3 max-h-44 space-y-2 overflow-y-auto rounded-lg border border-slate-200 p-3">
+                          {googleLocationOptions.map((option) => {
+                            const resourceName = getGoogleLookupResourceName(
+                              option,
+                              "geoTargetConstants",
+                            );
+
+                            if (!resourceName) return null;
+
+                            return (
+                              <label
+                                key={resourceName}
+                                className="flex cursor-pointer items-start gap-2 text-sm text-slate-700"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={geoResources.includes(resourceName)}
+                                  onChange={(e) => {
+                                    setGoogleGeoTargetResources((current) =>
+                                      toggleGoogleResourceName(
+                                        current,
+                                        resourceName,
+                                        e.target.checked,
+                                      ),
+                                    );
+                                    clearPreview();
+                                  }}
+                                  className="mt-1"
+                                />
+
+                                <span>
+                                  <span className="block font-medium">
+                                    {getGoogleLookupLabel(option)}
+                                  </span>
+                                  <span className="block text-xs text-slate-500">
+                                    {resourceName}
+                                  </span>
+                                </span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      <p className="mt-2 text-xs text-slate-500">
+                        Selected locations: {geoResources.length}
+                      </p>
+                    </div>
+
+                    {/* Google Ads Language Lookup */}
+                    <div>
+                      <label className={labelClass}>Languages</label>
+
+                      <input
+                        value={googleLanguageSearch}
+                        onChange={(e) =>
+                          setGoogleLanguageSearch(e.target.value)
+                        }
+                        placeholder="Filter available languages"
                         className={inputClass}
                       />
+
+                      {googleLanguageLoading && (
+                        <p className="mt-2 text-xs text-slate-500">
+                          Loading Google Ads languages...
+                        </p>
+                      )}
+
+                      {googleLanguageError && (
+                        <p className="mt-2 text-xs text-red-600">
+                          {googleLanguageError}
+                        </p>
+                      )}
+
+                      {!googleLanguageLoading &&
+                        googleLanguageOptions.length > 0 && (
+                          <div className="mt-3 max-h-44 space-y-2 overflow-y-auto rounded-lg border border-slate-200 p-3">
+                            {googleLanguageOptions
+                              .filter((option) => {
+                                const searchText = [
+                                  getGoogleLookupLabel(option),
+                                  option.id,
+                                  option.resourceName,
+                                  option.resource_name,
+                                ]
+                                  .join(" ")
+                                  .toLowerCase();
+
+                                return searchText.includes(
+                                  googleLanguageSearch.toLowerCase(),
+                                );
+                              })
+                              .map((option) => {
+                                const resourceName =
+                                  getGoogleLookupResourceName(
+                                    option,
+                                    "languageConstants",
+                                  );
+
+                                if (!resourceName) return null;
+
+                                return (
+                                  <label
+                                    key={resourceName}
+                                    className="flex cursor-pointer items-center gap-2 text-sm text-slate-700"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={languageResources.includes(
+                                        resourceName,
+                                      )}
+                                      onChange={(e) => {
+                                        setGoogleLanguageResources((current) =>
+                                          toggleGoogleResourceName(
+                                            current,
+                                            resourceName,
+                                            e.target.checked,
+                                          ),
+                                        );
+                                        clearPreview();
+                                      }}
+                                    />
+
+                                    <span>
+                                      {getGoogleLookupLabel(option)}
+                                      <span className="ml-2 text-xs text-slate-500">
+                                        {resourceName}
+                                      </span>
+                                    </span>
+                                  </label>
+                                );
+                              })}
+                          </div>
+                        )}
+
+                      <p className="mt-2 text-xs text-slate-500">
+                        Selected languages: {languageResources.length}
+                      </p>
                     </div>
-                    <div>
-                      <label className={labelClass}>
-                        Language resource names (one per line)
-                      </label>
-                      <textarea
-                        rows={2}
-                        value={googleLanguageResources}
-                        onChange={(e) => {
-                          setGoogleLanguageResources(e.target.value);
-                          clearPreview();
-                        }}
-                        placeholder="languageConstants/1000"
-                        className={inputClass}
-                      />
-                    </div>
+
+                    {/* Google Ads Custom Conversion Goal Lookup */}
                     <div className="sm:col-span-2">
                       <label className={labelClass}>
-                        Custom Conversion Goal Resource Name (optional)
+                        Custom Conversion Goal (optional)
                       </label>
-                      <input
+
+                      <select
                         value={googleCustomConversionGoalResourceName}
                         onChange={(e) => {
                           setGoogleCustomConversionGoalResourceName(
@@ -6526,14 +6837,42 @@ export default function CreateCampaignPage() {
                           );
                           clearPreview();
                         }}
-                        placeholder="customers/123456/customConversionGoals/789"
                         className={inputClass}
-                      />
+                      >
+                        <option value="">
+                          Use account-level conversion goals
+                        </option>
+
+                        {googleConversionGoalOptions.map((option) => {
+                          const resourceName =
+                            getGoogleLookupResourceName(option);
+
+                          if (!resourceName) return null;
+
+                          return (
+                            <option key={resourceName} value={resourceName}>
+                              {getGoogleLookupLabel(option)} — {resourceName}
+                            </option>
+                          );
+                        })}
+                      </select>
+
+                      {googleConversionGoalLoading && (
+                        <p className="mt-2 text-xs text-slate-500">
+                          Loading conversion goals...
+                        </p>
+                      )}
+
+                      {googleConversionGoalError && (
+                        <p className="mt-2 text-xs text-red-600">
+                          {googleConversionGoalError}
+                        </p>
+                      )}
+
                       <p className="mt-1 text-xs text-slate-500">
-                        Leave blank to use account-level conversion goals. The
-                        custom goal must already exist in the effective
-                        conversion customer; the backend applies it through
-                        ConversionGoalCampaignConfig after campaign creation.
+                        Leave blank to use account-level conversion goals.
+                        Custom goals must exist in the effective conversion
+                        customer.
                       </p>
                     </div>
                   </div>
@@ -7571,28 +7910,120 @@ export default function CreateCampaignPage() {
                       className={inputClass}
                     />
                   </div>
+
                   {["SEARCH", "DISPLAY", "SHOPPING"].includes(
                     googleCampaignType,
                   ) && (
                     <div className="sm:col-span-2">
                       <label className={labelClass}>
-                        Audience User List Resource Names (optional; one per
-                        line)
+                        Audience User Lists (optional)
                       </label>
-                      <textarea
-                        rows={2}
-                        value={googleAdGroupUserLists}
-                        onChange={(e) => {
-                          setGoogleAdGroupUserLists(e.target.value);
-                          clearPreview();
-                        }}
-                        placeholder="customers/123/userLists/456"
+
+                      <input
+                        value={googleUserListSearch}
+                        onChange={(e) =>
+                          setGoogleUserListSearch(e.target.value)
+                        }
+                        placeholder="Search your Google Ads audience lists"
                         className={inputClass}
                       />
-                      <p className="mt-1 text-xs text-slate-500">
-                        Applies eligible Google Ads remarketing lists at Ad
-                        Group level. The backend must confirm list eligibility
-                        and campaign-type compatibility.
+
+                      {googleUserListLoading && (
+                        <p className="mt-2 text-xs text-slate-500">
+                          Loading audience user lists...
+                        </p>
+                      )}
+
+                      {googleUserListError && (
+                        <p className="mt-2 text-xs text-red-600">
+                          {googleUserListError}
+                        </p>
+                      )}
+
+                      {!googleUserListLoading &&
+                        googleUserListOptions.length > 0 && (
+                          <div className="mt-3 max-h-52 space-y-2 overflow-y-auto rounded-lg border border-slate-200 p-3">
+                            {googleUserListOptions
+                              .filter((option) => {
+                                const searchText = [
+                                  getGoogleLookupLabel(option),
+                                  option.resourceName,
+                                  option.resource_name,
+                                  option.type,
+                                ]
+                                  .join(" ")
+                                  .toLowerCase();
+
+                                return searchText.includes(
+                                  googleUserListSearch.toLowerCase(),
+                                );
+                              })
+                              .map((option) => {
+                                const resourceName =
+                                  getGoogleLookupResourceName(option);
+
+                                if (!resourceName) return null;
+
+                                const selected = googleAdGroupUserLists
+                                  .split(/[\n,]+/)
+                                  .map((value) => value.trim())
+                                  .filter(Boolean)
+                                  .includes(resourceName);
+
+                                return (
+                                  <label
+                                    key={resourceName}
+                                    className="flex cursor-pointer items-start gap-2 text-sm text-slate-700"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={selected}
+                                      onChange={(e) => {
+                                        setGoogleAdGroupUserLists((current) =>
+                                          toggleGoogleResourceName(
+                                            current,
+                                            resourceName,
+                                            e.target.checked,
+                                          ),
+                                        );
+                                        clearPreview();
+                                      }}
+                                      className="mt-1"
+                                    />
+
+                                    <span>
+                                      <span className="block font-medium">
+                                        {getGoogleLookupLabel(option)}
+                                      </span>
+                                      <span className="block text-xs text-slate-500">
+                                        {resourceName}
+                                      </span>
+                                    </span>
+                                  </label>
+                                );
+                              })}
+                          </div>
+                        )}
+
+                      {!googleUserListLoading &&
+                        !googleUserListError &&
+                        googleUserListOptions.length === 0 && (
+                          <p className="mt-2 text-xs text-slate-500">
+                            No accessible user lists were returned for this
+                            Google Ads account.
+                          </p>
+                        )}
+
+                      <p className="mt-2 text-xs text-slate-500">
+                        Selected user lists:{" "}
+                        {
+                          googleAdGroupUserLists
+                            .split(/[\n,]+/)
+                            .map((value) => value.trim())
+                            .filter(Boolean).length
+                        }
+                        . Only lists returned by the account lookup can be
+                        selected here.
                       </p>
                     </div>
                   )}
@@ -8087,6 +8518,49 @@ export default function CreateCampaignPage() {
                           placeholder="https://.../landscape.jpg"
                           className={inputClass}
                         />
+                        <div className="mt-3 space-y-2">
+                          <label className={labelClass}>
+                            Upload Landscape Image to Google Ads
+                          </label>
+
+                          <input
+                            type="file"
+                            accept="image/jpeg,image/png"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0] ?? null;
+                              setGoogleDisplayLandscapeFile(file);
+                              setGoogleDisplayLandscapeAssetResourceName("");
+                              clearPreview();
+                            }}
+                            className={inputClass}
+                          />
+
+                          <button
+                            type="button"
+                            disabled={
+                              !googleDisplayLandscapeFile ||
+                              googleDisplayAssetUploading !== null
+                            }
+                            onClick={() =>
+                              void uploadGoogleDisplayImage(
+                                "LANDSCAPE",
+                                googleDisplayLandscapeFile,
+                              )
+                            }
+                            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                          >
+                            {googleDisplayAssetUploading === "LANDSCAPE"
+                              ? "Uploading..."
+                              : "Upload Landscape Image"}
+                          </button>
+
+                          {googleDisplayLandscapeAssetResourceName && (
+                            <p className="break-all text-xs text-green-700">
+                              Uploaded:{" "}
+                              {googleDisplayLandscapeAssetResourceName}
+                            </p>
+                          )}
+                        </div>
                       </div>
                       <div>
                         <label className={labelClass}>Square Image URL *</label>
@@ -8100,6 +8574,54 @@ export default function CreateCampaignPage() {
                           placeholder="https://.../square.jpg"
                           className={inputClass}
                         />
+                        <div className="mt-3 space-y-2">
+                          <label className={labelClass}>
+                            Upload Square Image to Google Ads
+                          </label>
+
+                          <input
+                            type="file"
+                            accept="image/jpeg,image/png"
+                            onChange={(e) => {
+                              const file = e.target.files?.[0] ?? null;
+                              setGoogleDisplaySquareFile(file);
+                              setGoogleDisplaySquareAssetResourceName("");
+                              clearPreview();
+                            }}
+                            className={inputClass}
+                          />
+
+                          <button
+                            type="button"
+                            disabled={
+                              !googleDisplaySquareFile ||
+                              googleDisplayAssetUploading !== null
+                            }
+                            onClick={() =>
+                              void uploadGoogleDisplayImage(
+                                "SQUARE",
+                                googleDisplaySquareFile,
+                              )
+                            }
+                            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                          >
+                            {googleDisplayAssetUploading === "SQUARE"
+                              ? "Uploading..."
+                              : "Upload Square Image"}
+                          </button>
+
+                          {googleDisplaySquareAssetResourceName && (
+                            <p className="break-all text-xs text-green-700">
+                              Uploaded: {googleDisplaySquareAssetResourceName}
+                            </p>
+                          )}
+                        </div>
+
+                        {googleDisplayAssetUploadError && (
+                          <p className="text-xs text-red-600">
+                            {googleDisplayAssetUploadError}
+                          </p>
+                        )}
                       </div>
                       <div>
                         <label className={labelClass}>
@@ -8258,7 +8780,7 @@ export default function CreateCampaignPage() {
                       />
                     </div>
                     <div className="grid gap-4 sm:grid-cols-2">
-                      <div>
+                      {/* <div>
                         <label className={labelClass}>
                           Landscape Image URL * (1.91:1; min 600×314)
                         </label>
@@ -8271,8 +8793,50 @@ export default function CreateCampaignPage() {
                           }}
                           className={inputClass}
                         />
+                      </div> */}
+                      <div className="mt-3 space-y-2">
+                        <label className={labelClass}>
+                          Upload Landscape Image to Google Ads
+                        </label>
+
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0] ?? null;
+                            setGoogleDisplayLandscapeFile(file);
+                            setGoogleDisplayLandscapeAssetResourceName("");
+                            clearPreview();
+                          }}
+                          className={inputClass}
+                        />
+
+                        <button
+                          type="button"
+                          disabled={
+                            !googleDisplayLandscapeFile ||
+                            googleDisplayAssetUploading !== null
+                          }
+                          onClick={() =>
+                            void uploadGoogleDisplayImage(
+                              "LANDSCAPE",
+                              googleDisplayLandscapeFile,
+                            )
+                          }
+                          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                        >
+                          {googleDisplayAssetUploading === "LANDSCAPE"
+                            ? "Uploading..."
+                            : "Upload Landscape Image"}
+                        </button>
+
+                        {googleDisplayLandscapeAssetResourceName && (
+                          <p className="break-all text-xs text-green-700">
+                            Uploaded: {googleDisplayLandscapeAssetResourceName}
+                          </p>
+                        )}
                       </div>
-                      <div>
+                      {/* <div>
                         <label className={labelClass}>
                           Square Image URL * (1:1; min 300×300)
                         </label>
@@ -8285,7 +8849,55 @@ export default function CreateCampaignPage() {
                           }}
                           className={inputClass}
                         />
+                      </div> */}
+                      <div className="mt-3 space-y-2">
+                        <label className={labelClass}>
+                          Upload Square Image to Google Ads
+                        </label>
+
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png"
+                          onChange={(e) => {
+                            const file = e.target.files?.[0] ?? null;
+                            setGoogleDisplaySquareFile(file);
+                            setGoogleDisplaySquareAssetResourceName("");
+                            clearPreview();
+                          }}
+                          className={inputClass}
+                        />
+
+                        <button
+                          type="button"
+                          disabled={
+                            !googleDisplaySquareFile ||
+                            googleDisplayAssetUploading !== null
+                          }
+                          onClick={() =>
+                            void uploadGoogleDisplayImage(
+                              "SQUARE",
+                              googleDisplaySquareFile,
+                            )
+                          }
+                          className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                        >
+                          {googleDisplayAssetUploading === "SQUARE"
+                            ? "Uploading..."
+                            : "Upload Square Image"}
+                        </button>
+
+                        {googleDisplaySquareAssetResourceName && (
+                          <p className="break-all text-xs text-green-700">
+                            Uploaded: {googleDisplaySquareAssetResourceName}
+                          </p>
+                        )}
                       </div>
+
+                      {googleDisplayAssetUploadError && (
+                        <p className="text-xs text-red-600">
+                          {googleDisplayAssetUploadError}
+                        </p>
+                      )}
                     </div>
                     <p className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-xs leading-5 text-blue-800">
                       Responsive Display Ad requirements: landscape + square
@@ -9921,23 +10533,6 @@ export default function CreateCampaignPage() {
                   backend below.
                 </p>
               </div>
-              {/* {apiPayloadPreview && (
-                <div className="mt-6 rounded-2xl border border-indigo-200 bg-indigo-50/40 p-5">
-                  <h3 className="font-bold text-slate-900">
-                    Backend API Request Preview
-                  </h3>
-
-                  <p className="mt-1 text-xs leading-5 text-slate-600">
-                    This is the separate request body for POST /api/campaigns.
-                    It contains only the fields needed by the backend provider
-                    adapters.
-                  </p>
-
-                  <pre className="mt-4 max-h-96 overflow-auto rounded-xl bg-slate-950 p-4 text-xs leading-6 text-green-300">
-                    {apiPayloadPreview}
-                  </pre>
-                </div>
-              )} */}
 
               <div className="mt-5 border-t border-slate-200 pt-5">
                 <button
@@ -9959,7 +10554,7 @@ export default function CreateCampaignPage() {
                     : "This submits a live request. Successfully created provider resources will start PAUSED."}
                 </p>
 
-                {(campaignApiError || campaignApiResponse) && (
+                {Boolean(campaignApiError || campaignApiResponse) && (
                   <div className="mt-5 rounded-2xl border border-slate-200 bg-white p-5">
                     <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-4">
                       <div>

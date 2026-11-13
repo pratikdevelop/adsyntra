@@ -1,6 +1,12 @@
 import { Router, type Request, type Response } from "express";
 import { getAuth } from "@clerk/express";
-
+import {
+    GoogleAdsLookupError,
+    searchGoogleAdsLocations,
+    getGoogleAdsLanguages,
+    getGoogleAdsUserLists,
+    getGoogleAdsCustomConversionGoals,
+} from "../googleadsAPI/services/google-ads-lookups.service.js";
 import CampaignModel, {
     type CampaignProviders,
     type AdvertisingProvider,
@@ -18,6 +24,7 @@ import {
 import {
     getGoogleAdsCreationContext,
     createGoogleAdsCampaignFlow,
+    createGoogleAdsDisplayCampaignFlow
 } from "../googleadsAPI/services/campaign-creation.js";
 import {
     createMetaAdsCampaignForUser,
@@ -30,7 +37,7 @@ import {
     type CreateMetaAdsAdSetInput,
     type MetaAdsCampaignObjective,
 } from "../metaadsAPI/services/campaign-creation.js";
-import type { CreateGoogleAdsSearchCampaignFlowInput } from "../googleadsAPI/iterface/campaign-creation.js";
+import type { CreateGoogleAdsDisplayCampaignFlowInput, CreateGoogleAdsSearchCampaignFlowInput } from "../googleadsAPI/iterface/campaign-creation.js";
 import {
     searchMetaLocations,
     searchMetaDetailedTargeting,
@@ -49,8 +56,32 @@ import {
     updateMetaAdsStatus,
     deleteMetaAdsCampaign
 } from "../metaadsAPI/services/campaign.js";
+import {
+    createGoogleAdsImageAsset,
+    GoogleAdsCreationError,
+} from "../googleadsAPI/services/campaign-creation.js";
+import multer from "multer";
 
 const router = Router();
+
+const googleDisplayImageUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+        fileSize: 5 * 1024 * 1024,
+        files: 1,
+    },
+    fileFilter: (_req, file, callback) => {
+        const allowedTypes = ["image/jpeg", "image/png"];
+
+        if (!allowedTypes.includes(file.mimetype)) {
+            return callback(
+                new Error("Only JPG and PNG images are supported."),
+            );
+        }
+
+        callback(null, true);
+    },
+});
 
 interface ProviderCampaignResult {
     success: boolean;
@@ -758,6 +789,192 @@ router.get(
     },
 );
 
+// ==========================================
+// GOOGLE DISPLAY IMAGE ASSET UPLOAD
+// ==========================================
+
+router.post(
+    "/google/display/assets/upload",
+
+    // Multipart image upload.
+    (req, res, next) => {
+        googleDisplayImageUpload.single("image")(
+            req,
+            res,
+            (error) => {
+                if (error) {
+                    return res.status(400).json({
+                        success: false,
+                        message: getErrorMessage(error),
+                    });
+                }
+
+                next();
+            },
+        );
+    },
+
+    async (req: Request, res: Response) => {
+        try {
+            // 1. Clerk authentication.
+            const { userId } = getAuth(req);
+
+            if (!userId) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Authentication required.",
+                });
+            }
+
+            // 2. Validate uploaded image.
+            const file = req.file;
+
+            if (!file) {
+                return res.status(400).json({
+                    success: false,
+                    message: 'Upload an image using the "image" field.',
+                });
+            }
+
+            // 3. Validate account and image role.
+            const accountId =
+                typeof req.body.accountId === "string"
+                    ? req.body.accountId.trim()
+                    : "";
+
+            const role =
+                typeof req.body.role === "string"
+                    ? req.body.role.trim().toUpperCase()
+                    : "";
+
+            if (!accountId) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Google Ads account ID is required.",
+                });
+            }
+
+            if (!["LANDSCAPE", "SQUARE"].includes(role)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Image role must be LANDSCAPE or SQUARE.",
+                });
+            }
+
+            // 4. Verify the account belongs to the authenticated user
+            // and is the currently selected Google Ads account.
+            const selectedAccount = await AdAccountModel.findOne({
+                userId,
+                provider: "googleAds",
+                isSelected: true,
+            })
+                .select("externalAccountId")
+                .lean();
+
+            if (!selectedAccount?.externalAccountId) {
+                return res.status(409).json({
+                    success: false,
+                    message: "No Google Ads account is currently selected.",
+                });
+            }
+
+            if (
+                normalizeGoogleAccountId(
+                    selectedAccount.externalAccountId,
+                ) !== normalizeGoogleAccountId(accountId)
+            ) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "The selected Google Ads account has changed. Refresh the campaign builder and try again.",
+                });
+            }
+
+            // 5. Get the Google Ads context for this exact account.
+            const context = await getGoogleAdsCreationContext(
+                userId,
+                selectedAccount.externalAccountId,
+            );
+
+            // 6. Prepare a descriptive asset name.
+            const suppliedName =
+                typeof req.body.name === "string"
+                    ? req.body.name.trim()
+                    : "";
+
+            const originalName = file.originalname.replace(
+                /\.[^/.]+$/,
+                "",
+            );
+
+            const assetName =
+                suppliedName ||
+                originalName ||
+                `Display ${role} Image`;
+
+            // 7. Upload the real image to Google Ads.
+            // This is a live external mutation, so require explicit
+            // confirmation from the upload action.
+            if (
+                req.body.confirm !== true &&
+                req.body.confirm !== "true"
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message:
+                        "Confirm the Google Ads image upload before continuing.",
+                });
+            }
+
+            const result = await createGoogleAdsImageAsset(
+                context,
+                {
+                    buffer: file.buffer,
+                    name: `${assetName} - ${role}`,
+                    originalName: file.originalname,
+                    validateOnly: false,
+                    confirm: true,
+                },
+            );
+
+            if (!result.resourceName) {
+                throw new Error(
+                    "Google Ads did not return an image asset resource name.",
+                );
+            }
+
+            // 8. Return the exact resource name for campaign creation.
+            return res.status(201).json({
+                success: true,
+                message: `${role} image uploaded to Google Ads successfully.`,
+                accountId: selectedAccount.externalAccountId,
+                asset: {
+                    role,
+                    name: assetName,
+                    resourceName: result.resourceName,
+                    resourceId: result.resourceId,
+                    mimeType: file.mimetype,
+                    fileSize: file.size,
+                },
+            });
+        } catch (error) {
+            console.error(
+                "Google Display image upload failed:",
+                getErrorMessage(error),
+            );
+
+            const statusCode =
+                error instanceof GoogleAdsCreationError
+                    ? error.statusCode
+                    : 502;
+
+            return res.status(statusCode).json({
+                success: false,
+                message: getErrorMessage(error),
+            });
+        }
+    },
+);
 router.post("/", async (req: Request, res: Response) => {
     try {
         const auth = getAuth(req);
@@ -852,32 +1069,46 @@ router.post("/", async (req: Request, res: Response) => {
                 }
 
                 // Current Google campaign flow supports Search campaigns.
-                if (googleRequest.providerCampaignType.toUpperCase() !== "SEARCH") {
-                    throw new Error(
-                        "The current Google Ads creation flow supports SEARCH campaigns only.",
-                    );
-                }
+                const campaignType =
+                    googleRequest.providerCampaignType.trim().toUpperCase();
 
-                // 1. Get authenticated Google Ads context.
-
+                // // 1. Get authenticated Google Ads context.
                 const context = await getGoogleAdsCreationContext(
                     userId,
                     googleRequest.accountId,
                 );
 
-                // 2. Map global provider configuration to Google flow input.
-
+                // 2. Apply global execution controls.
                 const flowInput = {
-                    ...(googleRequest.configuration as unknown as CreateGoogleAdsSearchCampaignFlowInput),
-
-                    // Global execution controls override provider configuration.
+                    ...(googleRequest.configuration as Record<string, unknown>),
                     validateOnly: execution.validateOnly,
                     confirm: execution.confirm,
                 };
 
+                // // 3. Dispatch to the correct campaign workflow.
+                let result: any;
+
+                if (campaignType === "SEARCH") {
+                    result = await createGoogleAdsCampaignFlow(
+                        context,
+                        flowInput as CreateGoogleAdsSearchCampaignFlowInput,
+                    );
+                } else if (campaignType === "DISPLAY") {
+                    result = await createGoogleAdsDisplayCampaignFlow(
+                        context,
+                        flowInput as CreateGoogleAdsDisplayCampaignFlowInput,
+                    );
+                } else {
+                    throw new Error(
+                        `Google Ads ${campaignType} campaign creation is not yet connected to the global execution route.`,
+                    );
+                }
+
+
+
                 // 3. Execute the complete Google Search campaign flow.
 
-                const result = await createGoogleAdsCampaignFlow(context, flowInput);
+                // const result = await createGoogleAdsCampaignFlow(context, flowInput);
 
                 const googleProvider = campaign.providers.googleAds;
 
@@ -895,7 +1126,7 @@ router.post("/", async (req: Request, res: Response) => {
 
                 // 5. Save real resources only after live creation.
 
-                if (!result.validateOnly && result.createdResources) {
+                /*if (!result.validateOnly && result.createdResources) {
                     const resources = result.createdResources;
 
                     googleProvider.providerCampaignResourceName = resources.campaign;
@@ -920,15 +1151,15 @@ router.post("/", async (req: Request, res: Response) => {
                             resourceType: "adGroup",
                             resourceName: resources.adGroup,
                         },
-                        ...resources.locationCriteria.map((resourceName) => ({
+                        ...resources.locationCriteria.map((resourceName: any) => ({
                             resourceType: "locationCriterion",
                             resourceName,
                         })),
-                        ...resources.positiveKeywords.map((resourceName) => ({
+                        ...resources.positiveKeywords.map((resourceName: any) => ({
                             resourceType: "positiveKeyword",
                             resourceName,
                         })),
-                        ...resources.negativeKeywords.map((resourceName) => ({
+                        ...resources.negativeKeywords.map((resourceName: any) => ({
                             resourceType: "negativeKeyword",
                             resourceName,
                         })),
@@ -937,8 +1168,102 @@ router.post("/", async (req: Request, res: Response) => {
                             resourceName: resources.responsiveSearchAd,
                         },
                     ];
-                }
+                }*/
 
+                if (!result.validateOnly && result.createdResources) {
+                    const resources = result.createdResources;
+
+                    googleProvider.providerCampaignResourceName =
+                        resources.campaign;
+
+                    googleProvider.providerCampaignId =
+                        resources.campaign.split("/").at(-1) ?? null;
+
+                    googleProvider.providerStatus = "PAUSED";
+                    googleProvider.deliveryStatus = "PAUSED";
+                    googleProvider.lastSyncedAt = new Date();
+
+                    const savedResources: Array<{
+                        resourceType: string;
+                        resourceName: string;
+                    }> = [
+                            {
+                                resourceType: "campaignBudget",
+                                resourceName: resources.budget,
+                            },
+                            {
+                                resourceType: "campaign",
+                                resourceName: resources.campaign,
+                            },
+                        ];
+
+                    if (campaignType === "SEARCH") {
+                        savedResources.push(
+                            {
+                                resourceType: "adGroup",
+                                resourceName: resources.adGroup,
+                            },
+                            ...resources.locationCriteria.map(
+                                (resourceName: string) => ({
+                                    resourceType: "locationCriterion",
+                                    resourceName,
+                                }),
+                            ),
+                            ...resources.positiveKeywords.map(
+                                (resourceName: string) => ({
+                                    resourceType: "positiveKeyword",
+                                    resourceName,
+                                }),
+                            ),
+                            ...resources.negativeKeywords.map(
+                                (resourceName: string) => ({
+                                    resourceType: "negativeKeyword",
+                                    resourceName,
+                                }),
+                            ),
+                            {
+                                resourceType: "responsiveSearchAd",
+                                resourceName: resources.responsiveSearchAd,
+                            },
+                        );
+                    }
+
+                    if (campaignType === "DISPLAY") {
+                        savedResources.push(
+                            {
+                                resourceType: "adGroup",
+                                resourceName: resources.adGroup,
+                            },
+                            ...resources.locationCriteria.map(
+                                (resourceName: string) => ({
+                                    resourceType: "locationCriterion",
+                                    resourceName,
+                                }),
+                            ),
+                            ...resources.languageCriteria.map(
+                                (resourceName: string) => ({
+                                    resourceType: "languageCriterion",
+                                    resourceName,
+                                }),
+                            ),
+                            ...resources.audienceCriteria.map(
+                                (resourceName: string) => ({
+                                    resourceType: "audienceCriterion",
+                                    resourceName,
+                                }),
+                            ),
+                        );
+
+                        if (resources.responsiveDisplayAd) {
+                            savedResources.push({
+                                resourceType: "responsiveDisplayAd",
+                                resourceName: resources.responsiveDisplayAd,
+                            });
+                        }
+                    }
+
+                    googleProvider.resources = savedResources;
+                }
                 campaign.markModified("providers.googleAds");
 
                 await campaign.save();
@@ -954,6 +1279,9 @@ router.post("/", async (req: Request, res: Response) => {
                     temporaryResourceNames: result.temporaryResourceNames,
                     createdResources: result.createdResources,
                     googleResponse: result.googleResponse,
+                    assetUploadRequired: result.assetUploadRequired ?? false,
+
+                    validationWarnings: result.validationWarnings ?? [],
                 };
             } catch (error) {
                 const message = getErrorMessage(error);
@@ -3115,7 +3443,7 @@ router.delete(
             }
 
             // 2. Validate provider and campaign ID.
-            const { provider, campaignId } = req.params;
+            const { provider, campaignId }: any = req.params;
 
             if (provider !== "googleAds" && provider !== "metaAds") {
                 return res.status(400).json({
@@ -3132,7 +3460,7 @@ router.delete(
             }
 
             const providerKey = provider as "googleAds" | "metaAds";
-            const normalizedCampaignId = campaignId.trim();
+            const normalizedCampaignId = campaignId?.trim();
 
             // 3. Find the user's selected provider account.
             const selectedAccount = await AdAccountModel.findOne({
@@ -3301,6 +3629,155 @@ router.delete(
                 message: getErrorMessage(error),
             });
         }
+    },
+);
+// ==========================================
+// SELECTED GOOGLE ADS ACCOUNT LOOKUP
+// ==========================================
+
+async function withGoogleAdsLookup(
+    req: Request,
+    res: Response,
+    lookup: (
+        context: Awaited<
+            ReturnType<typeof getGoogleAdsCreationContext>
+        >,
+    ) => Promise<unknown>,
+) {
+    try {
+        // 1. Authenticate user.
+        const { userId } = getAuth(req);
+
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Authentication required.",
+            });
+        }
+
+        // 2. Resolve the selected Google Ads account.
+        const selectedAccount = await AdAccountModel.findOne({
+            userId,
+            provider: "googleAds",
+            isSelected: true,
+        })
+            .select("externalAccountId")
+            .lean();
+
+        if (!selectedAccount?.externalAccountId) {
+            return res.status(409).json({
+                success: false,
+                message:
+                    "No selected Google Ads account found. Please select an account first.",
+            });
+        }
+
+        // 3. Build the authenticated Google Ads context.
+        const context = await getGoogleAdsCreationContext(
+            userId,
+            selectedAccount.externalAccountId,
+        );
+
+        // 4. Execute lookup.
+        const data = await lookup(context);
+
+        return res.status(200).json({
+            success: true,
+            provider: "googleAds",
+            accountId: `customers/${context.customerId}`,
+            data,
+        });
+    } catch (error) {
+        console.error("Google Ads lookup route failed:", error);
+
+        const statusCode =
+            error instanceof GoogleAdsLookupError
+                ? error.statusCode
+                : 500;
+
+        return res.status(statusCode).json({
+            success: false,
+            message: getErrorMessage(error),
+            ...(error instanceof GoogleAdsLookupError &&
+                error.details !== undefined && {
+                details: error.details,
+            }),
+        });
+    }
+}
+
+// ==========================================
+// 1. SEARCH GOOGLE ADS LOCATIONS
+// ==========================================
+
+router.get("/lookups/google/locations", async (req, res) => {
+    const query =
+        typeof req.query.q === "string"
+            ? req.query.q.trim()
+            : "";
+
+    const countryCode =
+        typeof req.query.countryCode === "string"
+            ? req.query.countryCode
+            : undefined;
+
+    const locale =
+        typeof req.query.locale === "string"
+            ? req.query.locale
+            : "en";
+
+    return withGoogleAdsLookup(req, res, (context) =>
+        searchGoogleAdsLocations(context, {
+            query,
+            countryCode,
+            locale,
+        }),
+    );
+});
+
+// ==========================================
+// 2. GET GOOGLE ADS LANGUAGES
+// ==========================================
+
+router.get("/lookups/google/languages", async (req, res) => {
+    return withGoogleAdsLookup(req, res, (context) =>
+        getGoogleAdsLanguages(context),
+    );
+});
+
+// ==========================================
+// 3. GET GOOGLE ADS USER LISTS
+// ==========================================
+
+router.get("/lookups/google/user-lists", async (req, res) => {
+    const pageToken =
+        typeof req.query.pageToken === "string"
+            ? req.query.pageToken
+            : undefined;
+
+    return withGoogleAdsLookup(req, res, (context) =>
+        getGoogleAdsUserLists(context, pageToken),
+    );
+});
+
+// ==========================================
+// 4. GET GOOGLE ADS CUSTOM CONVERSION GOALS
+// ==========================================
+
+router.get(
+    "/lookups/google/conversion-goals",
+    async (req, res) => {
+        const pageToken =
+            typeof req.query.pageToken === "string"
+                ? req.query.pageToken
+                : undefined;
+
+        return withGoogleAdsLookup(req, res, (context) =>
+            getGoogleAdsCustomConversionGoals(
+                context,
+                pageToken,
+            ),
+        );
     },
 );
 export default router;

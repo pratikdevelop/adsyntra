@@ -17,7 +17,13 @@ import CloseOutlinedIcon from "@mui/icons-material/CloseOutlined";
 // import HelpOutlineOutlinedIcon from "@mui/icons-material/HelpOutlineOutlined";
 import ChevronRightOutlinedIcon from "@mui/icons-material/ChevronRightOutlined";
 import AutoAwesomeOutlinedIcon from "@mui/icons-material/AutoAwesomeOutlined";
-
+import AdUnitsOutlinedIcon from "@mui/icons-material/AdUnitsOutlined";
+import PhotoLibraryOutlinedIcon from "@mui/icons-material/PhotoLibraryOutlined";
+import GroupsOutlinedIcon from "@mui/icons-material/GroupsOutlined";
+import TrackChangesOutlinedIcon from "@mui/icons-material/TrackChangesOutlined";
+import CreditCardOutlinedIcon from "@mui/icons-material/CreditCardOutlined";
+import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
+/*
 const navigation = [
   {
     label: "Overview",
@@ -37,7 +43,90 @@ const navigation = [
     icon: CableOutlinedIcon,
     description: "Connect Google & Meta accounts",
   },
+];*/
+const navigationGroups = [
+  {
+    label: "Workspace",
+    items: [
+      {
+        label: "Overview",
+        href: "/dashboard",
+        icon: DashboardOutlinedIcon,
+        description: "Workspace summary & KPIs",
+      },
+    ],
+  },
+  {
+    label: "Ad Management",
+    items: [
+      {
+        label: "Campaign Management",
+        href: "/dashboard/campaigns",
+        icon: CampaignOutlinedIcon,
+        description: "Create & manage campaigns",
+      },
+      {
+        label: "Ads Management",
+        href: "/dashboard/ads",
+        icon: AdUnitsOutlinedIcon,
+        description: "Manage published Google & Meta ads",
+      },
+      {
+        label: "Asset Library",
+        href: "/dashboard/assets",
+        icon: PhotoLibraryOutlinedIcon,
+        description: "Manage images, videos & advertising assets",
+      },
+      {
+        label: "AI Creation",
+        href: "/dashboard/ai-creation",
+        icon: AutoAwesomeOutlinedIcon,
+        description: "Generate advertising creatives using AI",
+      },
+    ],
+  },
+  {
+    label: "Marketing",
+    items: [
+      {
+        label: "Audiences",
+        href: "/dashboard/audiences",
+        icon: GroupsOutlinedIcon,
+        description: "Manage advertising audiences",
+      },
+      {
+        label: "Conversions & Tracking",
+        href: "/dashboard/conversions",
+        icon: TrackChangesOutlinedIcon,
+        description: "Manage conversion tracking and pixels",
+      },
+    ],
+  },
+  {
+    label: "Account",
+    items: [
+      {
+        label: "Billing",
+        href: "/dashboard/billing",
+        icon: CreditCardOutlinedIcon,
+        description: "Manage advertising spend and billing",
+      },
+      {
+        label: "Provider Settings",
+        href: "/dashboard/provider",
+        icon: CableOutlinedIcon,
+        description: "Connect Google & Meta accounts",
+      },
+      {
+        label: "Settings",
+        href: "/dashboard/settings",
+        icon: SettingsOutlinedIcon,
+        description: "Manage application settings",
+      },
+    ],
+  },
 ];
+const navigation = navigationGroups.flatMap((group) => group.items);
 
 export default function DashboardLayout({
   children,
@@ -63,7 +152,7 @@ export default function DashboardLayout({
     return pathname === href || pathname.startsWith(`${href}/`);
   };
 
-  const activeItem = [...navigation]
+  const activeItem = navigation
     .filter((item) => isActive(item.href))
     .sort((a, b) => b.href.length - a.href.length)[0];
 
@@ -94,7 +183,7 @@ export default function DashboardLayout({
       </div>
 
       {/* Nav */}
-      <div className="flex-1 overflow-y-auto px-3 py-5">
+      {/* <div className="flex-1 overflow-y-auto px-3 py-5">
         <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
           Workspace
         </p>
@@ -144,7 +233,7 @@ export default function DashboardLayout({
           Resources
         </p> */}
 
-        {/* <nav className="space-y-0.5">
+      {/* <nav className="space-y-0.5">
           <Link
             href="/dashboard/help"
             className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
@@ -152,7 +241,59 @@ export default function DashboardLayout({
             <HelpOutlineOutlinedIcon sx={{ fontSize: 20 }} />
             <span>Help &amp; Support</span>
           </Link>
-        </nav> */}
+        </nav> 
+      </div> */}
+
+      {/* Navigation */}
+      <div className="flex-1 overflow-y-auto px-3 py-5">
+        {navigationGroups.map((group) => (
+          <div key={group.label} className="mb-6 last:mb-0">
+            <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
+              {group.label}
+            </p>
+
+            <nav className="space-y-0.5">
+              {group.items.map((item) => {
+                const active = isActive(item.href);
+                const Icon = item.icon;
+
+                return (
+                  <Tooltip
+                    key={item.href}
+                    title={item.description}
+                    placement="right"
+                    arrow
+                    enterDelay={700}
+                  >
+                    <Link
+                      href={item.href}
+                      aria-current={active ? "page" : undefined}
+                      onClick={() => setMobileOpen(false)}
+                      className={`group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
+                        active
+                          ? "bg-blue-50 text-blue-700"
+                          : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                      }`}
+                    >
+                      <Icon
+                        sx={{
+                          fontSize: 20,
+                          color: active ? "primary.main" : "inherit",
+                        }}
+                      />
+
+                      <span className="flex-1">{item.label}</span>
+
+                      {active && (
+                        <span className="h-1.5 w-1.5 rounded-full bg-blue-600" />
+                      )}
+                    </Link>
+                  </Tooltip>
+                );
+              })}
+            </nav>
+          </div>
+        ))}
       </div>
 
       {/* Footer promo card */}
@@ -172,7 +313,7 @@ export default function DashboardLayout({
                 Generate ads for Google &amp; Meta in seconds.
               </p>
               <Link
-                href="/dashboard/campaigns/new"
+                href="/dashboard/ai-creation"
                 className="mt-2 inline-flex items-center gap-1 text-[10px] font-semibold text-blue-700 hover:text-blue-800"
               >
                 Try it now

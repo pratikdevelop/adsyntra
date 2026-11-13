@@ -33,6 +33,8 @@ import type {
     GoogleAdsMutateResponse,
     GoogleAdsSearchCampaignFlowResult,
     PerformanceMaxAssetFieldType,
+    CreateGoogleAdsDisplayCampaignFlowInput,
+    GoogleAdsDisplayCampaignFlowResult,
 } from "../iterface/campaign-creation.js";
 import { buildBiddingConfig } from "../utils/bidding.js";
 import { imageSize } from "image-size";
@@ -41,7 +43,7 @@ import { randomUUID } from "node:crypto";
 // 1. GOOGLE ADS CONFIGURATION
 // ==========================================
 
-const DEFAULT_API_VERSION = "v25";
+const DEFAULT_API_VERSION = "v26";
 
 // ==========================================
 // 3. GET GOOGLE ADS CREATION CONTEXT
@@ -3336,6 +3338,776 @@ export async function createGoogleAdsCampaignFlow(
         },
 
         createdResources,
+
+        googleResponse,
+    };
+}
+
+// ==========================================
+// GOOGLE ADS DISPLAY CAMPAIGN FLOW
+// ==========================================
+
+export async function createGoogleAdsDisplayCampaignFlow(
+    context: GoogleAdsCreationContext,
+    input: CreateGoogleAdsDisplayCampaignFlowInput,
+): Promise<GoogleAdsDisplayCampaignFlowResult> {
+    // 1. Validate execution mode.
+
+    const validateOnly = input.validateOnly !== false;
+
+    if (!validateOnly && input.confirm !== true) {
+        throw new GoogleAdsCreationError(
+            "Live Display campaign creation requires validateOnly:false and confirm:true.",
+            400,
+        );
+    }
+
+    // 2. Validate budget.
+
+    const budgetName = input.budget?.name?.trim();
+
+    if (!budgetName || budgetName.length > 255) {
+        throw new GoogleAdsCreationError(
+            "A valid Display campaign budget name is required.",
+            400,
+        );
+    }
+
+    const budgetAmount = input.budget.amount;
+
+    if (!Number.isFinite(budgetAmount) || budgetAmount <= 0) {
+        throw new GoogleAdsCreationError(
+            "Display campaign budget must be greater than zero.",
+            400,
+        );
+    }
+
+    const amountMicros = Math.round(budgetAmount * 1_000_000);
+
+    if (!Number.isSafeInteger(amountMicros)) {
+        throw new GoogleAdsCreationError(
+            "Display campaign budget is outside the supported range.",
+            400,
+        );
+    }
+
+    // 3. Validate campaign.
+
+    const campaignName = input.campaign?.name?.trim();
+
+    if (!campaignName || campaignName.length > 255) {
+        throw new GoogleAdsCreationError(
+            "A valid Display campaign name is required.",
+            400,
+        );
+    }
+
+    const campaignType: GoogleAdsCampaignType = "DISPLAY";
+
+    const biddingStrategy =
+        input.campaign.biddingStrategy?.trim().toUpperCase();
+
+    const supportedStrategies =
+        GOOGLE_ADS_CAMPAIGN_CONFIG.DISPLAY.biddingStrategies;
+
+    if (!biddingStrategy || !supportedStrategies.includes(biddingStrategy)) {
+        throw new GoogleAdsCreationError(
+            `Unsupported Display bidding strategy: ${input.campaign.biddingStrategy}`,
+            400,
+        );
+    }
+
+    let biddingConfig: Record<string, unknown>;
+
+    try {
+        biddingConfig = buildBiddingConfig(
+            biddingStrategy,
+            input.campaign.biddingOptions ?? {},
+            campaignType,
+        );
+    } catch (error) {
+        throw new GoogleAdsCreationError(
+            error instanceof Error
+                ? error.message
+                : "Invalid Display bidding configuration.",
+            400,
+        );
+    }
+
+    // 4. Validate campaign dates.
+    // Google Ads expects customer-time-zone timestamps.
+
+    const normalizeCampaignDate = (
+        value: string | undefined,
+        fieldName: string,
+        isEndDate = false,
+    ): string | undefined => {
+        if (!value) return undefined;
+
+        const normalized = value.trim().replace(/-/g, "");
+
+        if (!/^\d{8}$/.test(normalized)) {
+            throw new GoogleAdsCreationError(
+                `Invalid Display campaign ${fieldName}. Expected YYYYMMDD.`,
+                400,
+            );
+        }
+
+        const year = Number(normalized.slice(0, 4));
+        const month = Number(normalized.slice(4, 6));
+        const day = Number(normalized.slice(6, 8));
+
+        const date = new Date(Date.UTC(year, month - 1, day));
+
+        if (
+            date.getUTCFullYear() !== year ||
+            date.getUTCMonth() !== month - 1 ||
+            date.getUTCDate() !== day
+        ) {
+            throw new GoogleAdsCreationError(
+                `Invalid Display campaign ${fieldName}.`,
+                400,
+            );
+        }
+
+        const formatted =
+            `${normalized.slice(0, 4)}-${normalized.slice(4, 6)}-${normalized.slice(6, 8)}`;
+
+        return `${formatted} ${isEndDate ? "23:59:59" : "00:00:00"}`;
+    };
+
+    const startDateTime = normalizeCampaignDate(
+        input.campaign.startDate,
+        "start date",
+    );
+
+    const endDateTime = normalizeCampaignDate(
+        input.campaign.endDate,
+        "end date",
+        true,
+    );
+
+    if (
+        startDateTime &&
+        endDateTime &&
+        endDateTime <= startDateTime
+    ) {
+        throw new GoogleAdsCreationError(
+            "Display campaign end date must be later than its start date.",
+            400,
+        );
+    }
+
+    // 5. Validate EU political advertising declaration.
+
+    const allowedPoliticalStatuses = [
+        "DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING",
+        "CONTAINS_EU_POLITICAL_ADVERTISING",
+    ];
+
+    const politicalStatus =
+        input.campaign.containsEuPoliticalAdvertising ??
+        "DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING";
+
+    if (!allowedPoliticalStatuses.includes(politicalStatus)) {
+        throw new GoogleAdsCreationError(
+            "Invalid EU political advertising declaration.",
+            400,
+        );
+    }
+
+    // 6. Validate Ad Group.
+
+    const adGroupName = input.adGroup?.name?.trim();
+
+    if (!adGroupName || adGroupName.length > 255) {
+        throw new GoogleAdsCreationError(
+            "A valid Display Ad Group name is required.",
+            400,
+        );
+    }
+
+    const customerPrefix = `customers/${context.customerId}/`;
+
+    const validatePositiveAmount = (
+        value: number | undefined,
+        fieldName: string,
+    ): number => {
+        if (
+            typeof value !== "number" ||
+            !Number.isFinite(value) ||
+            value <= 0 ||
+            !Number.isSafeInteger(Math.round(value * 1_000_000))
+        ) {
+            throw new GoogleAdsCreationError(
+                `${fieldName} must be a positive valid amount.`,
+                400,
+            );
+        }
+
+        return Math.round(value * 1_000_000);
+    };
+
+    const adGroupBids: Record<string, unknown> = {};
+
+    if (biddingStrategy === "MANUAL_CPC") {
+        adGroupBids[`cpcBidMicros`] = validatePositiveAmount(
+            input.adGroup.defaultCpcBidAmount,
+            "Default CPC bid",
+        );
+    }
+
+    if (biddingStrategy === "MANUAL_CPM") {
+        adGroupBids[`cpmBidMicros`] = validatePositiveAmount(
+            input.adGroup.defaultCpmBidAmount,
+            "Default CPM bid",
+        );
+    }
+
+    // 7. Validate location targets.
+
+    const locations = input.locations ?? [];
+    const seenLocations = new Set<string>();
+
+    for (const location of locations) {
+        const resourceName =
+            location.geoTargetConstantResourceName?.trim();
+
+        if (!/^geoTargetConstants\/\d+$/.test(resourceName)) {
+            throw new GoogleAdsCreationError(
+                `Invalid Google Ads location resource: ${resourceName}`,
+                400,
+            );
+        }
+
+        if (seenLocations.has(resourceName)) {
+            throw new GoogleAdsCreationError(
+                `Duplicate Google Ads location: ${resourceName}`,
+                400,
+            );
+        }
+
+        if (
+            location.negative !== undefined &&
+            typeof location.negative !== "boolean"
+        ) {
+            throw new GoogleAdsCreationError(
+                "Location negative must be a boolean.",
+                400,
+            );
+        }
+
+        seenLocations.add(resourceName);
+    }
+
+    // 8. Validate language targets.
+
+    const languages = input.languages ?? [];
+    const seenLanguages = new Set<string>();
+
+    for (const language of languages) {
+        const resourceName =
+            language.languageConstantResourceName?.trim();
+
+        if (!/^languageConstants\/\d+$/.test(resourceName)) {
+            throw new GoogleAdsCreationError(
+                `Invalid Google Ads language resource: ${resourceName}`,
+                400,
+            );
+        }
+
+        if (seenLanguages.has(resourceName)) {
+            throw new GoogleAdsCreationError(
+                `Duplicate Google Ads language: ${resourceName}`,
+                400,
+            );
+        }
+
+        seenLanguages.add(resourceName);
+    }
+
+    // 9. Validate audience criteria.
+
+    const audienceCriteria = input.adGroup.audienceCriteria ?? [];
+    const seenAudiences = new Set<string>();
+
+    for (const audience of audienceCriteria) {
+        if (audience.type !== "USER_LIST") {
+            throw new GoogleAdsCreationError(
+                "Only USER_LIST audience criteria are supported in this Display flow.",
+                400,
+            );
+        }
+
+        const resourceName = audience.userListResourceName?.trim();
+
+        if (
+
+            !/^customers\/\d+\/userLists\/\d+$/.test(resourceName)
+        ) {
+            throw new GoogleAdsCreationError(
+                `Invalid User List resource name or account mismatch: ${resourceName}`,
+                400,
+            );
+        }
+
+        if (seenAudiences.has(resourceName)) {
+            throw new GoogleAdsCreationError(
+                `Duplicate User List: ${resourceName}`,
+                400,
+            );
+        }
+
+        seenAudiences.add(resourceName);
+    }
+
+    // 10. Validate Responsive Display creative text and URL.
+
+    const creative = input.adCreativeDraft;
+
+    if (creative?.format !== "RESPONSIVE_DISPLAY_AD") {
+        throw new GoogleAdsCreationError(
+            "Display creation requires a RESPONSIVE_DISPLAY_AD creative.",
+            400,
+        );
+    }
+
+    let finalUrl: string;
+
+    try {
+        const parsedUrl = new URL(creative.finalUrl);
+
+        if (!["http:", "https:"].includes(parsedUrl.protocol)) {
+            throw new Error();
+        }
+
+        finalUrl = parsedUrl.toString();
+    } catch {
+        throw new GoogleAdsCreationError(
+            "A valid HTTP or HTTPS Display final URL is required.",
+            400,
+        );
+    }
+
+    const headlines = creative.headlines;
+    const descriptions = creative.descriptions;
+    const longHeadline = creative.longHeadline?.trim();
+    const businessName = creative.businessName?.trim();
+
+    if (
+        !Array.isArray(headlines) ||
+        headlines.length < 1 ||
+        headlines.length > 5 ||
+        !headlines.every(
+            (value) =>
+                typeof value === "string" &&
+                value.trim().length > 0 &&
+                value.trim().length <= 30,
+        )
+    ) {
+        throw new GoogleAdsCreationError(
+            "Provide 1–5 Display headlines, each up to 30 characters.",
+            400,
+        );
+    }
+
+    if (
+        !longHeadline ||
+        longHeadline.length > 90
+    ) {
+        throw new GoogleAdsCreationError(
+            "Display long headline is required and must not exceed 90 characters.",
+            400,
+        );
+    }
+
+    if (
+        !Array.isArray(descriptions) ||
+        descriptions.length < 1 ||
+        descriptions.length > 5 ||
+        !descriptions.every(
+            (value) =>
+                typeof value === "string" &&
+                value.trim().length > 0 &&
+                value.trim().length <= 90,
+        )
+    ) {
+        throw new GoogleAdsCreationError(
+            "Provide 1–5 Display descriptions, each up to 90 characters.",
+            400,
+        );
+    }
+
+    if (!businessName || businessName.length > 25) {
+        throw new GoogleAdsCreationError(
+            "Display business name is required and must not exceed 25 characters.",
+            400,
+        );
+    }
+
+    // 11. Determine whether uploaded Google assets are available.
+
+    const imageAssets = creative.imageAssets;
+
+    const landscapeAssets =
+        imageAssets.marketingImageAssetResourceNames ?? [];
+
+    const squareAssets =
+        imageAssets.squareMarketingImageAssetResourceNames ?? [];
+
+    const hasUploadedAssets =
+        landscapeAssets.length > 0 && squareAssets.length > 0;
+
+    if (
+        validateOnly &&
+        !hasUploadedAssets &&
+        (!imageAssets?.landscapeImageUrl || !imageAssets?.squareImageUrl)
+    ) {
+        throw new GoogleAdsCreationError(
+            "Provide both Display image URL references for Validate Only.",
+            400,
+        );
+    }
+
+    if (
+        (landscapeAssets.length > 0 || squareAssets.length > 0) &&
+        !hasUploadedAssets
+    ) {
+        throw new GoogleAdsCreationError(
+            "Both landscape and square Google Asset resource lists are required.",
+            400,
+        );
+    }
+
+    if (!hasUploadedAssets && !validateOnly) {
+        throw new GoogleAdsCreationError(
+            "Live Display campaign creation requires uploaded Google Ads landscape and square Image Asset resource names. The current prototype contains URL references only.",
+            400,
+        );
+    }
+
+    if (hasUploadedAssets) {
+        const validatedLandscapeAssets = validateGoogleAdsAssetList(
+            context,
+            landscapeAssets,
+            "Display landscape images",
+            1,
+            15,
+        );
+
+        const validatedSquareAssets = validateGoogleAdsAssetList(
+            context,
+            squareAssets,
+            "Display square images",
+            1,
+            15,
+        );
+
+        if (
+            validatedLandscapeAssets.length +
+            validatedSquareAssets.length >
+            15
+        ) {
+            throw new GoogleAdsCreationError(
+                "Responsive Display Ads support a maximum of 15 combined marketing images.",
+                400,
+            );
+        }
+    }
+
+    // 12. Generate temporary resource names.
+
+    const budgetResourceName =
+        createGoogleAdsTemporaryResourceName(context, "campaignBudgets", -1);
+
+    const campaignResourceName =
+        createGoogleAdsTemporaryResourceName(context, "campaigns", -2);
+
+    const adGroupResourceName =
+        createGoogleAdsTemporaryResourceName(context, "adGroups", -3);
+
+    // 13. Build atomic mutation operations.
+
+    const operations: GoogleAdsMutateOperation[] = [];
+
+    const operationIndexes = {
+        budget: -1,
+        campaign: -1,
+        adGroup: -1,
+        locations: [] as number[],
+        languages: [] as number[],
+        audiences: [] as number[],
+        ad: -1,
+    };
+
+    // Campaign Budget.
+
+    operationIndexes.budget = operations.length;
+
+    operations.push({
+        campaignBudgetOperation: {
+            create: {
+                resourceName: budgetResourceName,
+                name: budgetName,
+                amountMicros: String(amountMicros),
+                deliveryMethod: "STANDARD",
+                explicitlyShared: false,
+            },
+        },
+    });
+
+    // Campaign.
+
+    const campaignPayload: Record<string, unknown> = {
+        resourceName: campaignResourceName,
+        name: campaignName,
+        advertisingChannelType: "DISPLAY",
+        status: "PAUSED",
+        campaignBudget: budgetResourceName,
+        containsEuPoliticalAdvertising: politicalStatus,
+        ...biddingConfig,
+    };
+
+    if (startDateTime) {
+        campaignPayload[`startDateTime`] = startDateTime;
+    }
+
+    if (endDateTime) {
+        campaignPayload[`endDateTime`] = endDateTime;
+    }
+
+    operationIndexes.campaign = operations.length;
+
+    operations.push({
+        campaignOperation: {
+            create: campaignPayload,
+        },
+    });
+
+    // Campaign locations.
+
+    for (const location of locations) {
+        operationIndexes.locations.push(operations.length);
+
+        operations.push({
+            campaignCriterionOperation: {
+                create: {
+                    campaign: campaignResourceName,
+                    negative: location.negative === true,
+                    location: {
+                        geoTargetConstant:
+                            location.geoTargetConstantResourceName,
+                    },
+                },
+            },
+        });
+    }
+
+    // Campaign languages.
+
+    for (const language of languages) {
+        operationIndexes.languages.push(operations.length);
+
+        operations.push({
+            campaignCriterionOperation: {
+                create: {
+                    campaign: campaignResourceName,
+                    language: {
+                        languageConstant:
+                            language.languageConstantResourceName,
+                    },
+                },
+            },
+        });
+    }
+
+    // Display Ad Group.
+
+    const adGroupPayload: Record<string, unknown> = {
+        resourceName: adGroupResourceName,
+        name: adGroupName,
+        campaign: campaignResourceName,
+        type: "DISPLAY_STANDARD",
+        status: "PAUSED",
+        ...adGroupBids,
+    };
+
+    operationIndexes.adGroup = operations.length;
+
+    operations.push({
+        adGroupOperation: {
+            create: adGroupPayload,
+        },
+    });
+
+    // User List audience criteria.
+
+    for (const audience of audienceCriteria) {
+        operationIndexes.audiences.push(operations.length);
+
+        operations.push({
+            adGroupCriterionOperation: {
+                create: {
+                    adGroup: adGroupResourceName,
+                    status: "ENABLED",
+                    userList: {
+                        userList: audience.userListResourceName,
+                    },
+                },
+            },
+        });
+    }
+
+    // Responsive Display Ad.
+    // Included only when uploaded Google Asset IDs are available.
+
+    if (hasUploadedAssets) {
+        operationIndexes.ad = operations.length;
+
+        operations.push({
+            adGroupAdOperation: {
+                create: {
+                    adGroup: adGroupResourceName,
+                    status: "PAUSED",
+                    ad: {
+                        finalUrls: [finalUrl],
+                        responsiveDisplayAd: {
+                            businessName,
+                            headlines: headlines.map((text) => ({
+                                text: text.trim(),
+                            })),
+                            longHeadline: {
+                                text: longHeadline,
+                            },
+                            descriptions: descriptions.map((text) => ({
+                                text: text.trim(),
+                            })),
+                            marketingImages: landscapeAssets.map((asset) => ({
+                                asset,
+                            })),
+                            squareMarketingImages: squareAssets.map(
+                                (asset) => ({
+                                    asset,
+                                }),
+                            ),
+                        },
+                    },
+                },
+            },
+        });
+    }
+
+    // 14. Validate or execute the complete mutation.
+
+    const googleResponse = await googleAdsBulkMutate(context, {
+        operations,
+        validateOnly,
+        confirm: input.confirm,
+    });
+
+    // 15. Validation-only response.
+
+    const validationWarnings: string[] = [];
+
+    if (!hasUploadedAssets) {
+        validationWarnings.push(
+            "Campaign, budget, Ad Group and targeting operations were submitted for Google validation. Responsive Display Ad API validation remains pending because image uploads have not been implemented.",
+        );
+    }
+
+    if (validateOnly) {
+        return {
+            validateOnly: true,
+            operationCount: operations.length,
+            assetUploadRequired: !hasUploadedAssets,
+            validationWarnings,
+
+            temporaryResourceNames: {
+                budget: budgetResourceName,
+                campaign: campaignResourceName,
+                adGroup: adGroupResourceName,
+            },
+
+            createdResources: null,
+            googleResponse,
+        };
+    }
+
+    // 16. Extract live resource names.
+
+    const extractRequiredResource = (
+        index: number,
+        label: string,
+    ): string => {
+        const resourceName = getGoogleAdsBulkMutationResourceName(
+            googleResponse,
+            index,
+        );
+
+        if (!resourceName) {
+            throw new GoogleAdsCreationError(
+                `Google Ads did not return the ${label} resource name.`,
+                502,
+                googleResponse,
+            );
+        }
+
+        return resourceName;
+    };
+
+    const extractMultipleResources = (
+        indexes: number[],
+        label: string,
+    ): string[] =>
+        indexes.map((index) =>
+            extractRequiredResource(index, label),
+        );
+
+    return {
+        validateOnly: false,
+        operationCount: operations.length,
+        assetUploadRequired: false,
+        validationWarnings: [],
+
+        temporaryResourceNames: {
+            budget: budgetResourceName,
+            campaign: campaignResourceName,
+            adGroup: adGroupResourceName,
+        },
+
+        createdResources: {
+            budget: extractRequiredResource(
+                operationIndexes.budget,
+                "Display Campaign Budget",
+            ),
+            campaign: extractRequiredResource(
+                operationIndexes.campaign,
+                "Display Campaign",
+            ),
+            adGroup: extractRequiredResource(
+                operationIndexes.adGroup,
+                "Display Ad Group",
+            ),
+            locationCriteria: extractMultipleResources(
+                operationIndexes.locations,
+                "Location Criterion",
+            ),
+            languageCriteria: extractMultipleResources(
+                operationIndexes.languages,
+                "Language Criterion",
+            ),
+            audienceCriteria: extractMultipleResources(
+                operationIndexes.audiences,
+                "Audience Criterion",
+            ),
+            responsiveDisplayAd:
+                operationIndexes.ad >= 0
+                    ? extractRequiredResource(
+                        operationIndexes.ad,
+                        "Responsive Display Ad",
+                    )
+                    : null,
+        },
 
         googleResponse,
     };

@@ -26,6 +26,7 @@ import {
   TextField,
   Tooltip,
   Typography,
+  Select,
 } from "@mui/material";
 
 type ProviderKey = "googleAds" | "metaAds";
@@ -594,7 +595,9 @@ export default function CampaignsPage({
     "all",
   );
   const [statusFilter, setStatusFilter] = useState<string>("all");
-
+  const [updatingStatusKey, setUpdatingStatusKey] = useState<string | null>(
+    null,
+  );
   const loadCampaigns = useCallback(async () => {
     setLoading(true);
 
@@ -753,17 +756,16 @@ export default function CampaignsPage({
         console.log("eer");
       }
 
-      const { token, userId } = response.data;
+      const { token } = response.data;
       const backendUrl = process.env.BACKEND_API_URL || "http://localhost:5000";
 
       await axios.post(
-        "/api/campaigns/rename",
+        `${backendUrl}/api/campaigns/rename`,
         {
           provider: campaign.provider,
           campaignId: campaign.id,
           accountId: campaign.accountId,
           name: newName,
-          userId: userId,
         },
         {
           headers: {
@@ -841,6 +843,69 @@ export default function CampaignsPage({
     setSearch("");
     setPlatformFilter("all");
     setStatusFilter("all");
+  };
+
+  const handleStatusChange = async (
+    campaign: GlobalCampaign,
+    newStatus: string,
+  ) => {
+    const rowKey = `${campaign.provider}:${campaign.id}`;
+
+    if (newStatus === campaign.status) return;
+
+    try {
+      setUpdatingStatusKey(rowKey);
+      const tokenData = await axios.get("/api/token");
+      if (!tokenData.data) {
+        console.log("eer");
+      }
+
+      const { token } = tokenData.data;
+      const backendUrl = process.env.B;
+      const response = await axios.post(
+        `${backendUrl}/api/campaigns/status`,
+        {
+          provider: campaign.provider,
+          campaignId: campaign.id,
+          status: newStatus,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        },
+      );
+
+      if (!response.data?.success) {
+        throw new Error(
+          response.data?.message || "Failed to update campaign status.",
+        );
+      }
+
+      setCampaigns((current) =>
+        current.map((item) =>
+          item.provider === campaign.provider && item.id === campaign.id
+            ? {
+                ...item,
+                status: newStatus,
+              }
+            : item,
+        ),
+      );
+    } catch (error: unknown) {
+      console.error("Campaign status update failed:", error);
+
+      const message = axios.isAxiosError(error)
+        ? error.response?.data?.message || error.message
+        : error instanceof Error
+          ? error.message
+          : "Failed to update campaign status.";
+
+      setError(message);
+    } finally {
+      setUpdatingStatusKey(null);
+    }
   };
 
   return (
@@ -993,14 +1058,17 @@ export default function CampaignsPage({
         {/* Toolbar */}
         <Stack
           direction={{ xs: "column", md: "row" }}
-          justifyContent="space-between"
-          alignItems={{ xs: "stretch", md: "center" }}
           spacing={2}
           sx={{ px: 2.5, py: 2, borderBottom: 1, borderColor: "divider" }}
         >
           <Box>
             <Stack direction="row" alignItems="center" spacing={1}>
-              <Typography variant="h6" fontWeight={700}>
+              <Typography
+                variant="h6"
+                sx={{
+                  fontWeight: "700",
+                }}
+              >
                 All campaigns
               </Typography>
               <Chip
@@ -1083,10 +1151,13 @@ export default function CampaignsPage({
         {/* Content */}
         {loading ? (
           <Stack
-            alignItems="center"
-            justifyContent="center"
             spacing={2}
-            sx={{ py: 10 }}
+            sx={{
+              py: 10,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
           >
             <CircularProgress />
             <Typography variant="body2" color="text.secondary">
@@ -1095,7 +1166,12 @@ export default function CampaignsPage({
           </Stack>
         ) : campaigns.length === 0 ? (
           <Box sx={{ p: 6, textAlign: "center" }}>
-            <Typography variant="h6" fontWeight={700} gutterBottom>
+            <Typography
+              variant="h6"
+              sx={{
+                fontWeight: "700",
+              }}
+            >
               No campaigns yet
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
@@ -1114,7 +1190,12 @@ export default function CampaignsPage({
           </Box>
         ) : filteredCampaigns.length === 0 ? (
           <Box sx={{ p: 6, textAlign: "center" }}>
-            <Typography variant="h6" fontWeight={700} gutterBottom>
+            <Typography
+              variant="h6"
+              sx={{
+                fontWeight: "700",
+              }}
+            >
               No matching campaigns
             </Typography>
             <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
@@ -1458,12 +1539,34 @@ export default function CampaignsPage({
                           {formatRatio(getMetric(campaign, "roas"))}
                         </TableCell>
                         <TableCell>
-                          <Chip
-                            label={status}
-                            color={getStatusColor(status)}
+                          <Select
                             size="small"
-                            variant="outlined"
-                          />
+                            value={status || ""}
+                            displayEmpty
+                            disabled={updatingStatusKey === rowKey}
+                            onChange={(event) =>
+                              handleStatusChange(campaign, event.target.value)
+                            }
+                            sx={{
+                              minWidth: 125,
+                              borderRadius: 2,
+                              fontSize: 13,
+                            }}
+                          >
+                            <MenuItem value="" disabled>
+                              Unknown
+                            </MenuItem>
+
+                            {campaign.provider === "googleAds" && (
+                              <MenuItem value="ENABLED">Enabled</MenuItem>
+                            )}
+
+                            {campaign.provider === "metaAds" && (
+                              <MenuItem value="ACTIVE">Active</MenuItem>
+                            )}
+
+                            <MenuItem value="PAUSED">Paused</MenuItem>
+                          </Select>
                         </TableCell>
                         <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
                           <Button

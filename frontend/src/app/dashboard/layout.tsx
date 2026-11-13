@@ -2,50 +2,41 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  ClerkProvider,
-  Show,
-  SignInButton,
-  SignUpButton,
-  UserButton,
-} from "@clerk/nextjs";
-import { Suspense } from "react";
+import { Show, UserButton } from "@clerk/nextjs";
+import { Suspense, useState } from "react";
+
+// ── MUI Components ──────────────────────────────────────
+import { Box, Drawer, IconButton, Tooltip } from "@mui/material";
+
+// ── MUI Icons ───────────────────────────────────────────
+import DashboardOutlinedIcon from "@mui/icons-material/DashboardOutlined";
+import CampaignOutlinedIcon from "@mui/icons-material/CampaignOutlined";
+import CableOutlinedIcon from "@mui/icons-material/CableOutlined";
+import MenuOutlinedIcon from "@mui/icons-material/MenuOutlined";
+import CloseOutlinedIcon from "@mui/icons-material/CloseOutlined";
+import HelpOutlineOutlinedIcon from "@mui/icons-material/HelpOutlineOutlined";
+import ChevronRightOutlinedIcon from "@mui/icons-material/ChevronRightOutlined";
+import AutoAwesomeOutlinedIcon from "@mui/icons-material/AutoAwesomeOutlined";
+
 const navigation = [
   {
     label: "Overview",
     href: "/dashboard",
-    icon: "▦",
+    icon: DashboardOutlinedIcon,
+    description: "Workspace summary & KPIs",
   },
   {
     label: "Campaigns",
     href: "/dashboard/campaigns",
-    icon: "◫",
+    icon: CampaignOutlinedIcon,
+    description: "Create & manage campaigns",
   },
   {
     label: "Provider Settings",
     href: "/dashboard/provider",
-    icon: "⚙",
+    icon: CableOutlinedIcon,
+    description: "Connect Google & Meta accounts",
   },
-  // {
-  //   label: "Ad Accounts",
-  //   href: "/dashboard/accounts",
-  //   icon: "▣",
-  // },
-  // {
-  //   label: "Reports",
-  //   href: "/dashboard/reports",
-  //   icon: "▤",
-  // },
-  // {
-  //   label: "Audiences",
-  //   href: "/dashboard/audiences",
-  //   icon: "◎",
-  // },
-  // {
-  //   label: "Creative Library",
-  //   href: "/dashboard/creatives",
-  //   icon: "▧",
-  // },
 ];
 
 export default function DashboardLayout({
@@ -54,15 +45,13 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }>) {
   const pathname = usePathname();
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   const isActive = (href: string) => {
-    if (href === "/dashboard") {
-      return pathname === href;
-    }
+    if (href === "/dashboard") return pathname === href;
 
     if (href === "/dashboard/campaigns") {
       if (pathname === "/dashboard/campaigns/new") return true;
-      // Keep the dedicated Drafts item active on the drafts screen.
       if (
         pathname === "/dashboard/campaigns/drafts" ||
         pathname.startsWith("/dashboard/campaigns/drafts/")
@@ -74,160 +63,215 @@ export default function DashboardLayout({
     return pathname === href || pathname.startsWith(`${href}/`);
   };
 
-  return (
-    <div className="flex min-h-screen bg-slate-50 text-slate-900">
-      {/* Desktop Sidebar */}
-      <aside className="hidden w-64 shrink-0 flex-col border-r border-slate-200 bg-white md:flex">
-        <div className="border-b border-slate-200 px-6 py-6">
-          <Link href="/dashboard" className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600 text-lg font-bold text-white">
-              U
-            </div>
+  const activeItem = [...navigation]
+    .filter((item) => isActive(item.href))
+    .sort((a, b) => b.href.length - a.href.length)[0];
 
-            <div>
-              <h1 className="text-lg font-bold">adsyntra</h1>
-              <p className="text-xs text-slate-500">Management Platform</p>
-            </div>
-          </Link>
-        </div>
+  const currentPageTitle =
+    pathname === "/dashboard/campaigns/new"
+      ? "Create campaign"
+      : (activeItem?.label ??
+        (pathname === "/dashboard/settings" ? "Settings" : "Workspace"));
 
-        <div className="flex-1 px-4 py-6">
-          <p className="mb-3 px-3 text-xs font-semibold uppercase tracking-wider text-slate-400">
-            Workspace
-          </p>
+  // ── Sidebar (shared between desktop & mobile) ─────────
+  const sidebarContent = (
+    <>
+      {/* Brand */}
+      <div className="border-b border-slate-200 px-5 py-5">
+        <Link href="/dashboard" className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-600 to-indigo-600 text-sm font-bold text-white shadow-md shadow-blue-500/20">
+            AS
+          </div>
+          <div>
+            <h1 className="text-sm font-bold tracking-tight text-slate-900">
+              AdSyntra
+            </h1>
+            <p className="text-[11px] leading-none text-slate-500">
+              Unified Ads Platform
+            </p>
+          </div>
+        </Link>
+      </div>
 
-          <nav className="space-y-1">
-            {navigation.map((item) => {
-              const active = isActive(item.href);
+      {/* Nav */}
+      <div className="flex-1 overflow-y-auto px-3 py-5">
+        <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
+          Workspace
+        </p>
 
-              return (
+        <nav className="space-y-0.5">
+          {navigation.map((item) => {
+            const active = isActive(item.href);
+            const Icon = item.icon;
+
+            return (
+              <Tooltip
+                key={item.href}
+                title={item.description}
+                placement="right"
+                arrow
+                enterDelay={700}
+              >
                 <Link
-                  key={item.href}
                   href={item.href}
                   aria-current={active ? "page" : undefined}
-                  className={`flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition ${
+                  onClick={() => setMobileOpen(false)}
+                  className={`group flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
                     active
                       ? "bg-blue-50 text-blue-700"
                       : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
                   }`}
                 >
-                  <span className="flex h-6 w-6 items-center justify-center text-lg">
-                    {item.icon}
-                  </span>
-
-                  {item.label}
+                  <Icon
+                    sx={{
+                      fontSize: 20,
+                      color: active ? "primary.main" : "inherit",
+                    }}
+                  />
+                  <span className="flex-1">{item.label}</span>
+                  {active && (
+                    <span className="h-1.5 w-1.5 rounded-full bg-blue-600" />
+                  )}
                 </Link>
-              );
-            })}
-          </nav>
+              </Tooltip>
+            );
+          })}
+        </nav>
 
-          {/* <div className="my-6 border-t border-slate-100" />
+        <div className="my-4 border-t border-slate-100" />
 
-          <p className="mb-3 px-3 text-xs font-semibold uppercase tracking-wider text-slate-400">
-            Configuration
-          </p>
+        <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
+          Resources
+        </p>
 
-          <nav className="space-y-1">
-            <Link
-              href="/provider"
-              className={`flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition ${
-                pathname === "/provider"
-                  ? "bg-blue-50 text-blue-700"
-                  : "text-slate-600 hover:bg-slate-100"
-              }`}
-            >
-              <span className="flex h-6 w-6 items-center justify-center text-lg">
-                ⚙
-              </span>
-              Connections
-            </Link>
+        <nav className="space-y-0.5">
+          <Link
+            href="/dashboard/help"
+            className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
+          >
+            <HelpOutlineOutlinedIcon sx={{ fontSize: 20 }} />
+            <span>Help &amp; Support</span>
+          </Link>
+        </nav>
+      </div>
 
-            <Link
-              href="/dashboard/settings"
-              className={`flex items-center gap-3 rounded-xl px-3 py-3 text-sm font-medium transition ${
-                isActive("/dashboard/settings")
-                  ? "bg-blue-50 text-blue-700"
-                  : "text-slate-600 hover:bg-slate-100"
-              }`}
-            >
-              <span className="flex h-6 w-6 items-center justify-center text-lg">
-                ⚙
-              </span>
-              Settings
-            </Link>
-          </nav> */}
+      {/* Footer promo card */}
+      <div className="border-t border-slate-200 p-3">
+        <div className="rounded-xl bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 p-3 ring-1 ring-blue-100">
+          <div className="flex items-start gap-2">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white shadow-sm">
+              <AutoAwesomeOutlinedIcon
+                sx={{ fontSize: 16, color: "primary.main" }}
+              />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-semibold text-slate-900">
+                AI Creative Studio
+              </p>
+              <p className="mt-0.5 text-[10px] leading-snug text-slate-500">
+                Generate ads for Google &amp; Meta in seconds.
+              </p>
+              <Link
+                href="/dashboard/campaigns/new"
+                className="mt-2 inline-flex items-center gap-1 text-[10px] font-semibold text-blue-700 hover:text-blue-800"
+              >
+                Try it now
+                <ChevronRightOutlinedIcon sx={{ fontSize: 12 }} />
+              </Link>
+            </div>
+          </div>
         </div>
+        <p className="mt-3 px-1 text-[10px] text-slate-400">
+          © {new Date().getFullYear()} AdSyntra
+        </p>
+      </div>
+    </>
+  );
 
-        <div className="border-t border-slate-200 p-4">
-          <p className="text-xs text-slate-400">
-            adsyntra - Unified Ads Platform
-          </p>
-          <p className="mt-1 text-xs text-slate-500">
-            Manage multiple ad platforms in one place.
-          </p>
-        </div>
+  return (
+    <div className="flex min-h-screen bg-slate-50 text-slate-900">
+      {/* ── Desktop Sidebar ─────────────────────────────── */}
+      <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-slate-200 bg-white md:flex">
+        {sidebarContent}
       </aside>
 
-      {/* Main Content */}
+      {/* ── Mobile Drawer (MUI) ─────────────────────────── */}
+      <Drawer
+        anchor="left"
+        open={mobileOpen}
+        onClose={() => setMobileOpen(false)}
+        ModalProps={{ keepMounted: true }}
+        PaperProps={{
+          sx: {
+            width: 280,
+            display: "flex",
+            flexDirection: "column",
+          },
+        }}
+      >
+        <Box sx={{ display: "flex", justifyContent: "flex-end", p: 1 }}>
+          <IconButton
+            size="small"
+            onClick={() => setMobileOpen(false)}
+            aria-label="Close menu"
+          >
+            <CloseOutlinedIcon fontSize="small" />
+          </IconButton>
+        </Box>
+        {sidebarContent}
+      </Drawer>
+
+      {/* ── Main column ─────────────────────────────────── */}
       <div className="flex min-w-0 flex-1 flex-col">
         {/* Mobile Header */}
-        <div className="border-b border-slate-200 bg-white px-4 py-4 md:hidden">
-          <Link href="/dashboard" className="flex items-center gap-2">
-            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-600 font-bold text-white">
-              U
-            </div>
-            <span className="font-bold">Unified Ads</span>
-          </Link>
-
-          <nav className="mt-4 flex gap-2 overflow-x-auto pb-1">
-            {navigation.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={`shrink-0 rounded-lg px-3 py-2 text-xs font-medium ${
-                  isActive(item.href)
-                    ? "bg-blue-600 text-white"
-                    : "bg-slate-100 text-slate-600"
-                }`}
-              >
-                {item.label}
-              </Link>
-            ))}
-
-            <Link
-              href="/dashboard/provider"
-              className="shrink-0 rounded-lg bg-slate-100 px-3 py-2 text-xs font-medium text-slate-600"
+        <div className="sticky top-0 z-40 flex items-center justify-between border-b border-slate-200 bg-white/80 px-4 py-3 backdrop-blur-md md:hidden">
+          <div className="flex items-center gap-2">
+            <IconButton
+              size="small"
+              onClick={() => setMobileOpen(true)}
+              sx={{ ml: -1 }}
+              aria-label="Open menu"
             >
-              Connections
+              <MenuOutlinedIcon />
+            </IconButton>
+            <Link href="/dashboard" className="flex items-center gap-2">
+              <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-blue-600 to-indigo-600 text-xs font-bold text-white">
+                AS
+              </div>
+              <span className="text-sm font-bold text-slate-900">AdSyntra</span>
             </Link>
-          </nav>
+          </div>
+
+          <Suspense fallback={<div className="h-8 w-8" />}>
+            <Show when="signed-in">
+              <UserButton appearance={{ elements: { avatarBox: "h-8 w-8" } }} />
+            </Show>
+          </Suspense>
         </div>
 
         {/* Desktop Topbar */}
-        <header className="hidden h-16 items-center justify-between border-b border-slate-200 bg-white px-8 md:flex">
+        <header className="sticky top-0 z-40 hidden h-16 items-center justify-between border-b border-slate-200 bg-white/80 px-8 backdrop-blur-md md:flex">
           <div>
-            <p className="text-sm font-semibold">
-              {pathname === "/dashboard/campaigns/new"
-                ? "Create campaign"
-                : ([...navigation]
-                    .filter((item) => isActive(item.href))
-                    .sort((a, b) => b.href.length - a.href.length)[0]?.label ??
-                  (pathname === "/dashboard/settings"
-                    ? "Settings"
-                    : "Workspace"))}
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">
+              Workspace
+            </p>
+            <p className="text-sm font-bold text-slate-900">
+              {currentPageTitle}
             </p>
           </div>
 
-          <div className="flex items-center justify-end space-x-6">
+          <div className="flex items-center gap-3">
             <Link
               href="/dashboard/provider"
-              className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 hover:bg-slate-50"
+              className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:border-slate-300 hover:bg-slate-50"
             >
               Manage Connections
             </Link>
-            <Suspense>
+            <Suspense fallback={<div className="h-9 w-9" />}>
               <Show when="signed-in">
-                <UserButton />
+                <UserButton
+                  appearance={{ elements: { avatarBox: "h-9 w-9" } }}
+                />
               </Show>
             </Suspense>
           </div>

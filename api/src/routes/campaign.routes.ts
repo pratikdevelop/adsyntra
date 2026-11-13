@@ -36,15 +36,16 @@ import {
     searchMetaDetailedTargeting,
     MetaTargetingSearchError,
 } from "../metaadsAPI/services/targeting.js";
-import { parseMutationMode } from '../googleadsAPI/utils/safety.js'
 import {
     getCampaigns as getGoogleCampaigns,
     renameCampaign as renameGoogleCampaign,
+    updateGoogleAdsStatus
 } from "../googleadsAPI/services/campaign.js";
 
 import {
     getCampaigns as getMetaCampaigns,
     renameCampaign as renameMetaCampaign,
+    updateMetaAdsStatus
 } from "../metaadsAPI/services/campaign.js";
 const router = Router();
 
@@ -673,11 +674,6 @@ const mergeGoogleCampaigns = (
     });
 };
 
-/**
- * GET /api/campaigns/meta/targeting/locations
- *
- * Search Meta geographic targeting locations for the campaign builder.
- */
 router.get(
     "/meta/targeting/locations",
     async (req: any, res: Response) => {
@@ -759,13 +755,6 @@ router.get(
     },
 );
 
-
-/**
- * POST /api/campaigns
- * Creates the unified application campaign record and validates that every
- * selected provider account belongs to the authenticated user and has an
- * active provider connection. Provider mutations are added in later phases.
- */
 router.post("/", async (req: Request, res: Response) => {
     try {
         const auth = getAuth(req);
@@ -1376,19 +1365,6 @@ router.post("/", async (req: Request, res: Response) => {
     }
 });
 
-
-/**
- * POST /api/campaigns/:campaignId/meta/ad-set/retry
- *
- * Retries only the Ad Set step for a Meta campaign that was
- * partially created. It reuses the existing Meta Campaign ID.
- *
- * Body:
- * {
- *   "confirm": true,
- *   "billing_event": "IMPRESSIONS"
- * }
- */
 router.post(
     "/:campaignId/meta/ad-set/retry",
     async (req: Request, res: Response) => {
@@ -1830,21 +1806,6 @@ router.post(
     },
 );
 
-
-/**
- * POST /api/campaigns/:campaignId/meta/creative/retry
- *
- * Retries only Creative creation.
- * Reuses the existing Meta Campaign and Ad Set IDs.
- *
- * Body:
- * {
- *   "confirm": true,
- *   "creative": {
- *     "imageUrl": "https://your-domain.com/product.jpg"
- *   }
- * }
- */
 router.post(
     "/:campaignId/meta/creative/retry",
     async (req: any, res: Response) => {
@@ -2493,11 +2454,6 @@ router.get("/", async (req: Request, res: Response) => {
     }
 });
 
-/**
- * GET /api/campaigns/meta/targeting/detailed
- *
- * Search Meta interests, behaviours and demographic categories.
- */
 router.get(
     "/meta/targeting/detailed",
     async (req: any, res: Response) => {
@@ -2566,7 +2522,6 @@ router.get(
     },
 );
 
-// GET /api/campaigns/meta/audiences/custom
 router.get(
     "/meta/audiences/custom",
     async (req: any, res: any) => {
@@ -2619,7 +2574,6 @@ router.get(
         }
     },
 );
-// GET /api/campaigns/meta/audiences/saved
 router.get(
     "/meta/audiences/saved",
     async (req: any, res: any) => {
@@ -2673,12 +2627,6 @@ router.get(
     },
 );
 
-/**
- * POST /api/campaigns/rename
- *
- * Renames a campaign on Google Ads or Meta Ads.
- * Updates the matching MongoDB provider configuration after provider success.
- */
 router.post("/rename", async (req: Request, res: Response) => {
     try {
         // 1. Authenticate the user.
@@ -2692,7 +2640,7 @@ router.post("/rename", async (req: Request, res: Response) => {
         }
 
         // 2. Validate request body.
-        const { provider, campaignId, name } = req.body ?? {};
+        const { provider, campaignId, name }: any = req.body ?? {};
 
         if (provider !== "googleAds" && provider !== "metaAds") {
             return res.status(400).json({
@@ -2742,6 +2690,7 @@ router.post("/rename", async (req: Request, res: Response) => {
         }
 
         const accountId = selectedAccount.externalAccountId;
+
 
         // 4. Rename the campaign on the actual advertising platform.
         let providerResponse: unknown;
@@ -2793,8 +2742,8 @@ router.post("/rename", async (req: Request, res: Response) => {
                     ? normalizeGoogleAccountId(value)
                     : normalizeMetaAccountId(value);
 
-            const campaignDocument = campaignDocuments.find((document) => {
-                const providerData = document.providers?.[provider];
+            const campaignDocument: any = campaignDocuments.find((document: any) => {
+                const providerData: any = document.providers?.[provider] as any;
 
                 return (
                     providerData &&
@@ -2880,6 +2829,266 @@ router.post("/rename", async (req: Request, res: Response) => {
         });
     } catch (error) {
         console.error("Global campaign rename error:", error);
+
+        return res.status(500).json({
+            success: false,
+            message: getErrorMessage(error),
+        });
+    }
+});
+
+router.post("/status", async (req: Request, res: Response) => {
+    try {
+        // 1. Authenticate the user.
+        const { userId } = getAuth(req);
+
+        if (!userId) {
+            return res.status(401).json({
+                success: false,
+                message: "Authentication required.",
+            });
+        }
+
+        // 2. Validate the request centrally.
+        const {
+            provider,
+            campaignId,
+            status,
+            validateOnly: rawValidateOnly,
+        } = req.body ?? {};
+
+        if (provider !== "googleAds" && provider !== "metaAds") {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid provider. Use googleAds or metaAds.",
+            });
+        }
+
+        if (
+            typeof campaignId !== "string" ||
+            !/^\d+$/.test(campaignId.trim())
+        ) {
+            return res.status(400).json({
+                success: false,
+                message: "A valid provider campaign ID is required.",
+            });
+        }
+
+        if (typeof status !== "string" || !status.trim()) {
+            return res.status(400).json({
+                success: false,
+                message: "Campaign status is required.",
+            });
+        }
+
+        const normalizedCampaignId = campaignId.trim();
+        const newStatus = status.trim().toUpperCase();
+
+        const allowedStatuses =
+            provider === "googleAds"
+                ? ["ENABLED", "PAUSED"]
+                : ["ACTIVE", "PAUSED"];
+
+        if (!allowedStatuses.includes(newStatus)) {
+            return res.status(400).json({
+                success: false,
+                message: `Invalid ${provider} campaign status. Allowed statuses: ${allowedStatuses.join(", ")}.`,
+            });
+        }
+
+        const validateOnly =
+            rawValidateOnly === undefined ? false : rawValidateOnly;
+
+        if (typeof validateOnly !== "boolean") {
+            return res.status(400).json({
+                success: false,
+                message: "validateOnly must be a boolean.",
+            });
+        }
+
+        // Meta's status mutation does not support Google's validateOnly option.
+        if (provider === "metaAds" && validateOnly) {
+            return res.status(400).json({
+                success: false,
+                message: "validateOnly is currently supported only for Google Ads.",
+            });
+        }
+
+        const providerKey = provider as "googleAds" | "metaAds";
+
+        // 3. Resolve the user's selected provider account.
+        const selectedAccount = await AdAccountModel.findOne({
+            userId,
+            provider: providerKey,
+            isSelected: true,
+        })
+            .select("externalAccountId")
+            .lean();
+
+        if (!selectedAccount?.externalAccountId) {
+            return res.status(409).json({
+                success: false,
+                message: `No selected ${providerKey} account found. Please select an account first.`,
+            });
+        }
+
+        const accountId = selectedAccount.externalAccountId;
+
+        // 4. Update campaign status on the advertising platform.
+        let providerResponse: unknown;
+
+        try {
+            if (providerKey === "googleAds") {
+                // Google API expects the customer resource name.
+                const customerId = String(accountId)
+                    .trim()
+                    .replace(/^customers\//i, "")
+                    .replace(/-/g, "");
+
+                if (!/^\d+$/.test(customerId)) {
+                    return res.status(409).json({
+                        success: false,
+                        message: "The selected Google Ads customer ID is invalid.",
+                    });
+                }
+
+                providerResponse = await updateGoogleAdsStatus(
+                    normalizedCampaignId,
+                    newStatus,
+                    userId,
+                    `customers/${customerId}`,
+                    validateOnly,
+                );
+            } else {
+                providerResponse = await updateMetaAdsStatus(
+                    normalizedCampaignId,
+                    newStatus,
+                    userId,
+                );
+            }
+        } catch (providerError) {
+            console.error(
+                `${providerKey} campaign status update failed:`,
+                providerError,
+            );
+
+            return res.status(502).json({
+                success: false,
+                message: getErrorMessage(providerError),
+                provider: providerKey,
+                campaignId: normalizedCampaignId,
+                requestedStatus: newStatus,
+                providerUpdated: false,
+                databaseUpdated: false,
+            });
+        }
+
+        // 5. validateOnly checks the Google request without changing anything.
+        if (validateOnly) {
+            return res.status(200).json({
+                success: true,
+                message: "Status validation completed. Campaign was not changed.",
+                provider: providerKey,
+                campaignId: normalizedCampaignId,
+                newStatus,
+                validateOnly: true,
+                providerUpdated: false,
+                databaseUpdated: false,
+                providerResponse,
+            });
+        }
+
+        // 6. Synchronize the provider-specific campaign configuration in MongoDB.
+        let databaseUpdated = false;
+
+        try {
+            const campaignDocuments = await CampaignModel.find({
+                ownerUserId: userId,
+                [`providers.${providerKey}.providerCampaignId`]:
+                    normalizedCampaignId,
+            });
+
+            const normalizeAccountId = (value: unknown) =>
+                providerKey === "googleAds"
+                    ? normalizeGoogleAccountId(value)
+                    : normalizeMetaAccountId(value);
+
+            const campaignDocument = campaignDocuments.find((document) => {
+                const providerData = document.providers?.[providerKey];
+
+                return (
+                    providerData &&
+                    normalizeAccountId(providerData.accountId) ===
+                    normalizeAccountId(accountId)
+                );
+            });
+
+            if (campaignDocument) {
+                const providerData =
+                    campaignDocument.providers[providerKey];
+
+                if (providerData) {
+                    const configuration =
+                        providerData.configuration ?? {};
+
+                    const existingCampaignConfiguration = isRecord(
+                        configuration.campaign,
+                    )
+                        ? configuration.campaign
+                        : {};
+
+                    providerData.configuration = {
+                        ...configuration,
+                        campaign: {
+                            ...existingCampaignConfiguration,
+                            status: newStatus,
+                        },
+                    };
+
+                    providerData.lastSyncedAt = new Date();
+
+                    campaignDocument.markModified(
+                        `providers.${providerKey}.configuration`,
+                    );
+
+                    await campaignDocument.save();
+
+                    databaseUpdated = true;
+                }
+            }
+        } catch (databaseError) {
+            console.error(
+                "Campaign status updated on provider, but MongoDB update failed:",
+                databaseError,
+            );
+
+            return res.status(500).json({
+                success: false,
+                message:
+                    "Campaign status was updated on the provider, but the local database update failed.",
+                provider: providerKey,
+                campaignId: normalizedCampaignId,
+                newStatus,
+                providerUpdated: true,
+                databaseUpdated: false,
+                error: getErrorMessage(databaseError),
+            });
+        }
+
+        // 7. Return the final result.
+        return res.status(200).json({
+            success: true,
+            message: `${providerKey === "googleAds" ? "Google Ads" : "Meta Ads"} campaign status updated to ${newStatus}.`,
+            provider: providerKey,
+            campaignId: normalizedCampaignId,
+            newStatus,
+            validateOnly: false,
+            providerUpdated: true,
+            databaseUpdated,
+            providerResponse,
+        });
+    } catch (error) {
+        console.error("Global campaign status update error:", error);
 
         return res.status(500).json({
             success: false,

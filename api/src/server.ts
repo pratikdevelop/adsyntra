@@ -127,6 +127,7 @@ async function startServer(): Promise<void> {
       if (isShuttingDown) {
         return;
       }
+      
 
       isShuttingDown = true;
 

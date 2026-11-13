@@ -61,25 +61,15 @@ import {
   Alert,
   Box,
   Button,
-  Card,
-  CardContent,
-  Checkbox,
   Chip,
   CircularProgress,
-  Divider,
-  FormControl,
-  FormControlLabel,
-  Grid,
-  InputLabel,
-  LinearProgress,
-  MenuItem,
   Paper,
-  Select,
-  Stack,
+  Step,
+  StepButton,
+  Stepper,
   Tab,
   Tabs,
   TextField,
-  Typography,
 } from "@mui/material";
 
 const API_BASE_URL =
@@ -486,6 +476,8 @@ export default function CreateCampaignPage() {
   const [connectionError, setConnectionError] = useState("");
   const [error, setError] = useState("");
   const [step, setStep] = useState(1);
+  // Tracks the furthest wizard step reached so completed steps can be reopened directly.
+  const [furthestStep, setFurthestStep] = useState(1);
   const [selectedPlatforms, setSelectedPlatforms] = useState<ProviderName[]>(
     [],
   );
@@ -2315,6 +2307,38 @@ export default function CreateCampaignPage() {
     return true;
   };
 
+  const markStepReached = (targetStep: number) => {
+    const nextStep = Math.min(5, Math.max(1, targetStep));
+    setStep(nextStep);
+    setFurthestStep((current) => Math.max(current, nextStep));
+  };
+
+  // Previously reached steps can be opened directly. Backward jumps are
+  // immediate; forward jumps revalidate every step being left so required
+  // fields cannot be skipped after an earlier edit.
+  const handleStepClick = (targetStep: number) => {
+    if (targetStep < 1 || targetStep > furthestStep || targetStep > 5) return;
+
+    if (targetStep > step) {
+      for (
+        let stepToValidate = step;
+        stepToValidate < targetStep;
+        stepToValidate += 1
+      ) {
+        let isValid = true;
+        if (stepToValidate === 1) isValid = validateBasics();
+        if (stepToValidate === 2) isValid = validatePlatformSettings();
+        if (stepToValidate === 3) isValid = validateAdStructure();
+        if (stepToValidate === 4) isValid = validateAdCreation();
+        if (!isValid) return;
+      }
+    }
+
+    setStep(targetStep);
+    setError("");
+    clearPreview();
+  };
+
   const goNext = () => {
     if (step === 1 && !validateBasics()) return;
     if (step === 2 && !validatePlatformSettings()) return;
@@ -2322,7 +2346,7 @@ export default function CreateCampaignPage() {
     if (step === 4 && !validateAdCreation()) return;
     clearPreview();
     setError("");
-    setStep((current) => Math.min(current + 1, 5));
+    markStepReached(step + 1);
   };
 
   const goBack = () => {
@@ -3425,88 +3449,257 @@ export default function CreateCampaignPage() {
       splitValues(value).filter(isRealMetaId);
 
     const providers: CampaignExecutionPayload["providers"] = {};
-
-    // --------------------------------------------------
-    // GOOGLE ADS — current global creation flow: SEARCH
-    // --------------------------------------------------
-    if (selectedPlatforms.includes("googleAds")) {
-      if (googleCampaignType !== "SEARCH") {
-        throw new Error(
-          "The current global Google Ads creation flow supports SEARCH campaigns only.",
-        );
-      }
-
+    const buildGoogleDisplayProvider = () => {
       if (effectiveGoogleBudgetMode !== "DAILY") {
         throw new Error(
-          "The current Google Search creation flow supports a daily budget. Campaign-total budgets need a separate backend implementation.",
+          "Google Display currently supports a daily budget in this campaign creation flow.",
         );
       }
 
-      const googleFinalUrl = googleSearchFinalUrl.trim() || websiteUrl.trim();
+      const accountId = connections.googleAds.selectedAccountId;
+
+      if (!accountId) {
+        throw new Error("Connect and select a Google Ads account.");
+      }
+
+      const displayFinalUrl = googleDisplayFinalUrl.trim() || websiteUrl.trim();
+
+      // Validate final URL.
+      try {
+        const url = new URL(displayFinalUrl);
+
+        if (!["https:", "http:"].includes(url.protocol)) {
+          throw new Error();
+        }
+      } catch {
+        throw new Error("Enter a valid Google Display final URL.");
+      }
+
+      // Validate creative text.
+      const headlines = splitValues(googleDisplayHeadlines);
+      const descriptions = splitValues(googleDisplayDescriptions);
+      const longHeadline = googleDisplayLongHeadline.trim();
+      const displayBusinessName = googleDisplayBusinessName.trim();
 
       if (
-        effectiveGooglePerformanceGoal === "IMPRESSION_SHARE" ||
-        effectiveGoogleBiddingStrategy === "TARGET_IMPRESSION_SHARE"
+        headlines.length < 1 ||
+        headlines.length > 5 ||
+        !headlines.every((value) => value.length <= 30)
       ) {
         throw new Error(
-          "The current Google Search campaign flow does not yet support the Impression Share bidding configuration.",
+          "Google Responsive Display Ads require 1–5 headlines, each up to 30 characters.",
         );
       }
 
-      // The UI uses Google's older Target Spend label for Maximize Clicks.
+      if (!longHeadline || longHeadline.length > 90) {
+        throw new Error(
+          "Google Display long headline is required and must not exceed 90 characters.",
+        );
+      }
+
+      if (
+        descriptions.length < 1 ||
+        descriptions.length > 5 ||
+        !descriptions.every((value) => value.length <= 90)
+      ) {
+        throw new Error(
+          "Google Display requires 1–5 descriptions, each up to 90 characters.",
+        );
+      }
+
+      if (!displayBusinessName || displayBusinessName.length > 25) {
+        throw new Error(
+          "Google Display business name is required and must not exceed 25 characters.",
+        );
+      }
+
+      // Validate image URLs.
+      const landscapeImageUrl = googleDisplayImageUrl.trim();
+      const squareImageUrl = googleDisplaySquareImageUrl.trim();
+
+      const validateImageUrl = (value: string, label: string) => {
+        try {
+          const url = new URL(value);
+
+          if (url.protocol !== "https:") {
+            throw new Error();
+          }
+        } catch {
+          throw new Error(`A valid HTTPS ${label} image URL is required.`);
+        }
+      };
+
+      validateImageUrl(landscapeImageUrl, "landscape");
+      validateImageUrl(squareImageUrl, "square");
+
+      // Validate known asset aspect ratios.
+      const landscapeAsset = assetLibrary.find(
+        (asset) => asset.url === landscapeImageUrl,
+      );
+
+      const squareAsset = assetLibrary.find(
+        (asset) => asset.url === squareImageUrl,
+      );
+
+      if (
+        landscapeAsset?.aspectRatio &&
+        landscapeAsset.aspectRatio !== "1.91:1"
+      ) {
+        throw new Error(
+          "Google Display landscape images must use a 1.91:1 aspect ratio.",
+        );
+      }
+
+      if (squareAsset?.aspectRatio && squareAsset.aspectRatio !== "1:1") {
+        throw new Error(
+          "Google Display square images must use a 1:1 aspect ratio.",
+        );
+      }
+
+      // Normalize bidding strategy.
       const biddingStrategy =
-        effectiveGoogleBiddingStrategy === "TARGET_SPEND"
-          ? "MAXIMIZE_CLICKS"
-          : effectiveGoogleBiddingStrategy;
+        effectiveGoogleBiddingMode === "MANUAL_CPC" ||
+        effectiveGoogleBiddingMode === "MANUAL_CPM"
+          ? effectiveGoogleBiddingMode
+          : effectiveGoogleBiddingStrategy === "TARGET_SPEND"
+            ? "MAXIMIZE_CLICKS"
+            : effectiveGoogleBiddingStrategy;
 
       const supportedStrategies = [
         "MANUAL_CPC",
+        "MANUAL_CPM",
         "MAXIMIZE_CLICKS",
         "MAXIMIZE_CONVERSIONS",
         "MAXIMIZE_CONVERSION_VALUE",
+        "TARGET_CPA",
+        "TARGET_ROAS",
       ];
 
       if (!supportedStrategies.includes(biddingStrategy)) {
         throw new Error(
-          `Google bidding strategy "${biddingStrategy}" is not supported by the current Search creation flow.`,
+          `Bidding strategy ${biddingStrategy} is not supported for Google Display.`,
+        );
+      }
+
+      if (effectiveGoogleBiddingScope === "PORTFOLIO") {
+        throw new Error(
+          "Portfolio bidding is not yet connected to the Google Display creation flow.",
+        );
+      }
+
+      if (effectiveGooglePerformanceGoal === "IMPRESSION_SHARE") {
+        throw new Error(
+          "Impression Share bidding is not currently supported by the Google Display creation flow.",
         );
       }
 
       const biddingOptions = {
-        ...(effectiveGooglePerformanceGoal === "CONVERSIONS" &&
-          isPositiveAmount(googleTargetCpa) && {
+        ...(isPositiveAmount(googleTargetCpa) &&
+          ["MAXIMIZE_CONVERSIONS", "TARGET_CPA"].includes(biddingStrategy) && {
             targetCpa: Number(googleTargetCpa),
           }),
-        ...(effectiveGooglePerformanceGoal === "CONVERSION_VALUE" &&
-          isPositiveAmount(googleTargetRoas) && {
+
+        ...(isPositiveAmount(googleTargetRoas) &&
+          ["MAXIMIZE_CONVERSION_VALUE", "TARGET_ROAS"].includes(
+            biddingStrategy,
+          ) && {
             targetRoas: Number(googleTargetRoas),
           }),
       };
 
-      const matchType = googleKeywordMatchType as "BROAD" | "PHRASE" | "EXACT";
+      // Validate manual bids.
+      const adGroupBids: Record<string, number> = {};
 
-      const positiveKeywords = splitValues(googleKeywordLines).map((text) => ({
-        text,
-        matchType,
-      }));
+      if (
+        effectiveGoogleBiddingMode === "MANUAL_CPC" ||
+        effectiveGoogleBiddingMode === "MANUAL_CPM"
+      ) {
+        if (!isPositiveAmount(googleDefaultCpcBid)) {
+          throw new Error("Enter a valid positive manual Display bid amount.");
+        }
 
-      const negativeKeywords = splitValues(googleNegativeKeywordLines).map(
-        (text) => ({
-          text,
-          matchType,
-        }),
-      );
+        if (effectiveGoogleBiddingMode === "MANUAL_CPC") {
+          adGroupBids.defaultCpcBidAmount = Number(googleDefaultCpcBid);
+        }
 
-      if (executionMode === "LIVE" && usesExampleDomain(googleFinalUrl)) {
+        if (effectiveGoogleBiddingMode === "MANUAL_CPM") {
+          adGroupBids.defaultCpmBidAmount = Number(googleDefaultCpcBid);
+        }
+      }
+
+      // Normalize Google campaign dates.
+      const normalizeGoogleDate = (
+        value: string,
+        label: string,
+      ): string | undefined => {
+        if (!value.trim()) return undefined;
+
+        const normalized = value.trim().replaceAll("-", "");
+
+        if (!/^\d{8}$/.test(normalized)) {
+          throw new Error(`Invalid Google campaign ${label}.`);
+        }
+
+        const year = Number(normalized.slice(0, 4));
+        const month = Number(normalized.slice(4, 6));
+        const day = Number(normalized.slice(6, 8));
+
+        const date = new Date(Date.UTC(year, month - 1, day));
+
+        if (
+          date.getUTCFullYear() !== year ||
+          date.getUTCMonth() !== month - 1 ||
+          date.getUTCDate() !== day
+        ) {
+          throw new Error(`Invalid Google campaign ${label}.`);
+        }
+
+        return normalized;
+      };
+
+      const startDate = normalizeGoogleDate(googleStartDate, "start date");
+
+      const endDate = normalizeGoogleDate(googleEndDate, "end date");
+
+      if (startDate && endDate && endDate <= startDate) {
         throw new Error(
-          "Replace the example.com Google final URL before live execution.",
+          "Google campaign end date must be later than its start date.",
         );
       }
 
-      providers.googleAds = {
-        accountId: connections.googleAds.selectedAccountId!,
+      // Prepare audience resource names.
+      const audienceResources = splitValues(googleAdGroupUserLists);
+
+      const customerId = accountId
+        .trim()
+        .replace(/^customers\//i, "")
+        .replace(/-/g, "");
+
+      if (!/^\d+$/.test(customerId)) {
+        throw new Error("Invalid selected Google Ads customer ID.");
+      }
+
+      const userListPrefix = `customers/${customerId}/userLists/`;
+
+      for (const resourceName of audienceResources) {
+        if (!resourceName.startsWith(userListPrefix)) {
+          throw new Error(
+            `User list ${resourceName} does not belong to the selected Google Ads account.`,
+          );
+        }
+      }
+
+      // Demo assets cannot be submitted as live Google Ads image assets.
+      if (executionMode === "LIVE") {
+        throw new Error(
+          "Google Display live creation requires uploaded Google Ads Image Asset resource names. The current Asset Library stores demo URLs only. Use Validate Only for the prototype until provider asset uploading is integrated.",
+        );
+      }
+
+      return {
+        accountId,
         providerObjective: googleMarketingObjective,
-        providerCampaignType: "SEARCH",
+        providerCampaignType: "DISPLAY",
 
         configuration: {
           budget: {
@@ -3516,38 +3709,187 @@ export default function CreateCampaignPage() {
 
           campaign: {
             name: campaignName.trim(),
+            campaignType: "DISPLAY",
             biddingStrategy,
-            ...(Object.keys(biddingOptions).length > 0 && {
-              biddingOptions,
-            }),
+            biddingOptions:
+              Object.keys(biddingOptions).length > 0
+                ? biddingOptions
+                : undefined,
+            performanceGoalPreset: effectiveGooglePerformanceGoal,
+            biddingMode: effectiveGoogleBiddingMode,
+            marketingObjective: googleMarketingObjective,
+            startDate,
+            endDate,
           },
 
           adGroup: {
             name: googleAdGroupName.trim(),
-          },
+            status: "PAUSED",
+            ...adGroupBids,
 
-          keywords: {
-            positive: positiveKeywords,
-            negative: negativeKeywords,
+            audienceCriteria: audienceResources.map((userListResourceName) => ({
+              type: "USER_LIST",
+              userListResourceName,
+              targetingMode: "TARGETING",
+            })),
           },
 
           locations: geoResources.map((geoTargetConstantResourceName) => ({
             geoTargetConstantResourceName,
           })),
 
-          ad: {
-            finalUrl: googleFinalUrl,
-            headlines: splitValues(googleSearchHeadlines),
-            descriptions: splitValues(googleSearchDescriptions),
-            ...(googleSearchPath1.trim() && {
-              path1: googleSearchPath1.trim(),
-            }),
-            ...(googleSearchPath2.trim() && {
-              path2: googleSearchPath2.trim(),
-            }),
+          languages: languageResources.map((languageConstantResourceName) => ({
+            languageConstantResourceName,
+          })),
+
+          adCreativeDraft: {
+            format: "RESPONSIVE_DISPLAY_AD",
+            finalUrl: displayFinalUrl,
+            headlines,
+            longHeadline,
+            descriptions,
+            businessName: displayBusinessName,
+
+            imageAssets: {
+              landscapeImageUrl,
+              squareImageUrl,
+            },
+
+            providerUploadRequired: true,
+            status: "PAUSED",
           },
         },
       };
+    };
+    // --------------------------------------------------
+    // GOOGLE ADS — current global creation flow: SEARCH
+    // --------------------------------------------------
+    if (selectedPlatforms.includes("googleAds")) {
+      if (googleCampaignType === "DISPLAY") {
+        providers.googleAds = buildGoogleDisplayProvider();
+      } else if (googleCampaignType === "SEARCH") {
+        if (effectiveGoogleBudgetMode !== "DAILY") {
+          throw new Error(
+            "The current Google Search creation flow supports a daily budget. Campaign-total budgets need a separate backend implementation.",
+          );
+        }
+
+        const googleFinalUrl = googleSearchFinalUrl.trim() || websiteUrl.trim();
+
+        if (
+          effectiveGooglePerformanceGoal === "IMPRESSION_SHARE" ||
+          effectiveGoogleBiddingStrategy === "TARGET_IMPRESSION_SHARE"
+        ) {
+          throw new Error(
+            "The current Google Search campaign flow does not yet support the Impression Share bidding configuration.",
+          );
+        }
+
+        // The UI uses Google's older Target Spend label for Maximize Clicks.
+        const biddingStrategy =
+          effectiveGoogleBiddingStrategy === "TARGET_SPEND"
+            ? "MAXIMIZE_CLICKS"
+            : effectiveGoogleBiddingStrategy;
+
+        const supportedStrategies = [
+          "MANUAL_CPC",
+          "MAXIMIZE_CLICKS",
+          "MAXIMIZE_CONVERSIONS",
+          "MAXIMIZE_CONVERSION_VALUE",
+        ];
+
+        if (!supportedStrategies.includes(biddingStrategy)) {
+          throw new Error(
+            `Google bidding strategy "${biddingStrategy}" is not supported by the current Search creation flow.`,
+          );
+        }
+
+        const biddingOptions = {
+          ...(effectiveGooglePerformanceGoal === "CONVERSIONS" &&
+            isPositiveAmount(googleTargetCpa) && {
+              targetCpa: Number(googleTargetCpa),
+            }),
+          ...(effectiveGooglePerformanceGoal === "CONVERSION_VALUE" &&
+            isPositiveAmount(googleTargetRoas) && {
+              targetRoas: Number(googleTargetRoas),
+            }),
+        };
+
+        const matchType = googleKeywordMatchType as
+          | "BROAD"
+          | "PHRASE"
+          | "EXACT";
+
+        const positiveKeywords = splitValues(googleKeywordLines).map(
+          (text) => ({
+            text,
+            matchType,
+          }),
+        );
+
+        const negativeKeywords = splitValues(googleNegativeKeywordLines).map(
+          (text) => ({
+            text,
+            matchType,
+          }),
+        );
+
+        if (executionMode === "LIVE" && usesExampleDomain(googleFinalUrl)) {
+          throw new Error(
+            "Replace the example.com Google final URL before live execution.",
+          );
+        }
+
+        providers.googleAds = {
+          accountId: connections.googleAds.selectedAccountId!,
+          providerObjective: googleMarketingObjective,
+          providerCampaignType: "SEARCH",
+
+          configuration: {
+            budget: {
+              name: `${campaignName.trim()} - Budget`,
+              amount: Number(googleDailyBudget),
+            },
+
+            campaign: {
+              name: campaignName.trim(),
+              biddingStrategy,
+              ...(Object.keys(biddingOptions).length > 0 && {
+                biddingOptions,
+              }),
+            },
+
+            adGroup: {
+              name: googleAdGroupName.trim(),
+            },
+
+            keywords: {
+              positive: positiveKeywords,
+              negative: negativeKeywords,
+            },
+
+            locations: geoResources.map((geoTargetConstantResourceName) => ({
+              geoTargetConstantResourceName,
+            })),
+
+            ad: {
+              finalUrl: googleFinalUrl,
+              headlines: splitValues(googleSearchHeadlines),
+              descriptions: splitValues(googleSearchDescriptions),
+              ...(googleSearchPath1.trim() && {
+                path1: googleSearchPath1.trim(),
+              }),
+              ...(googleSearchPath2.trim() && {
+                path2: googleSearchPath2.trim(),
+              }),
+            },
+          },
+        };
+      } else {
+        throw new Error(
+          "The current global Google Ads creation flow supports SEARCH campaigns only.",
+        );
+      }
     }
 
     // --------------------------------------------------
@@ -4285,6 +4627,7 @@ export default function CreateCampaignPage() {
     if (!savedDraft) return;
     setWorkspaceView("builder");
     setStep(savedDraft.step);
+    setFurthestStep(savedDraft.step);
     setError("");
   };
 
@@ -4330,47 +4673,122 @@ export default function CreateCampaignPage() {
       | "demand-gen"
       | "app-image",
   ) => {
-    if (target === "meta" && asset.kind === "IMAGE")
-      setMetaCreativeImageUrl(asset.url);
-    if (target === "pmax-logo" && ["IMAGE", "LOGO"].includes(asset.kind))
-      setPmaxLogoUrl(asset.url);
-    if (target === "pmax-landscape" && asset.kind === "IMAGE")
-      setPmaxLandscapeImageUrl(asset.url);
-    if (target === "pmax-square" && asset.kind === "IMAGE")
-      setPmaxSquareImageUrl(asset.url);
-    if (target === "pmax-portrait" && asset.kind === "IMAGE")
-      setPmaxPortraitImageUrl(asset.url);
-    if (target === "google-display" && asset.kind === "IMAGE")
-      setGoogleDisplayImageUrl(asset.url);
-    if (target === "google-display-square" && asset.kind === "IMAGE")
-      setGoogleDisplaySquareImageUrl(asset.url);
-    if (target === "demand-gen" && asset.kind === "IMAGE") {
-      if (googleDemandGenFormat === "CAROUSEL") {
-        setGoogleDemandGenCarouselCards(
-          `${asset.name} | ${asset.url} | ${websiteUrl.trim() || "https://example.com"}`,
-        );
-      } else {
-        setGoogleDisplayImageUrl(asset.url);
-      }
+    let applied = false;
+
+    const isImage = asset.kind === "IMAGE";
+    const isImageOrLogo = asset.kind === "IMAGE" || asset.kind === "LOGO";
+
+    const validRatio = (allowed: string[]) =>
+      !asset.aspectRatio || allowed.includes(asset.aspectRatio);
+
+    switch (target) {
+      case "meta":
+        if (isImage) {
+          setMetaCreativeImageUrl(asset.url);
+          applied = true;
+        }
+        break;
+
+      case "pmax-logo":
+        if (isImageOrLogo && validRatio(["1:1"])) {
+          setPmaxLogoUrl(asset.url);
+          applied = true;
+        }
+        break;
+
+      case "pmax-landscape":
+        if (isImage && validRatio(["1.91:1"])) {
+          setPmaxLandscapeImageUrl(asset.url);
+          applied = true;
+        }
+        break;
+
+      case "pmax-square":
+        if (isImage && validRatio(["1:1"])) {
+          setPmaxSquareImageUrl(asset.url);
+          applied = true;
+        }
+        break;
+
+      case "pmax-portrait":
+        if (isImage && validRatio(["4:5"])) {
+          setPmaxPortraitImageUrl(asset.url);
+          applied = true;
+        }
+        break;
+
+      case "google-display":
+        if (isImage && validRatio(["1.91:1", "16:9"])) {
+          setGoogleDisplayImageUrl(asset.url);
+          applied = true;
+        }
+        break;
+
+      case "google-display-square":
+        if (isImage && validRatio(["1:1"])) {
+          setGoogleDisplaySquareImageUrl(asset.url);
+          applied = true;
+        }
+        break;
+
+      case "demand-gen":
+        if (!isImage) break;
+
+        if (googleDemandGenFormat === "CAROUSEL") {
+          setGoogleDemandGenCarouselCards((current) => {
+            const card = `${asset.name} | ${asset.url} | ${websiteUrl.trim() || "https://example.com"}`;
+
+            return current ? `${current}\n${card}` : card;
+          });
+
+          applied = true;
+        } else if (googleDemandGenFormat === "MULTI_ASSET") {
+          setGoogleDisplayImageUrl(asset.url);
+          applied = true;
+        } else if (googleDemandGenFormat === "PRODUCT_FEED") {
+          setGoogleDemandGenProductLogoUrl(asset.url);
+          applied = true;
+        }
+        break;
+
+      case "app-image":
+        if (isImage) {
+          setGoogleAppImageUrls((current) =>
+            [
+              asset.url,
+              ...current
+                .split(/[\n,]+/)
+                .map((value) => value.trim())
+                .filter(Boolean),
+            ]
+              .filter((value, index, values) => values.indexOf(value) === index)
+              .slice(0, 20)
+              .join("\n"),
+          );
+
+          applied = true;
+        }
+        break;
     }
-    if (target === "app-image" && asset.kind === "IMAGE")
-      setGoogleAppImageUrls((current) =>
-        [
-          asset.url,
-          ...current
-            .split(/[\n,]+/)
-            .map((value) => value.trim())
-            .filter(Boolean),
-        ]
-          .filter((value, index, values) => values.indexOf(value) === index)
-          .slice(0, 20)
-          .join("\n"),
+
+    if (!applied) {
+      setAssetNotice(
+        `${asset.name} cannot be used for ${target.replace("pmax-", "Performance Max ")}. Check its asset type, aspect ratio and selected campaign format.`,
       );
+      return;
+    }
+
+    // Track the selected asset in the campaign draft.
+    setAttachedCreativeAssetIds((current) =>
+      current.includes(asset.id) ? current : [...current, asset.id],
+    );
+
     setAssetNotice(
       `${asset.name} selected for ${target.replace("pmax-", "Performance Max ").replaceAll("-", " ")}. Check the required crop and asset rules before publishing.`,
     );
+
     setWorkspaceView("builder");
-    setStep(4);
+    markStepReached(4);
     clearPreview();
   };
 
@@ -4571,7 +4989,7 @@ export default function CreateCampaignPage() {
       `${googleCopyCanMap ? `Google ${variation.googlePack.formatLabel} assets applied to the ${googleCampaignType} draft.` : `This ${variation.googlePack.formatLabel} concept was saved to the Asset Library; this format is driven by feed / listing data or a separately hosted video, so the demo text pack was not applied to campaign fields.`}${mediaNote ? ` ${mediaNote}` : ""}`,
     );
     setWorkspaceView("builder");
-    setStep(4);
+    markStepReached(4);
     clearPreview();
   };
 
@@ -4582,7 +5000,7 @@ export default function CreateCampaignPage() {
       `${asset.name} applied to the Google ${googleCampaignType} draft.`,
     );
     setWorkspaceView("builder");
-    setStep(4);
+    markStepReached(4);
     clearPreview();
   };
 
@@ -4783,7 +5201,7 @@ export default function CreateCampaignPage() {
         : `${variation.name} added to the Asset Library. A real video file must be generated, reviewed and uploaded before publishing.`,
     );
     setWorkspaceView("builder");
-    setStep(4);
+    markStepReached(4);
     clearPreview();
   };
 
@@ -4882,6 +5300,7 @@ export default function CreateCampaignPage() {
       setGoogleCampaignType(record.googleCampaignType);
     setWorkspaceView("builder");
     setStep(1);
+    setFurthestStep(1);
     setError("");
     clearPreview();
     setCampaignNotice(
@@ -4902,6 +5321,15 @@ export default function CreateCampaignPage() {
   const inputClass =
     "mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
   const labelClass = "text-sm font-semibold text-slate-700";
+  const muiFieldSx = {
+    mt: 1,
+    "& .MuiOutlinedInput-root": {
+      borderRadius: "12px",
+      backgroundColor: "#fff",
+    },
+    "& .MuiInputBase-input": { fontSize: "0.875rem" },
+    "& .MuiInputLabel-root": { fontSize: "0.875rem" },
+  };
   const selectedObjective = objectives.find((item) => item.value === objective);
 
   const filteredCampaignRecords = useMemo(() => {
@@ -4967,82 +5395,123 @@ export default function CreateCampaignPage() {
 
   return (
     <div className="mx-auto max-w-5xl">
-      <div>
-        <p className="text-sm font-semibold text-blue-600">
-          Campaign Management
-        </p>
-        <h1 className="mt-2 text-3xl font-bold text-slate-900">
-          Unified Campaign Builder
-        </h1>
-        <p className="mt-2 text-sm text-slate-500">
-          Create one campaign brief and configure Google Ads, Meta Ads, or both
-          from the same workflow.
-        </p>
-        <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-          <strong>Demo data is prefilled.</strong> Sample names, budgets, copy,
-          URLs and placeholder IDs are included to help you explore every form
-          section. Replace all sample IDs, assets, targeting values and
-          account-specific settings with real values before using any provider
-          payload. This prototype prepares a request preview and does not send
-          campaign mutations.
-        </div>
-      </div>
-
-      <div className="mt-6 flex flex-wrap gap-2">
-        {(
-          [
-            { value: "builder", label: "Campaign Builder", icon: "＋" },
-            { value: "ads", label: "Ad Management", icon: "◫" },
-            { value: "assets", label: "Asset Library", icon: "▧" },
-            { value: "creative", label: "AI Creative Studio", icon: "✦" },
-          ] as { value: WorkspaceView; label: string; icon: string }[]
-        ).map((item) => (
-          <button
-            key={item.value}
-            type="button"
-            onClick={() => {
-              setWorkspaceView(item.value);
-              setError("");
-            }}
-            className={`rounded-xl border px-4 py-2.5 text-sm font-semibold transition ${workspaceView === item.value ? "border-blue-600 bg-blue-600 text-white" : "border-slate-200 bg-white text-slate-600 hover:border-blue-300 hover:text-blue-700"}`}
+      <Paper
+        elevation={0}
+        variant="outlined"
+        sx={{ p: { xs: 2, sm: 3 }, borderRadius: 3, borderColor: "divider" }}
+      >
+        <div>
+          <p className="text-sm font-semibold text-blue-600">
+            Campaign Management
+          </p>
+          <h1 className="mt-2 text-3xl font-bold text-slate-900">
+            Unified Campaign Builder
+          </h1>
+          <p className="mt-2 text-sm text-slate-500">
+            Create one campaign brief and configure Google Ads, Meta Ads, or
+            both from the same workflow.
+          </p>
+          <Alert
+            severity="warning"
+            sx={{ mt: 2, borderRadius: 2, alignItems: "flex-start" }}
           >
-            <span className="mr-2">{item.icon}</span>
-            {item.label}
-          </button>
-        ))}
-      </div>
+            <strong>Demo data is prefilled.</strong> Sample names, budgets,
+            copy, URLs and placeholder IDs are included to help you explore
+            every form section. Replace all sample IDs, assets, targeting values
+            and account-specific settings with real values before using any
+            provider payload. This prototype prepares a request preview and does
+            not send campaign mutations.
+          </Alert>
+        </div>
+      </Paper>
+
+      <Box sx={{ mt: 3, borderBottom: 1, borderColor: "divider" }}>
+        <Tabs
+          value={workspaceView}
+          onChange={(_, value) => {
+            setWorkspaceView(value as WorkspaceView);
+            setError("");
+          }}
+          variant="scrollable"
+          scrollButtons="auto"
+          allowScrollButtonsMobile
+          aria-label="Campaign workspace sections"
+          sx={{
+            minHeight: 44,
+            "& .MuiTab-root": {
+              minHeight: 44,
+              minWidth: "auto",
+              px: { xs: 1.5, sm: 2.5 },
+              textTransform: "none",
+              fontWeight: 600,
+              fontSize: "0.875rem",
+            },
+            "& .MuiTabs-indicator": { height: 3, borderRadius: "3px 3px 0 0" },
+          }}
+        >
+          <Tab value="builder" label="＋ Campaign Builder" />
+          <Tab value="ads" label="◫ Ad Management" />
+          <Tab value="assets" label="▧ Asset Library" />
+          <Tab value="creative" label="✦ AI Creative Studio" />
+        </Tabs>
+      </Box>
 
       {workspaceView === "builder" && (
-        <div className="mt-8 grid grid-cols-2 gap-3 sm:grid-cols-5">
-          {[
-            { number: 1, label: "Campaign Basics" },
-            { number: 2, label: "Platform Settings" },
-            { number: 3, label: "Ad Groups / Ad Sets" },
-            { number: 4, label: "Ad Creation & Assets" },
-            { number: 5, label: "Review & Create" },
-          ].map((item) => (
-            <div key={item.number}>
-              <div
-                className={`h-1.5 rounded-full ${step >= item.number ? "bg-blue-600" : "bg-slate-200"}`}
-              />
-              <p
-                className={`mt-2 text-xs font-semibold sm:text-sm ${step === item.number ? "text-blue-700" : "text-slate-400"}`}
-              >
-                {item.number}. {item.label}
-              </p>
-            </div>
-          ))}
+        <div className="mt-8 overflow-x-auto pb-2">
+          <Stepper
+            activeStep={step - 1}
+            nonLinear
+            alternativeLabel
+            sx={{
+              minWidth: { xs: 680, sm: "100%" },
+              "& .MuiStepLabel-label": {
+                mt: 1,
+                fontSize: { xs: "0.7rem", sm: "0.8rem" },
+                fontWeight: 600,
+                whiteSpace: "normal",
+              },
+              "& .MuiStepIcon-root.Mui-active": { color: "primary.main" },
+              "& .MuiStepIcon-root.Mui-completed": { color: "success.main" },
+              "& .MuiStepConnector-line": { borderTopWidth: 2 },
+            }}
+          >
+            {[
+              { number: 1, label: "Campaign Basics" },
+              { number: 2, label: "Platform Settings" },
+              { number: 3, label: "Ad Groups / Ad Sets" },
+              { number: 4, label: "Ad Creation & Assets" },
+              { number: 5, label: "Review & Create" },
+            ].map((item) => (
+              <Step key={item.number} completed={item.number < furthestStep}>
+                <StepButton
+                  onClick={() => handleStepClick(item.number)}
+                  disabled={item.number > furthestStep}
+                  aria-label={`Open ${item.label}`}
+                >
+                  {item.label}
+                </StepButton>
+              </Step>
+            ))}
+          </Stepper>
+          <p className="mt-3 text-center text-xs text-slate-500">
+            Click a completed step to jump back and edit it. Use Continue to
+            unlock the next step after validation.
+          </p>
         </div>
       )}
 
       {loadingConnections && (
-        <div className="mt-6 rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-500">
+        <Alert
+          severity="info"
+          icon={<CircularProgress size={18} />}
+          sx={{ mt: 3, borderRadius: 2, alignItems: "center" }}
+        >
           Loading your advertising accounts...
-        </div>
+        </Alert>
       )}
 
       {connectionError && (
-        <div className="mt-6 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+        <Alert severity="error" sx={{ mt: 3, borderRadius: 2 }}>
           {connectionError}
           <div className="mt-2">
             <Link
@@ -5052,13 +5521,13 @@ export default function CreateCampaignPage() {
               Manage account connections
             </Link>
           </div>
-        </div>
+        </Alert>
       )}
 
       {error && (
-        <div className="mt-6 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+        <Alert severity="error" sx={{ mt: 3, borderRadius: 2 }}>
           {error}
-        </div>
+        </Alert>
       )}
 
       {workspaceView === "builder" && step === 1 && (
@@ -5111,15 +5580,25 @@ export default function CreateCampaignPage() {
                       <span className="font-bold text-slate-900">
                         {option.title}
                       </span>
-                      <span
-                        className={`rounded-full px-2.5 py-1 text-xs font-semibold ${active ? "bg-blue-600 text-white" : option.ready ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-500"}`}
-                      >
-                        {active
-                          ? "Selected"
-                          : option.ready
-                            ? "Connected"
-                            : "Unavailable"}
-                      </span>
+                      <Chip
+                        size="small"
+                        color={
+                          active
+                            ? "primary"
+                            : option.ready
+                              ? "success"
+                              : "default"
+                        }
+                        variant={active ? "filled" : "outlined"}
+                        label={
+                          active
+                            ? "Selected"
+                            : option.ready
+                              ? "Connected"
+                              : "Unavailable"
+                        }
+                        sx={{ height: 24, fontSize: "0.7rem", fontWeight: 700 }}
+                      />
                     </div>
                     <p className="mt-2 text-xs leading-5 text-slate-500">
                       {option.description}
@@ -5193,41 +5672,50 @@ export default function CreateCampaignPage() {
             </p>
             <div className="mt-6 grid gap-5 sm:grid-cols-2">
               <div>
-                <label className={labelClass}>Business Name *</label>
-                <input
+                <TextField
+                  label="Business Name *"
                   value={businessName}
                   onChange={(e) => setBusinessName(e.target.value)}
                   placeholder="e.g. ABC Technologies"
-                  className={inputClass}
+                  size="small"
+                  fullWidth
+                  sx={muiFieldSx}
                 />
               </div>
               <div>
-                <label className={labelClass}>Campaign Name *</label>
-                <input
+                <TextField
+                  label="Campaign Name *"
                   value={campaignName}
                   onChange={(e) => setCampaignName(e.target.value)}
                   placeholder="e.g. October Product Launch"
-                  className={inputClass}
+                  size="small"
+                  fullWidth
+                  sx={muiFieldSx}
                 />
               </div>
               <div className="sm:col-span-2">
-                <label className={labelClass}>Website URL</label>
-                <input
+                <TextField
                   type="url"
+                  label="Website URL"
                   value={websiteUrl}
                   onChange={(e) => setWebsiteUrl(e.target.value)}
                   placeholder="https://www.example.com"
-                  className={inputClass}
+                  size="small"
+                  fullWidth
+                  sx={muiFieldSx}
                 />
               </div>
               <div className="sm:col-span-2">
-                <label className={labelClass}>Campaign Description</label>
-                <textarea
+                <TextField
+                  label="Campaign Description"
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   placeholder="Describe your product, offer or campaign..."
-                  rows={3}
-                  className={inputClass}
+                  multiline
+                  minRows={3}
+                  size="small"
+                  fullWidth
+                  sx={muiFieldSx}
                 />
               </div>
             </div>
@@ -9851,15 +10339,16 @@ export default function CreateCampaignPage() {
                 direction.
               </p>
               <div className="mt-4">
-                <label className={labelClass}>
-                  Prompt / creative direction *
-                </label>
-                <textarea
-                  rows={6}
+                <TextField
+                  label="Prompt / creative direction *"
+                  multiline
+                  minRows={6}
                   value={creativePrompt}
                   onChange={(e) => setCreativePrompt(e.target.value)}
-                  className={inputClass}
                   placeholder="Describe the product, audience, message, mood, colours and visual direction..."
+                  size="small"
+                  fullWidth
+                  sx={muiFieldSx}
                 />
               </div>
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
@@ -10633,15 +11122,17 @@ export default function CreateCampaignPage() {
             <h3 className="font-bold text-slate-900">Add an asset</h3>
             <div className="mt-4 grid gap-4 sm:grid-cols-3">
               <div>
-                <label className={labelClass}>Asset Name *</label>
-                <input
+                <TextField
+                  label="Asset Name *"
                   value={newAssetName}
                   onChange={(e) => {
                     setNewAssetName(e.target.value);
                     setAssetNotice("");
                   }}
-                  className={inputClass}
                   placeholder="Summer campaign image"
+                  size="small"
+                  fullWidth
+                  sx={muiFieldSx}
                 />
               </div>
               <div>
@@ -10657,26 +11148,36 @@ export default function CreateCampaignPage() {
                 </select>
               </div>
               <div>
-                <label className={labelClass}>Asset URL *</label>
-                <input
+                <TextField
                   type="url"
+                  label="Asset URL *"
                   value={newAssetUrl}
                   onChange={(e) => {
                     setNewAssetUrl(e.target.value);
                     setAssetNotice("");
                   }}
-                  className={inputClass}
                   placeholder="https://.../asset.jpg"
+                  size="small"
+                  fullWidth
+                  sx={muiFieldSx}
                 />
               </div>
             </div>
-            <button
+            <Button
               type="button"
               onClick={addAssetToLibrary}
-              className="mt-4 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-blue-700"
+              variant="contained"
+              disableElevation
+              sx={{
+                mt: 2,
+                borderRadius: 2.5,
+                px: 2.5,
+                textTransform: "none",
+                fontWeight: 700,
+              }}
             >
               Add to library
-            </button>
+            </Button>
             {assetNotice && (
               <p className="mt-3 text-sm text-blue-700">{assetNotice}</p>
             )}
@@ -10958,6 +11459,7 @@ export default function CreateCampaignPage() {
                 onClick={() => {
                   setWorkspaceView("builder");
                   setStep(1);
+                  setFurthestStep(1);
                   setError("");
                   clearPreview();
                 }}
@@ -11293,7 +11795,7 @@ export default function CreateCampaignPage() {
                 type="button"
                 onClick={() => {
                   setWorkspaceView("builder");
-                  setStep(5);
+                  markStepReached(5);
                 }}
                 className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700"
               >
@@ -11554,7 +12056,7 @@ export default function CreateCampaignPage() {
               type="button"
               onClick={() => {
                 setWorkspaceView("builder");
-                setStep(4);
+                markStepReached(4);
               }}
               className="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700"
             >
@@ -11665,7 +12167,7 @@ export default function CreateCampaignPage() {
                             type="button"
                             onClick={() => {
                               setWorkspaceView("builder");
-                              setStep(4);
+                              markStepReached(4);
                               setError("");
                               clearPreview();
                             }}
@@ -11703,39 +12205,73 @@ export default function CreateCampaignPage() {
       {workspaceView === "builder" && (
         <div className="mt-8 flex items-center justify-between border-t border-slate-200 pt-6">
           {step > 1 ? (
-            <button
+            <Button
               type="button"
               onClick={goBack}
-              className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              variant="outlined"
+              color="inherit"
+              sx={{
+                borderRadius: 2.5,
+                px: 2.5,
+                py: 1.2,
+                textTransform: "none",
+                fontWeight: 700,
+              }}
             >
               ← Back
-            </button>
+            </Button>
           ) : (
-            <Link
+            <Button
+              component={Link}
               href="/dashboard"
-              className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+              variant="outlined"
+              color="inherit"
+              sx={{
+                borderRadius: 2.5,
+                px: 2.5,
+                py: 1.2,
+                textTransform: "none",
+                fontWeight: 700,
+              }}
             >
               Cancel
-            </Link>
+            </Button>
           )}
           {step >= 3 && step < 5 && (
-            <button
+            <Button
               type="button"
               onClick={saveCurrentDraft}
-              className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              variant="outlined"
+              color="inherit"
+              size="small"
+              sx={{
+                borderRadius: 2.5,
+                px: 2,
+                py: 1.2,
+                textTransform: "none",
+                fontWeight: 700,
+              }}
             >
               Save draft & finish later
-            </button>
+            </Button>
           )}
           {step < 5 && (
-            <button
+            <Button
               type="button"
               onClick={goNext}
               disabled={loadingConnections || Boolean(connectionError)}
-              className="rounded-xl bg-blue-600 px-6 py-3 text-sm font-semibold text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+              variant="contained"
+              disableElevation
+              sx={{
+                borderRadius: 2.5,
+                px: 3,
+                py: 1.25,
+                textTransform: "none",
+                fontWeight: 700,
+              }}
             >
               Continue →
-            </button>
+            </Button>
           )}
         </div>
       )}

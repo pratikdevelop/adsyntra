@@ -39,14 +39,17 @@ import {
 import {
     getCampaigns as getGoogleCampaigns,
     renameCampaign as renameGoogleCampaign,
-    updateGoogleAdsStatus
+    updateGoogleAdsStatus,
+    removeGoogleAdsCampaign
 } from "../googleadsAPI/services/campaign.js";
 
 import {
     getCampaigns as getMetaCampaigns,
     renameCampaign as renameMetaCampaign,
-    updateMetaAdsStatus
+    updateMetaAdsStatus,
+    deleteMetaAdsCampaign
 } from "../metaadsAPI/services/campaign.js";
+
 const router = Router();
 
 interface ProviderCampaignResult {
@@ -3096,4 +3099,208 @@ router.post("/status", async (req: Request, res: Response) => {
         });
     }
 });
+
+router.delete(
+    "/delete/:provider/:campaignId",
+    async (req: Request, res: Response) => {
+        try {
+            // 1. Authenticate the user.
+            const { userId } = getAuth(req);
+
+            if (!userId) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Authentication required.",
+                });
+            }
+
+            // 2. Validate provider and campaign ID.
+            const { provider, campaignId } = req.params;
+
+            if (provider !== "googleAds" && provider !== "metaAds") {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid provider.",
+                });
+            }
+
+            if (!/^\d+$/.test(campaignId.trim())) {
+                return res.status(400).json({
+                    success: false,
+                    message: "A valid provider campaign ID is required.",
+                });
+            }
+
+            const providerKey = provider as "googleAds" | "metaAds";
+            const normalizedCampaignId = campaignId.trim();
+
+            // 3. Find the user's selected provider account.
+            const selectedAccount = await AdAccountModel.findOne({
+                userId,
+                provider: providerKey,
+                isSelected: true,
+            })
+                .select("externalAccountId")
+                .lean();
+
+            if (!selectedAccount?.externalAccountId) {
+                return res.status(409).json({
+                    success: false,
+                    message: `No selected ${providerKey} account found.`,
+                });
+            }
+
+            const accountId = selectedAccount.externalAccountId;
+
+            // 4. Delete/remove the campaign on the advertising platform.
+            let providerResponse: unknown;
+
+            try {
+                if (providerKey === "googleAds") {
+                    const customerId = String(accountId)
+                        .trim()
+                        .replace(/^customers\//i, "")
+                        .replace(/-/g, "");
+
+                    if (!/^\d+$/.test(customerId)) {
+                        return res.status(409).json({
+                            success: false,
+                            message: "Invalid selected Google Ads customer ID.",
+                        });
+                    }
+
+                    providerResponse = await removeGoogleAdsCampaign(
+                        userId,
+                        normalizedCampaignId,
+                        customerId,
+                        false,
+                    );
+                } else {
+                    providerResponse = await deleteMetaAdsCampaign(
+                        normalizedCampaignId,
+                        userId,
+                    );
+                }
+            } catch (providerError) {
+                console.error(
+                    `${providerKey} campaign deletion failed:`,
+                    providerError,
+                );
+
+                return res.status(502).json({
+                    success: false,
+                    message: getErrorMessage(providerError),
+                    provider: providerKey,
+                    campaignId: normalizedCampaignId,
+                    providerUpdated: false,
+                    databaseUpdated: false,
+                });
+            }
+
+            // 5. Find the matching local campaign document.
+            let databaseUpdated = false;
+
+            try {
+                const campaignDocuments = await CampaignModel.find({
+                    ownerUserId: userId,
+                    [`providers.${providerKey}.providerCampaignId`]:
+                        normalizedCampaignId,
+                });
+
+                const normalizeAccountId = (value: unknown) =>
+                    providerKey === "googleAds"
+                        ? normalizeGoogleAccountId(value)
+                        : normalizeMetaAccountId(value);
+
+                const campaignDocument = campaignDocuments.find(
+                    (document) => {
+                        const providerData =
+                            document.providers?.[providerKey];
+
+                        return (
+                            providerData &&
+                            normalizeAccountId(providerData.accountId) ===
+                            normalizeAccountId(accountId)
+                        );
+                    },
+                );
+
+                // 6. Preserve the MongoDB record and update provider state.
+                if (campaignDocument) {
+                    const providerData =
+                        campaignDocument.providers[providerKey];
+
+                    if (providerData) {
+                        const configuration =
+                            providerData.configuration ?? {};
+
+                        const existingCampaignConfiguration = isRecord(
+                            configuration.campaign,
+                        )
+                            ? configuration.campaign
+                            : {};
+
+                        providerData.configuration = {
+                            ...configuration,
+                            campaign: {
+                                ...existingCampaignConfiguration,
+                                status:
+                                    providerKey === "googleAds"
+                                        ? "REMOVED"
+                                        : "DELETED",
+                            },
+                        };
+
+                        providerData.lastSyncedAt = new Date();
+
+                        campaignDocument.markModified(
+                            `providers.${providerKey}.configuration`,
+                        );
+
+                        await campaignDocument.save();
+
+                        databaseUpdated = true;
+                    }
+                }
+            } catch (databaseError) {
+                console.error(
+                    "Provider campaign deleted, but MongoDB update failed:",
+                    databaseError,
+                );
+
+                return res.status(500).json({
+                    success: false,
+                    message:
+                        "Campaign was deleted on the provider, but local database synchronization failed.",
+                    provider: providerKey,
+                    campaignId: normalizedCampaignId,
+                    providerUpdated: true,
+                    databaseUpdated: false,
+                    error: getErrorMessage(databaseError),
+                });
+            }
+
+            // 7. Send final response.
+            return res.status(200).json({
+                success: true,
+                message:
+                    providerKey === "googleAds"
+                        ? "Google Ads campaign removed successfully."
+                        : "Meta Ads campaign deleted successfully.",
+                provider: providerKey,
+                campaignId: normalizedCampaignId,
+                providerUpdated: true,
+                databaseUpdated,
+                providerResponse,
+            });
+        } catch (error) {
+            console.error("Global campaign deletion error:", error);
+
+            return res.status(500).json({
+                success: false,
+                message: getErrorMessage(error),
+            });
+        }
+    },
+);
 export default router;

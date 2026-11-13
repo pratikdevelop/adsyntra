@@ -458,3 +458,98 @@ export const updateGoogleAdsStatus = async (
         );
     }
 };
+
+
+// Remove a campaign from Google Ads.
+export const removeGoogleAdsCampaign = async (
+    userId: string,
+    campaignId: string,
+    customerId: string,
+    validateOnly: boolean = false,
+) => {
+    const normalizedCustomerId = customerId
+        .trim()
+        .replace(/^customers\//i, "")
+        .replace(/-/g, "");
+
+    const normalizedCampaignId = campaignId.trim();
+
+    if (!/^\d+$/.test(normalizedCustomerId)) {
+        throw new Error("Invalid Google Ads customer ID.");
+    }
+
+    if (!/^\d+$/.test(normalizedCampaignId)) {
+        throw new Error("Invalid Google Ads campaign ID.");
+    }
+
+    const accessToken = await getProviderAccessToken(userId, "googleAds");
+
+    if (!accessToken) {
+        throw new Error("Connect your Google Ads account first.");
+    }
+
+    const developerToken = process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
+
+    if (!developerToken) {
+        throw new Error("Google Ads developer token is not configured.");
+    }
+
+    const campaignResourceName =
+        `customers/${normalizedCustomerId}/campaigns/${normalizedCampaignId}`;
+
+    try {
+        const response = await fetch(
+            `https://googleads.googleapis.com/v25/customers/${normalizedCustomerId}/campaigns:mutate`,
+            {
+                method: "POST",
+                headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                    "Content-Type": "application/json",
+                    "developer-token": developerToken,
+                },
+                body: JSON.stringify({
+                    operations: [
+                        {
+                            remove: campaignResourceName,
+                        },
+                    ],
+                    validateOnly,
+                }),
+            },
+        );
+
+        const data: any = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+            console.error(
+                "Google Ads campaign removal error:",
+                JSON.stringify(data, null, 2),
+            );
+
+            throw new Error(
+                data?.error?.message ||
+                data?.message ||
+                "Google Ads campaign removal failed.",
+            );
+        }
+
+        return {
+            message: validateOnly
+                ? "Campaign removal validation successful. Campaign was not removed."
+                : "Google Ads campaign removed successfully.",
+            validateOnly,
+            customerId: normalizedCustomerId,
+            campaignId: normalizedCampaignId,
+            campaignResourceName,
+            googleResponse: data,
+        };
+    } catch (error) {
+        console.error("Google Ads campaign removal failed:", error);
+
+        throw new Error(
+            error instanceof Error
+                ? error.message
+                : "Failed to remove Google Ads campaign.",
+        );
+    }
+};

@@ -317,3 +317,53 @@ export const updateMetaAdsStatus = async (campaignId: any, status: any, userId: 
 		throw new Error("Could not reach Meta Graph API.");
 	}
 };
+
+
+// Delete a campaign from Meta Ads.
+export const deleteMetaAdsCampaign = async (
+	campaignId: string,
+	userId: string,
+) => {
+	const accessToken = await getProviderAccessToken(userId, "metaAds");
+
+	if (!accessToken) {
+		throw new Error("Connect your Meta account first.");
+	}
+
+	try {
+		const url = new URL(
+			`https://graph.facebook.com/${apiVersion}/${campaignId}`,
+		);
+
+		const response = await fetch(url, {
+			method: "DELETE",
+			headers: {
+				Authorization: `Bearer ${accessToken}`,
+			},
+		});
+
+		const data: any = await response.json().catch(() => ({}));
+
+		if (!response.ok) {
+			console.error("Meta campaign deletion error:", data);
+
+			throw new Error(
+				data?.error?.message ||
+				"Meta campaign deletion failed.",
+			);
+		}
+
+		return {
+			message: "Meta Ads campaign deleted successfully.",
+			data,
+		};
+	} catch (error) {
+		console.error("Meta campaign deletion request failed:", error);
+
+		throw new Error(
+			error instanceof Error
+				? error.message
+				: "Could not reach Meta Graph API.",
+		);
+	}
+};

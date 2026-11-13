@@ -69,7 +69,6 @@ interface ProviderResult {
     currency?: string | null;
     timezone?: string | null;
   } | null;
-  pagination?: ProviderPagination;
 }
 
 interface GlobalCampaignsApiResponse {
@@ -340,7 +339,7 @@ function getProviderColor(
   return "default";
 }
 
-function getStatusColor(
+/*function getStatusColor(
   status: string | null | undefined,
 ): "success" | "warning" | "error" | "default" {
   const normalized = status?.toUpperCase();
@@ -348,7 +347,7 @@ function getStatusColor(
   if (normalized === "PAUSED") return "warning";
   if (normalized === "FAILED" || normalized === "ERROR") return "error";
   return "default";
-}
+}*/
 
 function getErrorMessage(error: unknown): string {
   if (axios.isAxiosError(error)) {
@@ -598,6 +597,8 @@ export default function CampaignsPage({
   const [updatingStatusKey, setUpdatingStatusKey] = useState<string | null>(
     null,
   );
+  const backendUrl = process.env.BACKEND_API_URL || "http://localhost:5000";
+
   const loadCampaigns = useCallback(async () => {
     setLoading(true);
 
@@ -757,7 +758,6 @@ export default function CampaignsPage({
       }
 
       const { token } = response.data;
-      const backendUrl = process.env.BACKEND_API_URL || "http://localhost:5000";
 
       await axios.post(
         `${backendUrl}/api/campaigns/rename`,
@@ -861,7 +861,6 @@ export default function CampaignsPage({
       }
 
       const { token } = tokenData.data;
-      const backendUrl = process.env.B;
       const response = await axios.post(
         `${backendUrl}/api/campaigns/status`,
         {
@@ -889,6 +888,7 @@ export default function CampaignsPage({
             ? {
                 ...item,
                 status: newStatus,
+                effectiveStatus: newStatus,
               }
             : item,
         ),
@@ -905,6 +905,29 @@ export default function CampaignsPage({
       setError(message);
     } finally {
       setUpdatingStatusKey(null);
+    }
+  };
+
+  const deleteCampaign = async (campaign: any, event: any) => {
+    try {
+      const response = await axios.get("/api/token");
+      if (!response.data) {
+        console.error("User Was not Authorized");
+      }
+
+      const { token } = response.data;
+
+      await axios.delete(
+        `${backendUrl}/api/campaigns/delete/${campaign.provider}/${campaign.id}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+        },
+      );
+    } catch (error) {
+      console.error("error", error);
     }
   };
 
@@ -1281,8 +1304,11 @@ export default function CampaignsPage({
               <TableBody>
                 {filteredCampaigns.map((campaign) => {
                   const currency = getCampaignCurrency(campaign, providers);
-                  const status =
-                    campaign.effectiveStatus || campaign.status || "UNKNOWN";
+                  const status = (
+                    campaign.status ||
+                    campaign.effectiveStatus ||
+                    ""
+                  ).toUpperCase();
                   const rowKey = `${campaign.provider}:${campaign.id}`;
                   const isExpanded = Boolean(expandedRows[rowKey]);
                   const source = asRecord(campaign.source);
@@ -1553,9 +1579,9 @@ export default function CampaignsPage({
                               fontSize: 13,
                             }}
                           >
-                            <MenuItem value="" disabled>
+                            {/* <MenuItem value="" disabled>
                               Unknown
-                            </MenuItem>
+                            </MenuItem> */}
 
                             {campaign.provider === "googleAds" && (
                               <MenuItem value="ENABLED">Enabled</MenuItem>
@@ -1589,7 +1615,7 @@ export default function CampaignsPage({
                           >
                             {isExpanded ? "Hide" : "More"}
                           </Button>
-                          <Button
+                          {/* <Button
                             component={Link}
                             href={`/dashboard/campaigns/${encodeURIComponent(campaign.id)}`}
                             size="small"
@@ -1601,6 +1627,22 @@ export default function CampaignsPage({
                             }}
                           >
                             View
+                          </Button> */}
+
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            color="error"
+                            sx={{
+                              textTransform: "none",
+                              ml: 1,
+                              minWidth: 0,
+                            }}
+                            onClick={(event) => {
+                              deleteCampaign(campaign, event);
+                            }}
+                          >
+                            Delete
                           </Button>
                         </TableCell>
                       </TableRow>
@@ -1697,6 +1739,7 @@ export default function CampaignsPage({
                                   label="Budget delivery"
                                   value={budget?.deliveryMethod}
                                 />
+
                                 <DetailItem
                                   label="Buying type"
                                   value={

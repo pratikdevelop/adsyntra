@@ -1,7 +1,13 @@
 
 export type ProviderName = "googleAds" | "metaAds" | "both";
 export type CampaignExecutionMode = "VALIDATE_ONLY" | "LIVE";
-
+export type Objective =
+    | "SALES"
+    | "LEADS"
+    | "WEBSITE_TRAFFIC"
+    | "AWARENESS"
+    | "ENGAGEMENT"
+    | "APP_PROMOTION";
 export type CampaignExecutionPayload = {
     name: string;
     businessName: string;
@@ -27,13 +33,6 @@ export type CampaignExecutionPayload = {
 };
 // https://recomind.onrender.com
 export type PlatformMode = "googleAds" | "metaAds" | "both";
-export type Objective =
-    | "SALES"
-    | "LEADS"
-    | "WEBSITE_TRAFFIC"
-    | "AWARENESS"
-    | "ENGAGEMENT"
-    | "APP_PROMOTION";
 export type MetaBudgetLevel = "CAMPAIGN" | "AD_SET";
 export type GoogleBudgetMode = "DAILY" | "CAMPAIGN_TOTAL";
 export type GoogleBiddingScope = "STANDARD" | "PORTFOLIO";

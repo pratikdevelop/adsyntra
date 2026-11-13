@@ -14,7 +14,7 @@ import CampaignOutlinedIcon from "@mui/icons-material/CampaignOutlined";
 import CableOutlinedIcon from "@mui/icons-material/CableOutlined";
 import MenuOutlinedIcon from "@mui/icons-material/MenuOutlined";
 import CloseOutlinedIcon from "@mui/icons-material/CloseOutlined";
-import HelpOutlineOutlinedIcon from "@mui/icons-material/HelpOutlineOutlined";
+// import HelpOutlineOutlinedIcon from "@mui/icons-material/HelpOutlineOutlined";
 import ChevronRightOutlinedIcon from "@mui/icons-material/ChevronRightOutlined";
 import AutoAwesomeOutlinedIcon from "@mui/icons-material/AutoAwesomeOutlined";
 
@@ -138,13 +138,13 @@ export default function DashboardLayout({
           })}
         </nav>
 
-        <div className="my-4 border-t border-slate-100" />
+        {/* <div className="my-4 border-t border-slate-100" />
 
         <p className="mb-2 px-3 text-[10px] font-semibold uppercase tracking-widest text-slate-400">
           Resources
-        </p>
+        </p> */}
 
-        <nav className="space-y-0.5">
+        {/* <nav className="space-y-0.5">
           <Link
             href="/dashboard/help"
             className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-slate-600 transition hover:bg-slate-100 hover:text-slate-900"
@@ -152,7 +152,7 @@ export default function DashboardLayout({
             <HelpOutlineOutlinedIcon sx={{ fontSize: 20 }} />
             <span>Help &amp; Support</span>
           </Link>
-        </nav>
+        </nav> */}
       </div>
 
       {/* Footer promo card */}

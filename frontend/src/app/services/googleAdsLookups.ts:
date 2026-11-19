@@ -1,0 +1,78 @@
+import axios from "axios";
+
+const API_URL =
+  process.env.NEXT_PUBLIC_API_URL || "";
+
+const googleAdsLookupApi = axios.create({
+  baseURL: API_URL,
+  withCredentials: true,
+});
+
+export interface GoogleAdsLocation {
+  id: string;
+  name: string;
+  canonicalName: string;
+  countryCode: string;
+  targetType: string;
+  resourceName: string;
+}
+
+export interface GoogleAdsLanguage {
+  id: string;
+  name: string;
+  code: string;
+  resourceName: string;
+}
+
+export interface GoogleAdsUserList {
+  id: string;
+  name: string;
+  resourceName: string;
+  type: string;
+  membershipStatus: string;
+  accessReason?: string;
+}
+
+export interface GoogleAdsConversionGoal {
+  id: string;
+  name: string;
+  resourceName: string;
+  status: string;
+}
+
+export const googleAdsLookups = {
+  async locations(query: string, countryCode = "IN") {
+    const { data } = await googleAdsLookupApi.get(
+      "/api/campaigns/lookups/google/locations",
+      {
+        params: { q: query, countryCode, locale: "en" },
+      },
+    );
+
+    return data.data.locations as GoogleAdsLocation[];
+  },
+
+  async languages() {
+    const { data } = await googleAdsLookupApi.get(
+      "/api/campaigns/lookups/google/languages",
+    );
+
+    return data.data.languages as GoogleAdsLanguage[];
+  },
+
+  async userLists() {
+    const { data } = await googleAdsLookupApi.get(
+      "/api/campaigns/lookups/google/user-lists",
+    );
+
+    return data.data.userLists as GoogleAdsUserList[];
+  },
+
+  async conversionGoals() {
+    const { data } = await googleAdsLookupApi.get(
+      "/api/campaigns/lookups/google/conversion-goals",
+    );
+
+    return data.data.goals as GoogleAdsConversionGoal[];
+  },
+};

@@ -7,6 +7,20 @@ import type {
     GoogleAdsSearchResponse,
 } from "../../interfaces/campaign.js";
 
+function getGoogleAdsApiVersion(): string {
+    const version = process.env.GOOGLE_ADS_API_VERSION?.trim() || "v26";
+    if (!/^v\d+$/.test(version)) {
+        throw new Error("Invalid GOOGLE_ADS_API_VERSION. Expected a major version such as v26.");
+    }
+    return version;
+}
+
+function getGoogleAdsDeveloperToken(): string {
+    const token = process.env.GOOGLE_ADS_DEVELOPER_TOKEN?.trim();
+    if (!token) throw new Error("GOOGLE_ADS_DEVELOPER_TOKEN is not configured.");
+    return token;
+}
+
 function normalizeCustomerResourceName(customerId: string): string {
     const value = customerId.trim();
 
@@ -173,13 +187,7 @@ export const getCampaigns = async (
         throw new Error("GOOGLE_ADS_DEVELOPER_TOKEN is not configured.");
     }
 
-    const apiVersion = process.env.GOOGLE_ADS_API_VERSION?.trim() || "v25";
-
-    if (!/^v\d+$/.test(apiVersion)) {
-        throw new Error(
-            "Invalid GOOGLE_ADS_API_VERSION. Expected a version such as v25.",
-        );
-    }
+    const apiVersion = getGoogleAdsApiVersion();
 
     try {
         const accessToken = await getProviderAccessToken(userId, "googleAds");
@@ -339,18 +347,18 @@ export const renameCampaign = async (
         }
 
         const accessToken = await getProviderAccessToken(userId, "googleAds");
+        const developerToken = getGoogleAdsDeveloperToken();
 
         const resourceName = `${customerId}/campaigns/${campaignId}`;
-        console.log("resourcd Name", resourceName);
 
         const response = await fetch(
-            `https://googleads.googleapis.com/v25/${customerId}/campaigns:mutate`,
+            `https://googleads.googleapis.com/${getGoogleAdsApiVersion()}/${customerId}/campaigns:mutate`,
             {
                 method: "POST",
                 headers: {
                     Authorization: `Bearer ${accessToken}`,
                     "Content-Type": "application/json",
-                    "developer-token": process.env.GOOGLE_ADS_DEVELOPER_TOKEN!,
+                    "developer-token": developerToken,
                 },
                 body: JSON.stringify({
                     operations: [
@@ -402,17 +410,18 @@ export const updateGoogleAdsStatus = async (
 ) => {
     try {
         const accessToken = await getProviderAccessToken(userId, "googleAds");
+        const developerToken = getGoogleAdsDeveloperToken();
         const newStatus = status.toUpperCase();
         const campaignResourceName = `${customerId}/campaigns/${campaignId}`;
         const response = await fetch(
-            `https://googleads.googleapis.com/v25/${customerId}/campaigns:mutate`,
+            `https://googleads.googleapis.com/${getGoogleAdsApiVersion()}/${customerId}/campaigns:mutate`,
             {
                 method: "POST",
 
                 headers: {
                     Authorization: `Bearer ${accessToken}`,
                     "Content-Type": "application/json",
-                    // "developer-token": process.env.GOOGLE_ADS_DEVELOPER_TOKEN!,
+                    "developer-token": developerToken,
                 },
 
                 body: JSON.stringify({
@@ -436,7 +445,7 @@ export const updateGoogleAdsStatus = async (
         if (!response.ok) {
             console.error("Google Ads pause error:", JSON.stringify(data, null, 2));
 
-            throw new Error(data.message);
+            throw new Error(getGoogleApiErrorMessage(data, response.status));
         }
 
         return {
@@ -499,7 +508,7 @@ export const removeGoogleAdsCampaign = async (
 
     try {
         const response = await fetch(
-            `https://googleads.googleapis.com/v25/customers/${normalizedCustomerId}/campaigns:mutate`,
+            `https://googleads.googleapis.com/${getGoogleAdsApiVersion()}/customers/${normalizedCustomerId}/campaigns:mutate`,
             {
                 method: "POST",
                 headers: {

@@ -8,7 +8,10 @@ import {
   ManagedCampaignRecord,
   readManagedCampaigns,
   writeManagedCampaigns,
-} from "../_lib/campaigns";
+} from "../../../../interfaces/campaigns.interface";
+import { ClickAwayListener, Collapse } from "@mui/material";
+import { InputAdornment } from "@mui/material";
+import SearchIcon from "@mui/icons-material/Search";  
 import {
   initialConnection,
   googlePerformanceGoalsByType,
@@ -23,7 +26,7 @@ import {
   googleAppSubtypeOptions,
   metaBuyingTypes,
   metaBidStrategies,
-} from "./constant";
+} from "@/constants/campaign-creation.constant";
 import {
   ProviderConnection,
   LibraryAsset,
@@ -35,7 +38,7 @@ import {
   GenerateCreativeRequest,
   GeneratedCreativeAsset,
   CreativeAssetGenerationError,
-} from "./interfaces";
+} from "@/interfaces/campaign-creation.interface";
 import {
   ProviderName,
   Objective,
@@ -60,7 +63,7 @@ import {
   PlatformMode,
   CampaignExecutionPayload,
   MetaBuyingType,
-} from "./type";
+} from "@/types/campaign-creation.type";
 import {
   Alert,
   Box,
@@ -77,7 +80,12 @@ import {
   Stepper,
   Tab,
   Tabs,
+  IconButton,
   TextField,
+  Stack,
+  Typography,
+  Checkbox,
+  Autocomplete,
 } from "@mui/material";
 
 const API_BASE_URL =
@@ -122,7 +130,10 @@ async function normalizeImageBlobForGoogleAds(
     const alreadySupported =
       sourceMimeType === "image/jpeg" || sourceMimeType === "image/png";
 
-    if (alreadySupported && sourceBlob.size <= GOOGLE_ADS_IMAGE_UPLOAD_MAX_BYTES) {
+    if (
+      alreadySupported &&
+      sourceBlob.size <= GOOGLE_ADS_IMAGE_UPLOAD_MAX_BYTES
+    ) {
       return {
         blob: sourceBlob,
         mimeType: sourceMimeType as "image/jpeg" | "image/png",
@@ -771,7 +782,8 @@ async function fetchGoogleLookupOptions(
 }
 export default function CreateCampaignPage() {
   const { getToken, isLoaded, isSignedIn } = useAuth();
-
+  const [googleLocationOptionsOpen, setGoogleLocationOptionsOpen] =
+    useState(false);
   const [connections, setConnections] = useState<any>({
     googleAds: initialConnection,
     metaAds: initialConnection,
@@ -977,40 +989,22 @@ export default function CreateCampaignPage() {
   const [googleDefaultCpcBid, setGoogleDefaultCpcBid] = useState("20");
   const [pmaxAssetGroupName, setPmaxAssetGroupName] =
     useState("Main Asset Group");
-  const [pmaxFinalUrl, setPmaxFinalUrl] = useState(
-    "https://example.com/summer-collection",
-  );
-  const [pmaxHeadlines, setPmaxHeadlines] = useState(
-    "Summer Sale Is Here\nShop New Arrivals\nGreat Finds Online\nExplore The Collection\nUpgrade Your Style",
-  );
-  const [pmaxLongHeadline, setPmaxLongHeadline] = useState(
-    "Discover the latest collection and shop special summer offers online",
-  );
-  const [pmaxDescriptions, setPmaxDescriptions] = useState(
-    "Explore quality products for every day.\nFind new arrivals and seasonal favourites.\nShop online with convenient delivery.",
-  );
-  const [pmaxBusinessName, setPmaxBusinessName] = useState("Acme Demo Store");
-  const [pmaxPortraitImageUrl, setPmaxPortraitImageUrl] = useState(
-    "https://example.com/pmax-portrait.jpg",
-  );
-  const [pmaxYoutubeVideoIds, setPmaxYoutubeVideoIds] = useState(
-    "DEMO_YOUTUBE_VIDEO_ID",
-  );
-  const [pmaxLogoUrl, setPmaxLogoUrl] = useState(
-    "https://example.com/brand-logo.png",
-  );
-  const [pmaxLandscapeImageUrl, setPmaxLandscapeImageUrl] = useState(
-    "https://example.com/pmax-landscape.jpg",
-  );
-  const [pmaxSquareImageUrl, setPmaxSquareImageUrl] = useState(
-    "https://example.com/pmax-square.jpg",
-  );
-  const [pmaxSearchThemes, setPmaxSearchThemes] = useState(
-    "summer shopping\nonline fashion store\nseasonal offers",
-  );
-  const [pmaxAudienceResourceNames, setPmaxAudienceResourceNames] = useState(
-    "customers/1234567890/audiences/123456789",
-  );
+  const [pmaxFinalUrl, setPmaxFinalUrl] = useState("");
+  const [pmaxHeadlines, setPmaxHeadlines] = useState("");
+  const [pmaxLongHeadline, setPmaxLongHeadline] = useState("");
+  const [pmaxDescriptions, setPmaxDescriptions] = useState("");
+  const [pmaxBusinessName, setPmaxBusinessName] = useState("");
+  // Google locks this setting when the PMax campaign is created. Default to enabled.
+  const [pmaxBrandGuidelinesEnabled, setPmaxBrandGuidelinesEnabled] =
+    useState(true);
+  const [pmaxPortraitImageUrl, setPmaxPortraitImageUrl] = useState("");
+  const [pmaxYoutubeVideoIds, setPmaxYoutubeVideoIds] = useState("");
+  const [pmaxLogoUrl, setPmaxLogoUrl] = useState("");
+  const [pmaxLandscapeImageUrl, setPmaxLandscapeImageUrl] = useState("");
+  const [pmaxSquareImageUrl, setPmaxSquareImageUrl] = useState("");
+  const [pmaxSearchThemes, setPmaxSearchThemes] = useState("");
+  const [pmaxAudienceResourceNames, setPmaxAudienceResourceNames] =
+    useState("");
   const [
     googleDemandGenAudienceResources,
     setGoogleDemandGenAudienceResources,
@@ -1310,6 +1304,10 @@ export default function CreateCampaignPage() {
       ? (campaignApiResponse as LiveCampaignApiResponse)
       : null;
   const liveProviderEntries = Object.entries(liveApiResponse?.providers ?? {});
+  const handleGoogleLocationSearch = async () => {
+    setGoogleLocationOptionsOpen(true);
+    await searchGoogleLocations();
+  };
   const hasLiveCreatedResources = liveProviderEntries.some(
     ([providerKey, providerResult]) => {
       const campaignProvider =
@@ -1360,11 +1358,9 @@ export default function CreateCampaignPage() {
     googleSupportsCampaignTotalBudget && googleBudgetMode === "CAMPAIGN_TOTAL"
       ? "CAMPAIGN_TOTAL"
       : "DAILY";
-  const googlePortfolioStrategyEligible = [
-    "SEARCH",
-    "PERFORMANCE_MAX",
-    "SHOPPING",
-  ].includes(googleCampaignType);
+  const googlePortfolioStrategyEligible = ["SEARCH", "SHOPPING"].includes(
+    googleCampaignType,
+  );
   const effectiveGoogleBiddingScope: GoogleBiddingScope =
     googlePortfolioStrategyEligible && googleBiddingScope === "PORTFOLIO"
       ? "PORTFOLIO"
@@ -1373,8 +1369,12 @@ export default function CreateCampaignPage() {
   const availableGooglePerformanceGoals =
     googleCampaignType === "APP"
       ? []
-      : googlePerformanceGoalsByType[googleCampaignType] ||
-        googlePerformanceGoalsByType.SEARCH;
+      : googleCampaignType === "PERFORMANCE_MAX"
+        ? googlePerformanceGoalsByType.PERFORMANCE_MAX.filter((item) =>
+            ["CONVERSIONS", "CONVERSION_VALUE"].includes(item.value),
+          )
+        : googlePerformanceGoalsByType[googleCampaignType] ||
+          googlePerformanceGoalsByType.SEARCH;
   const effectiveGooglePerformanceGoal = availableGooglePerformanceGoals.some(
     (item) => item.value === googlePerformanceGoal,
   )
@@ -2053,16 +2053,15 @@ export default function CreateCampaignPage() {
     setError("");
     return true;
   };
+  console.log("googleLanguageResources", googleLanguageResources);
 
   const geoResources = googleGeoTargetResources
     .split(/[\n,]+/)
     .map((v) => v.trim())
     .filter(Boolean);
-  const languageResources = googleLanguageResources
-    .split(/[\n,]+/)
-    .map((v) => v.trim())
-    .filter(Boolean);
 
+  // googleLanguageResources is already an array
+  const languageResources = googleLanguageResources;
   const validatePlatformSettings = () => {
     if (
       selectedPlatforms.includes("googleAds") &&
@@ -2093,14 +2092,12 @@ export default function CreateCampaignPage() {
     }
     if (
       selectedPlatforms.includes("googleAds") &&
-      googleBiddingScope === "PORTFOLIO"
+      googleBiddingScope === "PORTFOLIO" &&
+      googlePortfolioStrategyEligible
     ) {
-      if (
-        !googlePortfolioStrategyEligible ||
-        effectiveGoogleBiddingMode !== "AUTOMATED"
-      ) {
+      if (effectiveGoogleBiddingMode !== "AUTOMATED") {
         setError(
-          "Portfolio bidding is only offered here for automated Search, Shopping and Performance Max workflows. Verify the selected portfolio strategy type is compatible with this campaign.",
+          "Portfolio bidding is available only for automated Search and Shopping campaigns. Use standard bidding for this campaign type.",
         );
         return false;
       }
@@ -2673,6 +2670,26 @@ export default function CreateCampaignPage() {
       );
     });
 
+  const GOOGLE_PMAX_CAPABILITY_ID = "google-performance-max-asset-group";
+  const GOOGLE_PMAX_REQUIREMENTS = {
+    LOGO: "google-pmax-logo-images",
+    LANDSCAPE: "google-pmax-landscape-images",
+    SQUARE: "google-pmax-square-images",
+    PORTRAIT: "google-pmax-portrait-images",
+    LANDSCAPE_LOGO: "google-pmax-landscape-logo-images",
+  } as const;
+
+  const getAttachedGooglePmaxAssets = (requirementId: string) =>
+    assetLibrary.filter((asset) => {
+      const assignment = campaignAssetAssignments[asset.id];
+      return (
+        attachedCreativeAssetIds.includes(asset.id) &&
+        assignment?.platform === "googleAds" &&
+        assignment.capabilityId === GOOGLE_PMAX_CAPABILITY_ID &&
+        assignment.requirementId === requirementId
+      );
+    });
+
   const validateAdCreation = () => {
     if (selectedPlatforms.includes("googleAds")) {
       if (googleCampaignType === "SEARCH") {
@@ -2769,13 +2786,72 @@ export default function CreateCampaignPage() {
           );
           return false;
         }
+        const pmaxLogoAssets = getAttachedGooglePmaxAssets(
+          GOOGLE_PMAX_REQUIREMENTS.LOGO,
+        );
+        const pmaxLandscapeAssets = getAttachedGooglePmaxAssets(
+          GOOGLE_PMAX_REQUIREMENTS.LANDSCAPE,
+        );
+        const pmaxSquareAssets = getAttachedGooglePmaxAssets(
+          GOOGLE_PMAX_REQUIREMENTS.SQUARE,
+        );
+
+        if (!pmaxLogoAssets.length) {
+          setError(
+            "Attach at least one approved logo from the Asset Library for Performance Max.",
+          );
+          return false;
+        }
+        if (!pmaxLandscapeAssets.length) {
+          setError(
+            "Attach at least one Landscape image from the Asset Library for Performance Max.",
+          );
+          return false;
+        }
+        if (!pmaxSquareAssets.length) {
+          setError(
+            "Attach at least one Square image from the Asset Library for Performance Max.",
+          );
+          return false;
+        }
+        const pmaxPortraitAssets = getAttachedGooglePmaxAssets(
+          GOOGLE_PMAX_REQUIREMENTS.PORTRAIT,
+        );
+        const pmaxLandscapeLogoAssets = getAttachedGooglePmaxAssets(
+          GOOGLE_PMAX_REQUIREMENTS.LANDSCAPE_LOGO,
+        );
+        const invalidPmaxLogoCounts = pmaxBrandGuidelinesEnabled
+          ? pmaxLogoAssets.length + pmaxLandscapeLogoAssets.length > 5
+          : pmaxLandscapeLogoAssets.length > 20;
         if (
-          ![pmaxLogoUrl, pmaxLandscapeImageUrl, pmaxSquareImageUrl].every(
-            isValidHttpUrl,
-          )
+          pmaxLogoAssets.length > 5 ||
+          pmaxLandscapeAssets.length > 20 ||
+          pmaxSquareAssets.length > 20 ||
+          pmaxPortraitAssets.length > 20 ||
+          invalidPmaxLogoCounts
         ) {
           setError(
-            "Enter valid URLs for the PMax logo, landscape image, and square image.",
+            pmaxBrandGuidelinesEnabled
+              ? "With brand guidelines enabled, provide at least one square logo and no more than five total campaign logo assets (including up to four additional LOGO or Landscape Logo assets)."
+              : "Performance Max allows up to 5 square logos, 20 landscape images, 20 square images, 20 portrait images and 20 landscape logos per Asset Group.",
+          );
+          return false;
+        }
+        const pmaxVideoIds = pmaxYoutubeVideoIds
+          .split(/[\n,]+/)
+          .map((item) => item.trim())
+          .filter(Boolean);
+        if (pmaxVideoIds.length > 15) {
+          setError(
+            "Performance Max supports up to 15 YouTube video assets per Asset Group.",
+          );
+          return false;
+        }
+        if (
+          pmaxVideoIds.some((videoId) => !/^[A-Za-z0-9_-]{11}$/.test(videoId))
+        ) {
+          setError(
+            "Each YouTube video ID must be an 11-character YouTube ID. Leave the field empty when no video is being added.",
           );
           return false;
         }
@@ -2841,7 +2917,8 @@ export default function CreateCampaignPage() {
         const hasSquareImage =
           hasSquareLibraryAsset ||
           Boolean(googleDisplaySquareAssetResourceName.trim()) ||
-          (executionMode !== "LIVE" && isValidHttpUrl(googleDisplaySquareImageUrl));
+          (executionMode !== "LIVE" &&
+            isValidHttpUrl(googleDisplaySquareImageUrl));
 
         if (!hasLandscapeImage || !hasSquareImage) {
           setError(
@@ -3217,10 +3294,10 @@ export default function CreateCampaignPage() {
           aspectRatio: asset.aspectRatio || null,
           intendedPlatforms: Array.from(
             new Set([
-              ...((asset.platformTargets?.length
+              ...(asset.platformTargets?.length
                 ? asset.platformTargets
                 : selectedPlatforms
-              ).filter((platform) => selectedPlatforms.includes(platform))),
+              ).filter((platform) => selectedPlatforms.includes(platform)),
               ...(campaignAssetAssignments[asset.id]?.platform
                 ? [campaignAssetAssignments[asset.id].platform]
                 : []),
@@ -3494,6 +3571,7 @@ export default function CreateCampaignPage() {
             },
             ...(googleCampaignType === "PERFORMANCE_MAX"
               ? {
+                  brandGuidelinesEnabled: pmaxBrandGuidelinesEnabled,
                   assetGroup: {
                     name: pmaxAssetGroupName.trim(),
                     final_urls: [pmaxFinalUrl.trim() || websiteUrl.trim()],
@@ -3512,18 +3590,24 @@ export default function CreateCampaignPage() {
                         .filter(Boolean),
                       businessName: pmaxBusinessName.trim(),
                     },
-                    imageAssets: {
-                      logoUrl: pmaxLogoUrl.trim(),
-                      marketingImageUrl: pmaxLandscapeImageUrl.trim(),
-                      squareMarketingImageUrl: pmaxSquareImageUrl.trim(),
-                      ...(pmaxPortraitImageUrl.trim() && {
-                        portraitMarketingImageUrl: pmaxPortraitImageUrl.trim(),
-                      }),
-                      youtubeVideoIds: pmaxYoutubeVideoIds
-                        .split(/[\n,]+/)
-                        .map((item) => item.trim())
-                        .filter(Boolean),
-                    },
+                    assetAssignments: assetLibrary
+                      .filter((asset) =>
+                        attachedCreativeAssetIds.includes(asset.id),
+                      )
+                      .map((asset) => ({
+                        assetId: asset.id,
+                        assignment: campaignAssetAssignments[asset.id],
+                      }))
+                      .filter(
+                        (entry) =>
+                          entry.assignment?.platform === "googleAds" &&
+                          entry.assignment.capabilityId ===
+                            "google-performance-max-asset-group",
+                      ),
+                    youtubeVideoIds: pmaxYoutubeVideoIds
+                      .split(/[\n,]+/)
+                      .map((item) => item.trim())
+                      .filter(Boolean),
                     ...(pmaxSearchThemes.trim() && {
                       searchThemes: pmaxSearchThemes
                         .split("\n")
@@ -3541,7 +3625,7 @@ export default function CreateCampaignPage() {
                       },
                     }),
                     status: "PAUSED",
-                    note: "The backend must download or upload these media URLs as Google Asset resources and link all required assets with AssetGroupAsset operations in the same atomic mutate request.",
+                    note: "Resolve owner-scoped Asset Library IDs, prepare role-specific derivatives, upload them to the selected Google Ads customer, then atomically create the Asset Group and its required AssetGroupAsset links. When brand guidelines are enabled, link Business Name and Logo at campaign creation instead of the Asset Group.",
                   },
                 }
               : {
@@ -4137,16 +4221,16 @@ export default function CreateCampaignPage() {
         textContent: asset.textContent || null,
         aspectRatio: asset.aspectRatio || null,
         intendedPlatforms: Array.from(
-            new Set([
-              ...((asset.platformTargets?.length
-                ? asset.platformTargets
-                : selectedPlatforms
-              ).filter((platform) => selectedPlatforms.includes(platform))),
-              ...(campaignAssetAssignments[asset.id]?.platform
-                ? [campaignAssetAssignments[asset.id].platform]
-                : []),
-            ]),
-          ),
+          new Set([
+            ...(asset.platformTargets?.length
+              ? asset.platformTargets
+              : selectedPlatforms
+            ).filter((platform) => selectedPlatforms.includes(platform)),
+            ...(campaignAssetAssignments[asset.id]?.platform
+              ? [campaignAssetAssignments[asset.id].platform]
+              : []),
+          ]),
+        ),
         approvalStatus: "APPROVED_BY_CAMPAIGN_USER",
         providerUploadRequired:
           asset.kind !== "TEXT" && Boolean(asset.contentUrl),
@@ -4429,10 +4513,7 @@ export default function CreateCampaignPage() {
         );
       }
 
-      if (
-        squareRatio !== null &&
-        (squareRatio < 0.9 || squareRatio > 1.1)
-      ) {
+      if (squareRatio !== null && (squareRatio < 0.9 || squareRatio > 1.1)) {
         throw new Error(
           "Google Display square images must use an approximately 1:1 aspect ratio.",
         );
@@ -4670,12 +4751,200 @@ export default function CreateCampaignPage() {
         },
       };
     };
+    const buildGooglePerformanceMaxProvider = () => {
+      const accountId = connections.googleAds.selectedAccountId;
+      if (!accountId) {
+        throw new Error("Connect and select a Google Ads account.");
+      }
+
+      const finalUrl = pmaxFinalUrl.trim() || websiteUrl.trim();
+      if (!isValidHttpUrl(finalUrl)) {
+        throw new Error("Enter a valid final URL for the Performance Max Asset Group.");
+      }
+      if (executionMode === "LIVE" && usesExampleDomain(finalUrl)) {
+        throw new Error("Replace the example.com Performance Max final URL before live execution.");
+      }
+
+      // Build only the two standard PMax bidding strategies supported by the
+      // backend flow. PMax portfolio bidding is intentionally not enabled.
+      if (effectiveGoogleBiddingScope !== "STANDARD") {
+        throw new Error("Standard Performance Max currently supports standard bidding only; portfolio bidding is not available in this flow.");
+      }
+
+      const biddingStrategy = effectiveGoogleBiddingStrategy;
+      if (!["MAXIMIZE_CONVERSIONS", "MAXIMIZE_CONVERSION_VALUE"].includes(biddingStrategy)) {
+        throw new Error(`Google bidding strategy "${biddingStrategy}" is not supported for Standard Performance Max.`);
+      }
+      if (
+        (effectiveGooglePerformanceGoal === "CONVERSIONS" && biddingStrategy !== "MAXIMIZE_CONVERSIONS") ||
+        (effectiveGooglePerformanceGoal === "CONVERSION_VALUE" && biddingStrategy !== "MAXIMIZE_CONVERSION_VALUE")
+      ) {
+        throw new Error("The Performance Max bidding strategy does not match the selected performance goal.");
+      }
+
+      const budget = effectiveGoogleBudgetMode === "CAMPAIGN_TOTAL"
+        ? {
+            period: "CUSTOM_PERIOD",
+            totalAmount: Number(googleCampaignTotalBudget),
+            explicitlyShared: false,
+          }
+        : {
+            period: "DAILY",
+            averageDailyAmount: Number(googleDailyBudget),
+            explicitlyShared: false,
+          };
+
+      if (!Number.isFinite(
+        effectiveGoogleBudgetMode === "CAMPAIGN_TOTAL"
+          ? Number(googleCampaignTotalBudget)
+          : Number(googleDailyBudget),
+      ) || (
+        effectiveGoogleBudgetMode === "CAMPAIGN_TOTAL"
+          ? Number(googleCampaignTotalBudget)
+          : Number(googleDailyBudget)
+      ) <= 0) {
+        throw new Error("Enter a Performance Max budget amount greater than zero.");
+      }
+
+      const startDate = googleStartDate.trim().replaceAll("-", "");
+      const endDate = googleEndDate.trim().replaceAll("-", "");
+      if (effectiveGoogleBudgetMode === "CAMPAIGN_TOTAL" && (!startDate || !endDate)) {
+        throw new Error("A Performance Max campaign-total budget requires both a start date and an end date.");
+      }
+      if (startDate && endDate && endDate <= startDate) {
+        throw new Error("Performance Max end date must be later than its start date.");
+      }
+
+      const headlines = splitValues(pmaxHeadlines);
+      const longHeadlines = splitValues(pmaxLongHeadline);
+      const descriptions = splitValues(pmaxDescriptions);
+      const videoIds = splitValues(pmaxYoutubeVideoIds);
+      const searchThemes = splitValues(pmaxSearchThemes);
+      const audienceResourceNames = splitValues(pmaxAudienceResourceNames);
+
+      // These checks mirror validateAdCreation so the payload builder cannot
+      // silently emit an incomplete PMax asset group if called independently.
+      if (headlines.length < 3 || headlines.length > 15 || headlines.some((value) => value.length > 30)) {
+        throw new Error("Performance Max requires 3–15 headlines, each no longer than 30 characters.");
+      }
+      if (longHeadlines.length < 1 || longHeadlines.length > 5 || longHeadlines.some((value) => value.length > 90)) {
+        throw new Error("Performance Max requires 1–5 long headlines, each no longer than 90 characters.");
+      }
+      if (
+        descriptions.length < 2 ||
+        descriptions.length > 5 ||
+        descriptions.some((value) => value.length > 90) ||
+        !descriptions.some((value) => value.length <= 60)
+      ) {
+        throw new Error("Performance Max requires 2–5 descriptions (maximum 90 characters) and at least one description of 60 characters or fewer.");
+      }
+      if (!pmaxBusinessName.trim() || pmaxBusinessName.trim().length > 25) {
+        throw new Error("Enter a Performance Max business name (maximum 25 characters).");
+      }
+      if (videoIds.length > 15 || videoIds.some((videoId) => !/^[A-Za-z0-9_-]{11}$/.test(videoId))) {
+        throw new Error("Performance Max accepts up to 15 valid 11-character YouTube video IDs.");
+      }
+      if (audienceResourceNames.some((value) => !/^customers\/\d+\/audiences\/\d+$/.test(value))) {
+        throw new Error("Performance Max audience signals must be Google Audience resource names, such as customers/123/audiences/456.");
+      }
+
+      const logoAssets = getAttachedGooglePmaxAssets(GOOGLE_PMAX_REQUIREMENTS.LOGO);
+      const landscapeAssets = getAttachedGooglePmaxAssets(GOOGLE_PMAX_REQUIREMENTS.LANDSCAPE);
+      const squareAssets = getAttachedGooglePmaxAssets(GOOGLE_PMAX_REQUIREMENTS.SQUARE);
+      const portraitAssets = getAttachedGooglePmaxAssets(GOOGLE_PMAX_REQUIREMENTS.PORTRAIT);
+      const landscapeLogoAssets = getAttachedGooglePmaxAssets(GOOGLE_PMAX_REQUIREMENTS.LANDSCAPE_LOGO);
+
+      if (!logoAssets.length || !landscapeAssets.length || !squareAssets.length) {
+        throw new Error("Attach at least one PMax logo, one landscape image and one square image from the Asset Library.");
+      }
+      if (
+        logoAssets.length > 5 ||
+        landscapeAssets.length > 20 ||
+        squareAssets.length > 20 ||
+        portraitAssets.length > 20 ||
+        landscapeLogoAssets.length > (pmaxBrandGuidelinesEnabled ? 4 : 20) ||
+        (pmaxBrandGuidelinesEnabled && logoAssets.length + landscapeLogoAssets.length > 5)
+      ) {
+        throw new Error("The selected Performance Max image assignments exceed the supported asset limits.");
+      }
+
+      const targetCpaAmount =
+        effectiveGooglePerformanceGoal === "CONVERSIONS" &&
+        biddingStrategy === "MAXIMIZE_CONVERSIONS" &&
+        isPositiveAmount(googleTargetCpa)
+          ? Number(googleTargetCpa)
+          : undefined;
+      const targetRoas =
+        effectiveGooglePerformanceGoal === "CONVERSION_VALUE" &&
+        biddingStrategy === "MAXIMIZE_CONVERSION_VALUE" &&
+        isPositiveAmount(googleTargetRoas)
+          ? Number(googleTargetRoas)
+          : undefined;
+
+      const negativeMatchType = googleKeywordMatchType as
+        | "BROAD"
+        | "PHRASE"
+        | "EXACT";
+      const negativeKeywords = splitValues(googleNegativeKeywordLines).map((text) => ({
+        text,
+        matchType: negativeMatchType,
+      }));
+
+      return {
+        accountId,
+        providerObjective: googleMarketingObjective,
+        providerCampaignType: "PERFORMANCE_MAX",
+        configuration: {
+          // The backend uses this root-level switch when linking campaign-level
+          // brand assets versus Asset Group-level brand assets.
+          brandGuidelinesEnabled: pmaxBrandGuidelinesEnabled,
+          campaign: {
+            name: campaignName.trim(),
+            biddingStrategy,
+            biddingMode: effectiveGoogleBiddingMode,
+            biddingScope: "STANDARD",
+            performanceGoalPreset: effectiveGooglePerformanceGoal,
+            marketingObjective: googleMarketingObjective,
+            ...(startDate ? { startDate } : {}),
+            ...(endDate ? { endDate } : {}),
+            ...(targetCpaAmount !== undefined ? { targetCpaAmount } : {}),
+            ...(targetRoas !== undefined ? { targetRoas } : {}),
+            campaignBudget: budget,
+            campaignCriteria: {
+              locationResourceNames: geoResources,
+              languageResourceNames: languageResources,
+            },
+            contains_eu_political_advertising: googleEuPoliticalStatus,
+          },
+          assetGroup: {
+            name: pmaxAssetGroupName.trim(),
+            final_urls: [finalUrl],
+            textAssets: {
+              headlines,
+              longHeadlines,
+              descriptions,
+              businessName: pmaxBusinessName.trim(),
+            },
+            youtubeVideoIds: videoIds,
+            ...(searchThemes.length > 0 ? { searchThemes } : {}),
+            ...(audienceResourceNames.length > 0
+              ? { audienceSignals: { audienceResourceNames } }
+              : {}),
+            status: "PAUSED",
+          },
+          ...(negativeKeywords.length > 0 ? { negativeKeywords } : {}),
+        },
+      };
+    };
+
     // --------------------------------------------------
-    // GOOGLE ADS — current global creation flow: SEARCH
+    // GOOGLE ADS — SEARCH, DISPLAY AND STANDARD PERFORMANCE MAX
     // --------------------------------------------------
     if (selectedPlatforms.includes("googleAds")) {
       if (googleCampaignType === "DISPLAY") {
         providers.googleAds = buildGoogleDisplayProvider();
+      } else if (googleCampaignType === "PERFORMANCE_MAX") {
+        providers.googleAds = buildGooglePerformanceMaxProvider();
       } else if (googleCampaignType === "SEARCH") {
         if (effectiveGoogleBudgetMode !== "DAILY") {
           throw new Error(
@@ -4796,7 +5065,7 @@ export default function CreateCampaignPage() {
         };
       } else {
         throw new Error(
-          "The current global Google Ads creation flow supports SEARCH campaigns only.",
+          "The current global Google Ads creation flow supports SEARCH, DISPLAY and PERFORMANCE_MAX campaigns only.",
         );
       }
     }
@@ -5182,7 +5451,8 @@ export default function CreateCampaignPage() {
     }
 
     const token = await getToken();
-    if (!token) throw new Error("Unable to retrieve your authentication token.");
+    if (!token)
+      throw new Error("Unable to retrieve your authentication token.");
 
     const contentUrl = /^https?:\/\//i.test(asset.contentUrl)
       ? asset.contentUrl
@@ -5199,10 +5469,11 @@ export default function CreateCampaignPage() {
 
     const sourceBlob = await imageResponse.blob();
     const normalized = await normalizeImageBlobForGoogleAds(sourceBlob);
-    const safeName = asset.name
-      .replace(/[^a-z0-9-_]+/gi, "-")
-      .replace(/^-|-$/g, "")
-      .slice(0, 110) || "google-display-image";
+    const safeName =
+      asset.name
+        .replace(/[^a-z0-9-_]+/gi, "-")
+        .replace(/^-|-$/g, "")
+        .slice(0, 110) || "google-display-image";
     const file = new File(
       [normalized.blob],
       `${safeName}-google-ads.${normalized.extension}`,
@@ -5212,7 +5483,10 @@ export default function CreateCampaignPage() {
     form.append("file", file);
     form.append("name", `${asset.name} · Google Ads compatible`.slice(0, 150));
     form.append("kind", "IMAGE");
-    form.append("origin", asset.origin === "AI_STUDIO" ? "AI_STUDIO" : "MANUAL");
+    form.append(
+      "origin",
+      asset.origin === "AI_STUDIO" ? "AI_STUDIO" : "MANUAL",
+    );
     form.append("prompt", asset.prompt || "");
     form.append(
       "platformTargets",
@@ -5260,7 +5534,8 @@ export default function CreateCampaignPage() {
       addedAt: row.createdAt
         ? new Date(row.createdAt).toLocaleString()
         : new Date().toLocaleString(),
-      origin: row.origin || (asset.origin === "AI_STUDIO" ? "AI_STUDIO" : "MANUAL"),
+      origin:
+        row.origin || (asset.origin === "AI_STUDIO" ? "AI_STUDIO" : "MANUAL"),
       prompt: row.prompt || asset.prompt,
       aspectRatio: row.aspectRatio || asset.aspectRatio,
       platformTargets: Array.isArray(row.platformTargets)
@@ -5291,10 +5566,13 @@ export default function CreateCampaignPage() {
       | "pmax-landscape"
       | "pmax-square"
       | "pmax-portrait"
+      | "pmax-landscape-logo"
       | "google-display"
       | "google-display-square"
       | "demand-gen"
-      | "app-image",
+      | "app-image"
+      | "google-display"
+      | "google-display-square",
   ) => {
     const isGoogleDisplayTarget =
       target === "google-display" || target === "google-display-square";
@@ -5312,8 +5590,7 @@ export default function CreateCampaignPage() {
         return;
       }
 
-      const expectedRole =
-        target === "google-display" ? "LANDSCAPE" : "SQUARE";
+      const expectedRole = target === "google-display" ? "LANDSCAPE" : "SQUARE";
       const actualRatio = getLibraryAssetAspectRatio(asset);
       const actualRole =
         actualRatio === null
@@ -5385,9 +5662,13 @@ export default function CreateCampaignPage() {
             : [...current, compatibleAsset.id],
         );
         if (expectedRole === "LANDSCAPE") {
-          setGoogleDisplayImageUrl(compatibleAsset.url || compatibleAsset.contentUrl || "");
+          setGoogleDisplayImageUrl(
+            compatibleAsset.url || compatibleAsset.contentUrl || "",
+          );
         } else {
-          setGoogleDisplaySquareImageUrl(compatibleAsset.url || compatibleAsset.contentUrl || "");
+          setGoogleDisplaySquareImageUrl(
+            compatibleAsset.url || compatibleAsset.contentUrl || "",
+          );
         }
         setAssetNotice(
           `${compatibleAsset.name} is attached as Google Display ${expectedRole.toLowerCase()}. The assignment will be saved with this campaign and the private image will be uploaded to Google Ads during LIVE execution.`,
@@ -5402,6 +5683,115 @@ export default function CreateCampaignPage() {
             : "Unable to prepare this image for Google Display.",
         );
       }
+      return;
+    }
+
+    const pmaxTargetConfig = {
+      "pmax-logo": {
+        requirementId: GOOGLE_PMAX_REQUIREMENTS.LOGO,
+        role: "LOGO",
+        allowedKinds: ["IMAGE", "LOGO"],
+        label: "logo",
+      },
+      "pmax-landscape": {
+        requirementId: GOOGLE_PMAX_REQUIREMENTS.LANDSCAPE,
+        role: "LANDSCAPE",
+        allowedKinds: ["IMAGE"],
+        label: "landscape image",
+      },
+      "pmax-square": {
+        requirementId: GOOGLE_PMAX_REQUIREMENTS.SQUARE,
+        role: "SQUARE",
+        allowedKinds: ["IMAGE"],
+        label: "square image",
+      },
+      "pmax-portrait": {
+        requirementId: GOOGLE_PMAX_REQUIREMENTS.PORTRAIT,
+        role: "PORTRAIT",
+        allowedKinds: ["IMAGE"],
+        label: "portrait image",
+      },
+      "pmax-landscape-logo": {
+        requirementId: GOOGLE_PMAX_REQUIREMENTS.LANDSCAPE_LOGO,
+        role: "LANDSCAPE_LOGO",
+        allowedKinds: ["IMAGE", "LOGO"],
+        label: "landscape logo",
+      },
+    } as const;
+
+    if (target in pmaxTargetConfig) {
+      if (
+        !selectedPlatforms.includes("googleAds") ||
+        googleCampaignType !== "PERFORMANCE_MAX"
+      ) {
+        setAssetNotice(
+          "Select Google Ads and Performance Max before assigning a PMax asset.",
+        );
+        return;
+      }
+
+      const config = pmaxTargetConfig[target as keyof typeof pmaxTargetConfig];
+      if (!(config.allowedKinds as readonly string[]).includes(asset.kind)) {
+        setAssetNotice(
+          `Performance Max ${config.label} requires an IMAGE or LOGO Asset Library item of the supported type.`,
+        );
+        return;
+      }
+
+      if (!asset.id?.trim()) {
+        setAssetNotice(
+          "The selected Asset Library item has no stable asset ID.",
+        );
+        return;
+      }
+
+      setCampaignAssetAssignments((current) => {
+        const existing = current[asset.id];
+        if (
+          existing?.platform === "googleAds" &&
+          existing.capabilityId === "google-performance-max-asset-group" &&
+          existing.requirementId === config.requirementId
+        ) {
+          return current;
+        }
+
+        const usedIndexes = new Set(
+          Object.entries(current)
+            .filter(
+              ([assetId, assignment]) =>
+                assetId !== asset.id &&
+                assignment.platform === "googleAds" &&
+                assignment.capabilityId ===
+                  "google-performance-max-asset-group" &&
+                assignment.requirementId === config.requirementId,
+            )
+            .map(([, assignment]) => assignment.assetIndex),
+        );
+        let assetIndex = 0;
+        while (usedIndexes.has(assetIndex)) assetIndex += 1;
+
+        return {
+          ...current,
+          [asset.id]: {
+            generationId: `asset-library-${asset.id}`,
+            capabilityId: "google-performance-max-asset-group",
+            requirementId: config.requirementId,
+            role: config.role as GeneratedCreativeAsset["role"],
+            assetIndex,
+            platform: "googleAds",
+          },
+        };
+      });
+
+      setAttachedCreativeAssetIds((current) =>
+        current.includes(asset.id) ? current : [...current, asset.id],
+      );
+      setAssetNotice(
+        `${asset.name} is attached as a Performance Max ${config.label}. The backend will prepare a provider-compatible derivative and upload it to the selected Google Ads account during LIVE execution.`,
+      );
+      setWorkspaceView("builder");
+      markStepReached(4);
+      clearPreview();
       return;
     }
 
@@ -5883,7 +6273,12 @@ export default function CreateCampaignPage() {
               1,
               "1:1",
             );
-            // PMax portrait images are optional in the backend capability registry.
+            addImageRequest(
+              capabilityId,
+              "google-pmax-portrait-images",
+              1,
+              "4:5",
+            );
           } else if (googleCampaignType === "DEMAND_GEN") {
             if (googleDemandGenFormat === "CAROUSEL") {
               const capabilityId = "google-demand-gen-carousel";
@@ -6184,7 +6579,9 @@ export default function CreateCampaignPage() {
 
       const blob = await imageResponse.blob();
       const sourceMimeType = (
-        blob.type || generatedAsset.media.mimeType || ""
+        blob.type ||
+        generatedAsset.media.mimeType ||
+        ""
       ).toLowerCase();
       if (!sourceMimeType.startsWith("image/") || blob.size === 0) {
         throw new Error("The generated output is not a valid image file.");
@@ -7084,11 +7481,7 @@ export default function CreateCampaignPage() {
                         ].includes(nextType)
                       )
                         setGoogleBudgetMode("DAILY");
-                      if (
-                        !["SEARCH", "PERFORMANCE_MAX", "SHOPPING"].includes(
-                          nextType,
-                        )
-                      )
+                      if (!["SEARCH", "SHOPPING"].includes(nextType))
                         setGoogleBiddingScope("STANDARD");
                       if (
                         !nextGoals.some(
@@ -7705,183 +8098,403 @@ export default function CreateCampaignPage() {
                       />
                     </div>
 
-                    {/* Google Ads Location Lookup */}
-                    <div>
-                      <label className={labelClass}>Locations</label>
-
-                      <div className="mt-2 flex gap-2">
-                        <input
-                          value={googleLocationQuery}
-                          onChange={(e) =>
-                            setGoogleLocationQuery(e.target.value)
-                          }
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              void searchGoogleLocations();
-                            }
-                          }}
-                          placeholder="Search city, state or country"
-                          className={inputClass}
-                        />
-
-                        <button
-                          type="button"
-                          onClick={() => void searchGoogleLocations()}
-                          disabled={googleLocationLoading}
-                          className="shrink-0 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                    <Stack spacing={3}  className="col-span-2" sx={{ display: "flex", flexDirection: "row", alignItems: "center" }}>
+                      {/* LOCATIONS */}
+                      <Box sx={{ flex: 1 }}>
+                        <Typography
+                          variant="subtitle2"
+                          fontWeight={600}
+                          sx={{ mb: 1 }}
                         >
-                          {googleLocationLoading ? "Searching..." : "Search"}
-                        </button>
-                      </div>
+                          Locations
+                        </Typography>
 
-                      {googleLocationError && (
-                        <p className="mt-2 text-xs text-red-600">
-                          {googleLocationError}
-                        </p>
-                      )}
+                        <Stack
+                        direction={{ xs: "column", sm: "row" }}
+                        spacing={1}
+                        alignItems={{ xs: "stretch", sm: "flex-start" }}
+                        ><TextField
+  fullWidth
+  size="small"
+  value={googleLocationQuery}
+  onChange={(e) => setGoogleLocationQuery(e.target.value)}
+  onKeyDown={(e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      void handleGoogleLocationSearch();
+    }
+  }}
+  placeholder="Search city, state or country"
+  InputProps={{
+    endAdornment: (
+      <InputAdornment position="end">
+        <IconButton
+          onClick={() => void handleGoogleLocationSearch()}
+          disabled={googleLocationLoading}
+          edge="end"
+          aria-label="Search locations"
+          size="small"
+        >
+          {googleLocationLoading ? (
+            <CircularProgress size={19} />
+          ) : (
+            <SearchIcon />
+          )}
+        </IconButton>
+      </InputAdornment>
+    ),
+  }}
+  sx={{
+    "& .MuiOutlinedInput-root": {
+      borderRadius: 2,
+      backgroundColor: "background.paper",
+    },
+  }}
+/>
+                        </Stack>
 
-                      {googleLocationOptions.length > 0 && (
-                        <div className="mt-3 max-h-44 space-y-2 overflow-y-auto rounded-lg border border-slate-200 p-3">
-                          {googleLocationOptions.map((option) => {
-                            const resourceName = getGoogleLookupResourceName(
-                              option,
-                              "geoTargetConstants",
-                            );
-
-                            if (!resourceName) return null;
-
-                            return (
-                              <label
-                                key={resourceName}
-                                className="flex cursor-pointer items-start gap-2 text-sm text-slate-700"
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={geoResources.includes(resourceName)}
-                                  onChange={(e) => {
-                                    setGoogleGeoTargetResources((current) =>
-                                      toggleGoogleResourceName(
-                                        current,
-                                        resourceName,
-                                        e.target.checked,
-                                      ),
-                                    );
-                                    clearPreview();
-                                  }}
-                                  className="mt-1"
-                                />
-
-                                <span>
-                                  <span className="block font-medium">
-                                    {getGoogleLookupLabel(option)}
-                                  </span>
-                                  <span className="block text-xs text-slate-500">
-                                    {resourceName}
-                                  </span>
-                                </span>
-                              </label>
-                            );
-                          })}
-                        </div>
-                      )}
-
-                      <p className="mt-2 text-xs text-slate-500">
-                        Selected locations: {geoResources.length}
-                      </p>
-                    </div>
-
-                    {/* Google Ads Language Lookup */}
-                    <div>
-                      <label className={labelClass}>Languages</label>
-
-                      <input
-                        value={googleLanguageSearch}
-                        onChange={(e) =>
-                          setGoogleLanguageSearch(e.target.value)
-                        }
-                        placeholder="Filter available languages"
-                        className={inputClass}
-                      />
-
-                      {googleLanguageLoading && (
-                        <p className="mt-2 text-xs text-slate-500">
-                          Loading Google Ads languages...
-                        </p>
-                      )}
-
-                      {googleLanguageError && (
-                        <p className="mt-2 text-xs text-red-600">
-                          {googleLanguageError}
-                        </p>
-                      )}
-
-                      {!googleLanguageLoading &&
-                        googleLanguageOptions.length > 0 && (
-                          <div className="mt-3 max-h-44 space-y-2 overflow-y-auto rounded-lg border border-slate-200 p-3">
-                            {googleLanguageOptions
-                              .filter((option) => {
-                                const searchText = [
-                                  getGoogleLookupLabel(option),
-                                  option.id,
-                                  option.resourceName,
-                                  option.resource_name,
-                                ]
-                                  .join(" ")
-                                  .toLowerCase();
-
-                                return searchText.includes(
-                                  googleLanguageSearch.toLowerCase(),
-                                );
-                              })
-                              .map((option) => {
-                                const resourceName =
-                                  getGoogleLookupResourceName(
-                                    option,
-                                    "languageConstants",
-                                  );
-
-                                if (!resourceName) return null;
-
-                                return (
-                                  <label
-                                    key={resourceName}
-                                    className="flex cursor-pointer items-center gap-2 text-sm text-slate-700"
-                                  >
-                                    <input
-                                      type="checkbox"
-                                      checked={languageResources.includes(
-                                        resourceName,
-                                      )}
-                                      onChange={(e) => {
-                                        setGoogleLanguageResources((current) =>
-                                          toggleGoogleResourceName(
-                                            current,
-                                            resourceName,
-                                            e.target.checked,
-                                          ),
-                                        );
-                                        clearPreview();
-                                      }}
-                                    />
-
-                                    <span>
-                                      {getGoogleLookupLabel(option)}
-                                      <span className="ml-2 text-xs text-slate-500">
-                                        {resourceName}
-                                      </span>
-                                    </span>
-                                  </label>
-                                );
-                              })}
-                          </div>
+                        {googleLocationError && (
+                          <Typography
+                            color="error"
+                            variant="caption"
+                            sx={{ display: "block", mt: 1 }}
+                          >
+                            {googleLocationError}
+                          </Typography>
                         )}
 
-                      <p className="mt-2 text-xs text-slate-500">
-                        Selected languages: {languageResources.length}
-                      </p>
-                    </div>
+                       
+                        <ClickAwayListener
+                          onClickAway={() =>
+                            setGoogleLocationOptionsOpen(false)
+                          }
+                        >
+                          <Box>
+                            <Collapse
+                              in={
+                                googleLocationOptionsOpen &&
+                                googleLocationOptions.length > 0
+                              }
+                            >
+                              <Paper
+                                variant="outlined"
+                                sx={{
+                                  mt: 1.5,
+                                  p: 1,
+                                  maxHeight: 220,
+                                  overflowY: "auto",
+                                  borderRadius: 2,
+                                  borderColor: "divider",
+                                }}
+                              >
+                                <Stack spacing={0.5}>
+                                  {googleLocationOptions.map((option) => {
+                                    const resourceName =
+                                      getGoogleLookupResourceName(
+                                        option,
+                                        "geoTargetConstants",
+                                      );
 
+                                    if (!resourceName) return null;
+
+                                    const selected =
+                                      geoResources.includes(resourceName);
+
+                                    return (
+                                      <Box
+                                        component="label"
+                                        key={resourceName}
+                                        sx={{
+                                          display: "flex",
+                                          alignItems: "flex-start",
+                                          gap: 1,
+                                          p: 1,
+                                          width: "100%",
+                                          minWidth: 0,
+                                          borderRadius: 1.5,
+                                          cursor: "pointer",
+                                          bgcolor: selected
+                                            ? "action.selected"
+                                            : "transparent",
+                                          "&:hover": {
+                                            bgcolor: "action.hover",
+                                          },
+                                        }}
+                                      >
+                                        <Checkbox
+                                          size="small"
+                                          checked={selected}
+                                          onChange={(e) => {
+                                            setGoogleGeoTargetResources(
+                                              (current) =>
+                                                toggleGoogleResourceName(
+                                                  current,
+                                                  resourceName,
+                                                  e.target.checked,
+                                                ),
+                                            );
+                                            clearPreview();
+                                          }}
+                                          sx={{ p: 0.5, mt: 0.1 }}
+                                        />
+
+                                        <Box sx={{ minWidth: 0, flex: 1 }}>
+                                          <Typography
+                                            variant="body2"
+                                            fontWeight={500}
+                                          >
+                                            {getGoogleLookupLabel(option)}
+                                          </Typography>
+
+                                          <Typography
+                                            variant="caption"
+                                            color="text.secondary"
+                                            sx={{
+                                              display: "block",
+                                              overflowWrap: "anywhere",
+                                            }}
+                                          >
+                                            {resourceName}
+                                          </Typography>
+                                        </Box>
+                                      </Box>
+                                    );
+                                  })}
+                                </Stack>
+
+                                <Box
+                                  sx={{
+                                    display: "flex",
+                                    justifyContent: "flex-end",
+                                    mt: 1,
+                                    pt: 1,
+                                    borderTop: 1,
+                                    borderColor: "divider",
+                                  }}
+                                >
+                                  <Button
+                                    size="small"
+                                    variant="contained"
+                                    onClick={() =>
+                                      setGoogleLocationOptionsOpen(false)
+                                    }
+                                    sx={{
+                                      textTransform: "none",
+                                      borderRadius: 1.5,
+                                    }}
+                                  >
+                                    Done
+                                  </Button>
+                                </Box>
+                              </Paper>
+                            </Collapse>
+
+                            <Stack
+                              direction="row"
+                              alignItems="center"
+                              justifyContent="space-between"
+                              sx={{ mt: 1.5 }}
+                            >
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                              >
+                                Select the locations where your ads should
+                                appear.
+                              </Typography>
+
+                              <Chip
+                                size="small"
+                                variant="outlined"
+                                color="primary"
+                                label={`${geoResources.length} selected`}
+                              />
+                            </Stack>
+                          </Box>
+                        </ClickAwayListener>
+                      </Box>
+
+                      <Box sx={{ flex: 1 }}>
+                        <Typography
+                          variant="subtitle2"
+                          fontWeight={600}
+                          sx={{ mb: 1 }}
+                        >
+                          Languages
+                        </Typography>
+
+                        <Autocomplete
+                          multiple
+                          openOnFocus
+                          disableCloseOnSelect
+                          options={googleLanguageOptions}
+                          loading={googleLanguageLoading}
+                          value={googleLanguageOptions.filter((option) => {
+                            const resourceName = getGoogleLookupResourceName(
+                              option,
+                              "languageConstants",
+                            );
+
+                            return (
+                              !!resourceName &&
+                              languageResources.includes(resourceName)
+                            );
+                          })}
+                          inputValue={googleLanguageSearch}
+                          onInputChange={(_, value) => {
+                            setGoogleLanguageSearch(value);
+                          }}
+                          onChange={(_, selectedOptions) => {
+                            const selectedResources = selectedOptions
+                              .map((option) =>
+                                getGoogleLookupResourceName(
+                                  option,
+                                  "languageConstants",
+                                ),
+                              )
+                              .filter((resourceName): resourceName is string =>
+                                Boolean(resourceName),
+                              );
+
+                            setGoogleLanguageResources(selectedResources);
+                            clearPreview();
+                          }}
+                          getOptionLabel={(option) =>
+                            getGoogleLookupLabel(option)
+                          }
+                          isOptionEqualToValue={(option, value) =>
+                            getGoogleLookupResourceName(
+                              option,
+                              "languageConstants",
+                            ) ===
+                            getGoogleLookupResourceName(
+                              value,
+                              "languageConstants",
+                            )
+                          }
+                          filterOptions={(options, { inputValue }) => {
+                            const search = inputValue.trim().toLowerCase();
+
+                            return options.filter((option) => {
+                              const searchText = [
+                                getGoogleLookupLabel(option),
+                                option.id,
+                                option.resourceName,
+                                option.resource_name,
+                              ]
+                                .join(" ")
+                                .toLowerCase();
+
+                              return searchText.includes(search);
+                            });
+                          }}
+                          noOptionsText="No languages found"
+                          loadingText="Loading Google Ads languages..."
+                          ListboxProps={{
+                            style: {
+                              maxHeight: 240,
+                            },
+                          }}
+                          renderOption={(props, option, { selected }) => {
+                            const resourceName = getGoogleLookupResourceName(
+                              option,
+                              "languageConstants",
+                            );
+
+                            return (
+                              <Box
+                                component="li"
+                                {...props}
+                                key={
+                                  resourceName || getGoogleLookupLabel(option)
+                                }
+                                sx={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  gap: 1,
+                                  py: 1,
+                                }}
+                              >
+                                <Checkbox
+                                  size="small"
+                                  checked={selected}
+                                  sx={{ p: 0.5 }}
+                                />
+
+                                <Box sx={{ minWidth: 0 }}>
+                                  <Typography variant="body2" fontWeight={500}>
+                                    {getGoogleLookupLabel(option)}
+                                  </Typography>
+
+                                  <Typography
+                                    variant="caption"
+                                    color="text.secondary"
+                                    sx={{ overflowWrap: "anywhere" }}
+                                  >
+                                    {resourceName}
+                                  </Typography>
+                                </Box>
+                              </Box>
+                            );
+                          }}
+                          renderInput={(params) => (
+                            <TextField
+                              {...params}
+                              size="small"
+                              placeholder={
+                                languageResources.length > 0
+                                  ? "Search or add languages"
+                                  : "Click to select languages"
+                              }
+                              error={Boolean(googleLanguageError)}
+                              helperText={googleLanguageError || undefined}
+                              InputProps={{
+                                ...params.InputProps,
+                                endAdornment: (
+                                  <>
+                                    {googleLanguageLoading && (
+                                      <CircularProgress
+                                        color="inherit"
+                                        size={18}
+                                      />
+                                    )}
+                                    {params?.InputProps?.endAdornment}
+                                  </>
+                                ),
+                              }}
+                            />
+                          )}
+                          sx={{
+                            "& .MuiAutocomplete-tag": {
+                              maxWidth: "calc(100% - 16px)",
+                            },
+                            "& .MuiOutlinedInput-root": {
+                              borderRadius: 2,
+                            },
+                          }}
+                        />
+
+                        <Box
+                          sx={{
+                            display: "flex",
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            mt: 1.5,
+                          }}
+                        >
+                          <Typography variant="caption" color="text.secondary">
+                            Select the languages you want to target.
+                          </Typography>
+
+                          <Chip
+                            size="small"
+                            color="primary"
+                            variant="outlined"
+                            label={`${languageResources.length} selected`}
+                          />
+                        </Box>
+                      </Box>
+                    </Stack>
                     {/* Google Ads Custom Conversion Goal Lookup */}
                     <div className="sm:col-span-2">
                       <label className={labelClass}>
@@ -9636,7 +10249,8 @@ export default function CreateCampaignPage() {
                           </button>
                           {savedCampaignAssetIds[asset.id] && (
                             <span className="text-[10px] font-semibold text-emerald-700">
-                              Asset Library ID: {savedCampaignAssetIds[asset.id]}
+                              Asset Library ID:{" "}
+                              {savedCampaignAssetIds[asset.id]}
                             </span>
                           )}
                         </div>
@@ -9894,6 +10508,32 @@ export default function CreateCampaignPage() {
                                 Select for Meta
                               </Button>
                             )}
+                          {(asset.kind === "IMAGE" || asset.kind === "LOGO") &&
+                            googleCampaignType === "PERFORMANCE_MAX" && (
+                              <>
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  onClick={() =>
+                                    useLibraryAsset(asset, "pmax-logo")
+                                  }
+                                >
+                                  PMax logo
+                                </Button>
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  onClick={() =>
+                                    useLibraryAsset(
+                                      asset,
+                                      "pmax-landscape-logo",
+                                    )
+                                  }
+                                >
+                                  PMax landscape logo
+                                </Button>
+                              </>
+                            )}
                           {asset.kind === "IMAGE" &&
                             googleCampaignType === "PERFORMANCE_MAX" && (
                               <>
@@ -9980,11 +10620,26 @@ export default function CreateCampaignPage() {
                               </Button>
                             )}
                         </div>
-                        {campaignAssetAssignments[asset.id]?.platform === "googleAds" &&
+                        {campaignAssetAssignments[asset.id]?.platform ===
+                          "googleAds" &&
                           campaignAssetAssignments[asset.id]?.capabilityId ===
                             "google-display-responsive-display" && (
                             <p className="mt-2 text-[10px] font-bold text-blue-700">
-                              Google Display · {campaignAssetAssignments[asset.id].role} · slot {campaignAssetAssignments[asset.id].assetIndex + 1}
+                              Google Display ·{" "}
+                              {campaignAssetAssignments[asset.id].role} · slot{" "}
+                              {campaignAssetAssignments[asset.id].assetIndex +
+                                1}
+                            </p>
+                          )}
+                        {campaignAssetAssignments[asset.id]?.platform ===
+                          "googleAds" &&
+                          campaignAssetAssignments[asset.id]?.capabilityId ===
+                            "google-performance-max-asset-group" && (
+                            <p className="mt-2 text-[10px] font-bold text-blue-700">
+                              Google Performance Max ·{" "}
+                              {campaignAssetAssignments[asset.id].role} · slot{" "}
+                              {campaignAssetAssignments[asset.id].assetIndex +
+                                1}
                             </p>
                           )}
                         {attachedCreativeAssetIds.includes(asset.id) && (
@@ -10173,6 +10828,40 @@ export default function CreateCampaignPage() {
                         className={inputClass}
                       />
                     </div>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className={labelClass}>Business Name *</label>
+                        <input
+                          value={pmaxBusinessName}
+                          onChange={(e) => {
+                            setPmaxBusinessName(e.target.value);
+                            clearPreview();
+                          }}
+                          maxLength={25}
+                          placeholder="Your business name (max 25 characters)"
+                          className={inputClass}
+                        />
+                      </div>
+                      <div className="rounded-xl border border-slate-200 p-4">
+                        <label className="flex items-start gap-3 text-sm font-semibold text-slate-800">
+                          <input
+                            type="checkbox"
+                            checked={pmaxBrandGuidelinesEnabled}
+                            onChange={(e) => {
+                              setPmaxBrandGuidelinesEnabled(e.target.checked);
+                              clearPreview();
+                            }}
+                            className="mt-0.5 h-4 w-4 rounded border-slate-300"
+                          />
+                          Enable Google brand guidelines
+                        </label>
+                        <p className="mt-2 text-xs leading-5 text-slate-500">
+                          {pmaxBrandGuidelinesEnabled
+                            ? "Business Name and Logo are linked to the campaign. This setting is locked when the campaign is created."
+                            : "Business Name and Logo are linked to each custom Asset Group. This setting is locked when the campaign is created."}
+                        </p>
+                      </div>
+                    </div>
                     <div>
                       <label className={labelClass}>
                         Headlines * (minimum 3; one per line; maximum 30
@@ -10225,176 +10914,134 @@ export default function CreateCampaignPage() {
                     <div className="grid gap-4 sm:grid-cols-2">
                       <div>
                         <label className={labelClass}>
-                          Business Name * (maximum 25 characters)
+                          {pmaxBrandGuidelinesEnabled
+                            ? "Campaign Logo *"
+                            : "Asset Group Logo *"}
                         </label>
-                        <input
-                          value={pmaxBusinessName}
-                          onChange={(e) => {
-                            setPmaxBusinessName(e.target.value);
-                            clearPreview();
-                          }}
-                          placeholder={businessName || "Business name"}
-                          className={inputClass}
-                        />
-                      </div>
-                      <div>
-                        <label className={labelClass}>Logo URL *</label>
-                        <input
-                          type="url"
-                          value={pmaxLogoUrl}
-                          onChange={(e) => {
-                            setPmaxLogoUrl(e.target.value);
-                            clearPreview();
-                          }}
-                          placeholder="https://.../logo.png"
-                          className={inputClass}
-                        />
                         <button
                           type="button"
                           onClick={() => {
                             setAssetLibraryOpen(true);
                             setAssetNotice(
-                              "Choose a logo or image from the Asset Library.",
+                              "Choose a square brand logo and select PMax logo in the Asset Library.",
                             );
                           }}
-                          className="mt-2 text-xs font-semibold text-blue-700"
+                          className="mt-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-blue-700"
                         >
-                          Choose from Asset Library
+                          Choose Logo from Asset Library
                         </button>
+                        <p className="mt-2 text-xs text-slate-500">
+                          {
+                            getAttachedGooglePmaxAssets(
+                              GOOGLE_PMAX_REQUIREMENTS.LOGO,
+                            ).length
+                          }{" "}
+                          logo asset(s) attached.{" "}
+                          {pmaxBrandGuidelinesEnabled
+                            ? "This logo will be linked at campaign level."
+                            : "This logo will be linked to the Asset Group."}{" "}
+                          Use an approved brand logo; AI image generation must
+                          not invent your logo.
+                        </p>
+                      </div>
+                      <div>
+                        <label className={labelClass}>Landscape Image *</label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAssetLibraryOpen(true);
+                            setAssetNotice(
+                              "Choose an image and select PMax landscape in the Asset Library.",
+                            );
+                          }}
+                          className="mt-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-blue-700"
+                        >
+                          Choose Landscape Image
+                        </button>
+                        <p className="mt-2 text-xs text-slate-500">
+                          {
+                            getAttachedGooglePmaxAssets(
+                              GOOGLE_PMAX_REQUIREMENTS.LANDSCAPE,
+                            ).length
+                          }{" "}
+                          landscape image(s) attached. Target ratio: 1.91:1.
+                        </p>
+                      </div>
+                      <div>
+                        <label className={labelClass}>Square Image *</label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAssetLibraryOpen(true);
+                            setAssetNotice(
+                              "Choose an image and select PMax square in the Asset Library.",
+                            );
+                          }}
+                          className="mt-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-blue-700"
+                        >
+                          Choose Square Image
+                        </button>
+                        <p className="mt-2 text-xs text-slate-500">
+                          {
+                            getAttachedGooglePmaxAssets(
+                              GOOGLE_PMAX_REQUIREMENTS.SQUARE,
+                            ).length
+                          }{" "}
+                          square image(s) attached. Target ratio: 1:1.
+                        </p>
                       </div>
                       <div>
                         <label className={labelClass}>
-                          Landscape Image URL *
+                          Portrait Image (optional)
                         </label>
-                        <input
-                          type="url"
-                          value={pmaxLandscapeImageUrl}
-                          onChange={(e) => {
-                            setPmaxLandscapeImageUrl(e.target.value);
-                            clearPreview();
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAssetLibraryOpen(true);
+                            setAssetNotice(
+                              "Choose an image and select PMax portrait in the Asset Library.",
+                            );
                           }}
-                          placeholder="https://.../landscape.jpg"
-                          className={inputClass}
-                        />
-                        <div className="mt-3 space-y-2">
-                          <label className={labelClass}>
-                            Upload Landscape Image to Google Ads
-                          </label>
-
-                          <input
-                            type="file"
-                            accept="image/jpeg,image/png"
-                            onChange={(e) => {
-                              const file = e.target.files?.[0] ?? null;
-                              setGoogleDisplayLandscapeFile(file);
-                              setGoogleDisplayLandscapeAssetResourceName("");
-                              clearPreview();
-                            }}
-                            className={inputClass}
-                          />
-
-                          <button
-                            type="button"
-                            disabled={
-                              !googleDisplayLandscapeFile ||
-                              googleDisplayAssetUploading !== null
-                            }
-                            onClick={() =>
-                              void uploadGoogleDisplayImage(
-                                "LANDSCAPE",
-                                googleDisplayLandscapeFile,
-                              )
-                            }
-                            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                          >
-                            {googleDisplayAssetUploading === "LANDSCAPE"
-                              ? "Uploading..."
-                              : "Upload Landscape Image"}
-                          </button>
-
-                          {googleDisplayLandscapeAssetResourceName && (
-                            <p className="break-all text-xs text-green-700">
-                              Uploaded:{" "}
-                              {googleDisplayLandscapeAssetResourceName}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                      <div>
-                        <label className={labelClass}>Square Image URL *</label>
-                        <input
-                          type="url"
-                          value={pmaxSquareImageUrl}
-                          onChange={(e) => {
-                            setPmaxSquareImageUrl(e.target.value);
-                            clearPreview();
-                          }}
-                          placeholder="https://.../square.jpg"
-                          className={inputClass}
-                        />
-                        <div className="mt-3 space-y-2">
-                          <label className={labelClass}>
-                            Upload Square Image to Google Ads
-                          </label>
-
-                          <input
-                            type="file"
-                            accept="image/jpeg,image/png"
-                            onChange={(e) => {
-                              const file = e.target.files?.[0] ?? null;
-                              setGoogleDisplaySquareFile(file);
-                              setGoogleDisplaySquareAssetResourceName("");
-                              clearPreview();
-                            }}
-                            className={inputClass}
-                          />
-
-                          <button
-                            type="button"
-                            disabled={
-                              !googleDisplaySquareFile ||
-                              googleDisplayAssetUploading !== null
-                            }
-                            onClick={() =>
-                              void uploadGoogleDisplayImage(
-                                "SQUARE",
-                                googleDisplaySquareFile,
-                              )
-                            }
-                            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                          >
-                            {googleDisplayAssetUploading === "SQUARE"
-                              ? "Uploading..."
-                              : "Upload Square Image"}
-                          </button>
-
-                          {googleDisplaySquareAssetResourceName && (
-                            <p className="break-all text-xs text-green-700">
-                              Uploaded: {googleDisplaySquareAssetResourceName}
-                            </p>
-                          )}
-                        </div>
-
-                        {googleDisplayAssetUploadError && (
-                          <p className="text-xs text-red-600">
-                            {googleDisplayAssetUploadError}
-                          </p>
-                        )}
+                          className="mt-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-blue-700"
+                        >
+                          Choose Portrait Image
+                        </button>
+                        <p className="mt-2 text-xs text-slate-500">
+                          {
+                            getAttachedGooglePmaxAssets(
+                              GOOGLE_PMAX_REQUIREMENTS.PORTRAIT,
+                            ).length
+                          }{" "}
+                          portrait image(s) attached. Target ratio: 4:5.
+                        </p>
                       </div>
                       <div>
                         <label className={labelClass}>
-                          Portrait Image URL (optional)
+                          Landscape Logo (optional)
                         </label>
-                        <input
-                          type="url"
-                          value={pmaxPortraitImageUrl}
-                          onChange={(e) => {
-                            setPmaxPortraitImageUrl(e.target.value);
-                            clearPreview();
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAssetLibraryOpen(true);
+                            setAssetNotice(
+                              "Choose a landscape logo and select PMax landscape logo in the Asset Library.",
+                            );
                           }}
-                          placeholder="https://.../portrait.jpg"
-                          className={inputClass}
-                        />
+                          className="mt-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-blue-700"
+                        >
+                          Choose Landscape Logo
+                        </button>
+                        <p className="mt-2 text-xs text-slate-500">
+                          {
+                            getAttachedGooglePmaxAssets(
+                              GOOGLE_PMAX_REQUIREMENTS.LANDSCAPE_LOGO,
+                            ).length
+                          }{" "}
+                          landscape logo(s) attached. Target ratio: 4:1.{" "}
+                          {pmaxBrandGuidelinesEnabled
+                            ? "These are additional campaign-level brand assets (maximum four additional assets across logo types)."
+                            : "These are optional Asset Group assets."}
+                        </p>
                       </div>
                       <div>
                         <label className={labelClass}>
@@ -10410,6 +11057,11 @@ export default function CreateCampaignPage() {
                           placeholder="YouTube video ID"
                           className={inputClass}
                         />
+                        <p className="mt-1 text-xs text-slate-500">
+                          Use an existing YouTube-hosted video of at least 10
+                          seconds. A private Asset Library MP4 is not a YouTube
+                          video asset.
+                        </p>
                       </div>
                     </div>
                     <div className="grid gap-4 sm:grid-cols-2">
@@ -11632,6 +12284,12 @@ export default function CreateCampaignPage() {
                     </p>
                     <p>
                       <strong>Business Name:</strong> {pmaxBusinessName}
+                    </p>
+                    <p>
+                      <strong>Google Brand Guidelines:</strong>{" "}
+                      {pmaxBrandGuidelinesEnabled
+                        ? "Enabled (campaign-level brand assets)"
+                        : "Disabled (Asset Group-level brand assets)"}
                     </p>
                     <p>
                       <strong>Search Themes:</strong>{" "}

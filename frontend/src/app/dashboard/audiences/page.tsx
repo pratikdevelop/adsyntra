@@ -42,7 +42,6 @@ import {
   useTheme,
 } from "@mui/material";
 import AddRounded from "@mui/icons-material/AddRounded";
-import AutoAwesomeRounded from "@mui/icons-material/AutoAwesomeRounded";
 import CheckCircleRounded from "@mui/icons-material/CheckCircleRounded";
 import ChevronRightRounded from "@mui/icons-material/ChevronRightRounded";
 import CloseRounded from "@mui/icons-material/CloseRounded";
@@ -116,9 +115,9 @@ type MetaWebsiteEvent = "PageView" | "ViewContent" | "AddToCart" | "Purchase";
 type GoogleCreateType = "website" | "reusable";
 
 const surfaceSx = {
-  border: "1px solid #E7EAF2",
-  borderRadius: 3,
-  boxShadow: "0 8px 28px rgba(25, 36, 67, 0.045)",
+  border: "1px solid #E0E3E8",
+  borderRadius: 1.5,
+  boxShadow: "none",
   backgroundColor: "#FFFFFF",
 };
 
@@ -465,6 +464,8 @@ export default function AudiencesPage() {
   const metaError = getReportError(metaReports);
   const googleCount = allRows.filter((row) => row.provider === "googleAds").length;
   const metaCount = allRows.filter((row) => row.provider === "metaAds").length;
+  const connectedPlatformsCount = Number(Boolean(overview?.providers.googleAds.connected))
+    + Number(Boolean(overview?.providers.metaAds.connected));
 
   const visibleRows = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
@@ -512,95 +513,114 @@ export default function AudiencesPage() {
   }
 
   return (
-    <Box sx={{ minHeight: "100%", bgcolor: "#F6F8FC", px: { xs: 1.5, sm: 2.5, lg: 4 }, py: { xs: 2.5, sm: 3.5 } }}>
+    <Box sx={{ minHeight: "100%", bgcolor: "#F7F9FC", px: { xs: 1.5, sm: 2.5, lg: 4 }, py: { xs: 2.5, sm: 3 } }}>
       <Box sx={{ width: "100%", maxWidth: 1480, mx: "auto" }}>
-        {/* Hero */}
-        <Paper
-          elevation={0}
+        {/* Page header - aligned with Campaign Management */}
+        <Box
           sx={{
-            position: "relative",
-            overflow: "hidden",
-            borderRadius: { xs: 3, md: 4 },
-            p: { xs: 2.5, sm: 3.5, lg: 4 },
-            color: "#FFFFFF",
-            background: "linear-gradient(118deg, #101B35 0%, #172D55 58%, #34458D 100%)",
-            boxShadow: "0 18px 45px rgba(27, 43, 83, 0.16)",
+            display: "flex",
+            width: "100%",
+            minWidth: 0,
+            flexDirection: { xs: "column", sm: "row" },
+            justifyContent: "space-between",
+            alignItems: { xs: "stretch", sm: "center" },
+            gap: 2,
+            mb: 3,
           }}
         >
-          <Box sx={{ position: "absolute", width: 280, height: 280, borderRadius: "50%", border: "1px solid rgba(255,255,255,.10)", right: { xs: -130, md: 80 }, top: -155 }} />
-          <Box sx={{ position: "absolute", width: 190, height: 190, borderRadius: "50%", border: "1px solid rgba(255,255,255,.10)", right: { xs: -90, md: 125 }, top: -110 }} />
-          <Stack direction={{ xs: "column", md: "row" }} justifyContent="space-between" alignItems={{ xs: "stretch", md: "center" }} spacing={3} sx={{ position: "relative", zIndex: 1 }}>
-            <Box sx={{ maxWidth: 720 }}>
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
-                <AutoAwesomeRounded sx={{ fontSize: 17, color: "#AFC2FF" }} />
-                <Typography variant="overline" sx={{ color: "#C6D3F7", letterSpacing: 1.7, fontWeight: 750, lineHeight: 1.4 }}>
-                  AUDIENCE INTELLIGENCE
-                </Typography>
-                <Chip label="VIEW + CREATE" size="small" sx={{ height: 22, color: "#D9E4FF", bgcolor: "rgba(255,255,255,.12)", border: "1px solid rgba(255,255,255,.16)", fontSize: 10, fontWeight: 800, letterSpacing: .6 }} />
-              </Stack>
-              <Typography variant="h3" sx={{ fontSize: { xs: 29, sm: 36, lg: 42 }, fontWeight: 800, letterSpacing: -1.1, lineHeight: 1.12 }}>
-                Audiences
+          <Box sx={{ minWidth: 0, flex: "1 1 auto" }}>
+            <Typography
+              variant="overline"
+              sx={{ color: "#3F5BD9", fontWeight: 800, letterSpacing: 1.1, lineHeight: 1.5 }}
+            >
+              ADSYNTRA · AUDIENCES
+            </Typography>
+            <Typography
+              variant="h4"
+              sx={{ mt: 0.35, color: "#111827", fontSize: { xs: 27, sm: 32 }, fontWeight: 500, letterSpacing: -0.8 }}
+            >
+              Audience Management
+            </Typography>
+            <Typography variant="body2" sx={{ mt: 0.45, color: "#475569" }}>
+              View and create audience segments across your Google Ads and Meta Ads accounts.
+            </Typography>
+            <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mt: 1.1 }}>
+              <Typography variant="caption" color="text.secondary">
+                Google Ads: {overview?.providers.googleAds.connected ? "Connected" : "Not connected"}
               </Typography>
-              <Typography sx={{ mt: 1.2, maxWidth: 650, color: "rgba(238,243,255,.78)", fontSize: { xs: 14, sm: 15.5 }, lineHeight: 1.7 }}>
-                One clear view of the audience segments and reusable targeting groups across your advertising accounts.
+              <Box sx={{ width: 4, height: 4, borderRadius: "50%", bgcolor: "#A0A8B5" }} />
+              <Typography variant="caption" color="text.secondary">
+                Meta Ads: {overview?.providers.metaAds.connected ? "Connected" : "Not connected"}
               </Typography>
-              <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mt: 2.4 }}>
-                <Stack direction="row" spacing={0.7} alignItems="center">
-                  <CheckCircleRounded sx={{ fontSize: 16, color: "#72E0B1" }} />
-                  <Typography variant="caption" sx={{ color: "#E2EAFE", fontWeight: 600 }}>Google Ads {overview?.providers.googleAds.connected ? "connected" : "not connected"}</Typography>
-                </Stack>
-                <Box sx={{ width: 3, height: 3, borderRadius: "50%", bgcolor: "rgba(255,255,255,.45)" }} />
-                <Stack direction="row" spacing={0.7} alignItems="center">
-                  <CheckCircleRounded sx={{ fontSize: 16, color: "#72E0B1" }} />
-                  <Typography variant="caption" sx={{ color: "#E2EAFE", fontWeight: 600 }}>Meta Ads {overview?.providers.metaAds.connected ? "connected" : "not connected"}</Typography>
-                </Stack>
-              </Stack>
-            </Box>
-            <Stack direction={{ xs: "row", md: "column" }} alignItems={{ xs: "center", md: "flex-end" }} justifyContent="space-between" spacing={1.5}>
-              <Button
-                onClick={openCreateDialog}
-                variant="outlined"
-                startIcon={<AddRounded />}
-                sx={{
-                  px: 2.3,
-                  py: 1.05,
-                  borderRadius: 2.2,
-                  textTransform: "none",
-                  fontWeight: 750,
-                  color: "#FFFFFF",
-                  borderColor: "rgba(255,255,255,.5)",
-                  whiteSpace: "nowrap",
-                  "&:hover": { borderColor: "#FFFFFF", bgcolor: "rgba(255,255,255,.10)" },
-                }}
-              >
-                Create audience
-              </Button>
-              <Button
-                onClick={() => void loadAudiences(true)}
-                disabled={refreshing}
-                variant="contained"
-                startIcon={refreshing ? <CircularProgress size={16} color="inherit" /> : <RefreshRounded />}
-                sx={{
-                  px: 2.3,
-                  py: 1.15,
-                  borderRadius: 2.2,
-                  textTransform: "none",
-                  fontWeight: 750,
-                  color: "#182B55",
-                  bgcolor: "#FFFFFF",
-                  boxShadow: "none",
-                  whiteSpace: "nowrap",
-                  "&:hover": { bgcolor: "#EAF0FF", boxShadow: "none" },
-                }}
-              >
-                {refreshing ? "Refreshing" : "Refresh data"}
-              </Button>
-              <Typography variant="caption" sx={{ color: "rgba(230,238,255,.72)" }}>
-                Last synced · {syncedLabel}
-              </Typography>
+              <Box sx={{ width: 4, height: 4, borderRadius: "50%", bgcolor: "#A0A8B5" }} />
+              <Typography variant="caption" color="text.secondary">Last synced · {syncedLabel}</Typography>
             </Stack>
-          </Stack>
-        </Paper>
+          </Box>
+          <Box
+            sx={{
+              display: "flex",
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: { xs: "flex-start", sm: "flex-end" },
+              gap: 1.5,
+              flex: "0 0 auto",
+              alignSelf: { xs: "flex-start", sm: "center" },
+              width: { xs: "100%", sm: "auto" },
+            }}
+          >
+            <Tooltip title="Refresh audiences">
+              <span>
+                <IconButton
+                  onClick={() => void loadAudiences(true)}
+                  disabled={refreshing}
+                  aria-label="Refresh audiences"
+                  sx={{
+                    width: 40,
+                    height: 40,
+                    minWidth: 40,
+                    minHeight: 40,
+                    maxHeight: 40,
+                    flex: "0 0 40px",
+                    border: "1px solid #D9DEE7",
+                    color: "#526071",
+                    bgcolor: "#FFFFFF",
+                    borderRadius: 1.5,
+                  }}
+                >
+                  {refreshing ? <CircularProgress size={19} /> : <RefreshRounded fontSize="small" />}
+                </IconButton>
+              </span>
+            </Tooltip>
+            <Button
+              onClick={openCreateDialog}
+              variant="contained"
+              startIcon={<AddRounded />}
+              sx={{
+                height: 40,
+                minHeight: 40,
+                maxHeight: 40,
+                width: "auto",
+                minWidth: 0,
+                flex: "0 0 auto",
+                alignSelf: "center",
+                display: "inline-flex",
+                px: 2.4,
+                py: 0.75,
+                borderRadius: 1.5,
+                textTransform: "none",
+                fontWeight: 700,
+                lineHeight: 1.2,
+                whiteSpace: "nowrap",
+                color: "#FFFFFF",
+                bgcolor: "#3F5BD9 !important",
+                boxShadow: "none",
+                "&:hover": { bgcolor: "#304BC3 !important", boxShadow: "none" },
+              }}
+            >
+              Create audience
+            </Button>
+          </Box>
+        </Box>
 
         {/* Supported creation scope notice */}
         <Alert
@@ -608,7 +628,7 @@ export default function AudiencesPage() {
           severity="info"
           sx={{
             mt: 2.5,
-            borderRadius: 2.5,
+            borderRadius: 1.5,
             bgcolor: "#EFF6FF",
             color: "#23466F",
             border: "1px solid #D7E8FC",
@@ -623,26 +643,26 @@ export default function AudiencesPage() {
         {error && (
           <Alert
             severity="error"
-            sx={{ mt: 2, borderRadius: 2.5, alignItems: "center" }}
+            sx={{ mt: 2, borderRadius: 1.5, alignItems: "center" }}
             action={<Button color="inherit" size="small" onClick={() => void loadAudiences()}>Retry</Button>}
           >
             {error}
           </Alert>
         )}
         {notice && (
-          <Alert severity="success" sx={{ mt: 2, borderRadius: 2.5 }} onClose={() => setNotice(null)}>
+          <Alert severity="success" sx={{ mt: 2, borderRadius: 1.5 }} onClose={() => setNotice(null)}>
             {notice}
           </Alert>
         )}
 
         {overview && (googleError || metaError) && (
-          <Alert severity="warning" sx={{ mt: 2, borderRadius: 2.5 }}>
+          <Alert severity="warning" sx={{ mt: 2, borderRadius: 1.5 }}>
             Some provider reports could not be loaded. {googleError ? `Google Ads: ${googleError} ` : ""}{metaError ? `Meta Ads: ${metaError}` : ""}
           </Alert>
         )}
 
         {/* Summary cards */}
-        <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))", lg: "repeat(3, minmax(0, 1fr))" }, gap: 2, mt: 2.5 }}>
+        <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "repeat(2, minmax(0, 1fr))", lg: "repeat(4, minmax(0, 1fr))" }, gap: 2, mt: 2 }}>
           <SummaryCard
             label="Total audiences"
             value={asCount(allRows.length)}
@@ -672,12 +692,26 @@ export default function AudiencesPage() {
             connected={overview?.providers.metaAds.connected ?? false}
             accent="#7158C5"
           />
+          <SummaryCard
+            label="Connected platforms"
+            value={`${connectedPlatformsCount}/2`}
+            helper="Google Ads and Meta Ads"
+            icon={<CheckCircleRounded />}
+            iconBg="#EAF8F1"
+            iconColor="#16865B"
+            accent="#16865B"
+          />
         </Box>
 
         {/* Audience list */}
-        <Paper elevation={0} sx={{ ...surfaceSx, mt: 2.5, overflow: "hidden" }}>
-          <Box sx={{ px: { xs: 2, sm: 2.75 }, pt: 2.2, pb: 0 }}>
-            <Stack direction={{ xs: "column", md: "row" }} spacing={2} alignItems={{ xs: "stretch", md: "center" }} justifyContent="space-between">
+        <Paper elevation={0} sx={{ ...surfaceSx, mt: 2, overflow: "hidden" }}>
+          <Box sx={{ px: { xs: 2, sm: 2.75 }, pt: 1.8, pb: 0 }}>
+            <Stack sx={{
+              display: "flex",
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}>
               <Box>
                 <Typography variant="h6" sx={{ fontWeight: 780, color: "#182230", letterSpacing: -.35 }}>
                   Audience library
@@ -692,7 +726,7 @@ export default function AudiencesPage() {
                 onChange={(event) => setSearch(event.target.value)}
                 placeholder="Search by name or type"
                 aria-label="Search audiences by name or type"
-                sx={{ width: { xs: "100%", md: 310 }, "& .MuiOutlinedInput-root": { bgcolor: "#FAFBFD", borderRadius: 2.2 } }}
+                sx={{ width: { xs: "100%", md: 310 }, "& .MuiOutlinedInput-root": { bgcolor: "#FFFFFF", borderRadius: 1.2 } }}
                 InputProps={{
                   startAdornment: <InputAdornment position="start"><SearchRounded sx={{ color: "#8A94A6", fontSize: 20 }} /></InputAdornment>,
                   endAdornment: search ? (
@@ -712,9 +746,9 @@ export default function AudiencesPage() {
               sx={{
                 mt: 1.8,
                 minHeight: 48,
-                "& .MuiTabs-indicator": { height: 3, borderRadius: "3px 3px 0 0", bgcolor: "#5267C8" },
+                "& .MuiTabs-indicator": { height: 3, borderRadius: "3px 3px 0 0", bgcolor: "#3F5BD9" },
                 "& .MuiTab-root": { minHeight: 48, px: 2, textTransform: "none", fontWeight: 700, color: "#707B8D", fontSize: 13 },
-                "& .Mui-selected": { color: "#344EAD !important" },
+                "& .Mui-selected": { color: "#3F5BD9 !important" },
               }}
             >
               <Tab value="all" label={<TabLabel label="All audiences" count={allRows.length} />} />
@@ -769,7 +803,7 @@ export default function AudiencesPage() {
                           onClick={() => setSelectedAudience(row)}
                           size="small"
                           endIcon={<ChevronRightRounded />}
-                          sx={{ borderRadius: 2, textTransform: "none", fontWeight: 750, color: "#405BC0", px: 1.3 }}
+                          sx={{ borderRadius: 1.5, textTransform: "none", fontWeight: 750, color: "#405BC0", px: 1.3 }}
                         >
                           Details
                         </Button>
@@ -791,7 +825,7 @@ export default function AudiencesPage() {
         </Paper>
 
         {/* Provider diagnostics */}
-        <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" }, gap: 2, mt: 2.5 }}>
+        <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "repeat(2, minmax(0, 1fr))" }, gap: 1.8, mt: 2 }}>
           <ProviderStatusCard
             provider="googleAds"
             connected={overview?.providers.googleAds.connected ?? false}
@@ -823,7 +857,7 @@ export default function AudiencesPage() {
         fullScreen={isMobile}
         fullWidth
         maxWidth="sm"
-        PaperProps={{ sx: { borderRadius: isMobile ? 0 : 3 } }}
+        PaperProps={{ sx: { borderRadius: isMobile ? 0 : 2 } }}
       >
         <DialogTitle sx={{ px: 3, py: 2.25, borderBottom: "1px solid #EDF0F5" }}>
           <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={2}>
@@ -1017,7 +1051,7 @@ export default function AudiencesPage() {
             onClick={() => void handleCreateAudience()}
             disabled={creating || !overview?.providers[createProvider].connected}
             startIcon={creating ? <CircularProgress size={16} color="inherit" /> : <AddRounded />}
-            sx={{ borderRadius: 2, px: 2.2, textTransform: "none", fontWeight: 750, bgcolor: "#405BC0", boxShadow: "none", "&:hover": { bgcolor: "#334DAA", boxShadow: "none" } }}
+            sx={{ borderRadius: 1.5, px: 2.2, textTransform: "none", fontWeight: 750, bgcolor: "#405BC0", boxShadow: "none", "&:hover": { bgcolor: "#334DAA", boxShadow: "none" } }}
           >
             {creating ? "Creating…" : "Create audience"}
           </Button>
@@ -1030,7 +1064,7 @@ export default function AudiencesPage() {
         fullScreen={isMobile}
         fullWidth
         maxWidth="md"
-        PaperProps={{ sx: { borderRadius: isMobile ? 0 : 3, overflow: "hidden" } }}
+        PaperProps={{ sx: { borderRadius: isMobile ? 0 : 2, overflow: "hidden" } }}
       >
         <DialogTitle sx={{ px: 3, py: 2.25, borderBottom: "1px solid #EDF0F5" }}>
           <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={2}>
@@ -1045,12 +1079,12 @@ export default function AudiencesPage() {
         <DialogContent sx={{ p: { xs: 2, sm: 3 }, bgcolor: "#FAFBFD" }}>
           {selectedAudience && (
             <Stack spacing={2}>
-              <Paper variant="outlined" sx={{ p: 2, borderRadius: 2.5, borderColor: "#E8ECF3", boxShadow: "none" }}>
+              <Paper variant="outlined" sx={{ p: 2, borderRadius: 1.5, borderColor: "#E8ECF3", boxShadow: "none" }}>
                 <Typography variant="caption" color="text.secondary" fontWeight={700}>ESTIMATED SIZE</Typography>
                 <Typography variant="h5" fontWeight={800} sx={{ mt: 0.5, color: "#1C2B45" }}>{selectedAudience.size}</Typography>
                 <Typography variant="caption" color="text.secondary">{selectedAudience.description}</Typography>
               </Paper>
-              <Paper variant="outlined" sx={{ borderRadius: 2.5, borderColor: "#E8ECF3", overflow: "hidden", boxShadow: "none" }}>
+              <Paper variant="outlined" sx={{ borderRadius: 1.5, borderColor: "#E8ECF3", overflow: "hidden", boxShadow: "none" }}>
                 <Box sx={{ px: 2, py: 1.4, borderBottom: "1px solid #EDF0F5", bgcolor: "#FFFFFF" }}>
                   <Typography variant="subtitle2" fontWeight={750}>Provider data</Typography>
                 </Box>
@@ -1099,15 +1133,14 @@ function SummaryCard({
   connected?: boolean;
 }) {
   return (
-    <Card elevation={0} sx={{ ...surfaceSx, position: "relative", overflow: "hidden", minWidth: 0 }}>
-      <Box sx={{ position: "absolute", left: 0, top: 18, bottom: 18, width: 3, borderRadius: "0 4px 4px 0", bgcolor: accent }} />
-      <CardContent sx={{ p: 2.35, "&:last-child": { pb: 2.35 } }}>
+    <Card elevation={0} sx={{ ...surfaceSx, overflow: "hidden", minWidth: 0 }}>
+      <CardContent sx={{ p: 2.1, "&:last-child": { pb: 2.1 } }}>
         <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1.5}>
           <Box sx={{ minWidth: 0 }}>
             <Typography variant="body2" sx={{ fontWeight: 700, color: "#687487" }}>{label}</Typography>
-            <Typography variant="h4" sx={{ mt: 1.1, fontSize: 32, fontWeight: 820, letterSpacing: -1, lineHeight: 1.1, color: "#172235", fontVariantNumeric: "tabular-nums" }}>{value}</Typography>
+            <Typography variant="h4" sx={{ mt: 1.1, fontSize: 30, fontWeight: 600, letterSpacing: -0.7, lineHeight: 1.1, color: "#172235", fontVariantNumeric: "tabular-nums" }}>{value}</Typography>
           </Box>
-          <Avatar variant="rounded" sx={{ width: 43, height: 43, borderRadius: 2.2, bgcolor: iconBg, color: iconColor }}>{icon}</Avatar>
+          <Avatar variant="rounded" sx={{ width: 38, height: 38, borderRadius: 1.5, bgcolor: iconBg, color: iconColor, border: `1px solid ${accent}22` }}>{icon}</Avatar>
         </Stack>
         <Stack direction="row" alignItems="center" spacing={0.65} sx={{ mt: 1.6, minWidth: 0 }}>
           {connected !== undefined && (

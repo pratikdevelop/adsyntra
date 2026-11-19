@@ -32,6 +32,8 @@ import type {
     GoogleAdsSearchCampaignFlowResult,
     CreateGoogleAdsDisplayCampaignFlowInput,
     GoogleAdsDisplayCampaignFlowResult,
+    CreateGoogleAdsPerformanceMaxCampaignFlowInput,
+    GoogleAdsPerformanceMaxCampaignFlowResult,
 } from "../../interfaces/campaign-creation.js";
 
 
@@ -1149,6 +1151,1183 @@ export async function createGoogleAdsTextAsset(
 }
 
 // ==========================================
+// STANDARD PERFORMANCE MAX CAMPAIGN FLOW
+// ==========================================
+
+const GOOGLE_ADS_PMAX_CALL_TO_ACTIONS = [
+    "APPLY_NOW",
+    "BOOK_NOW",
+    "CONTACT_US",
+    "DOWNLOAD",
+    "GET_QUOTE",
+    "LEARN_MORE",
+    "SHOP_NOW",
+    "SIGN_UP",
+    "SUBSCRIBE",
+] as const;
+
+function normalizePmaxCampaignDate(
+    value: string | undefined,
+    fieldName: string,
+    endOfDay: boolean,
+): { date: string; dateTime: string } | null {
+    if (value === undefined || value === null || value === "") {
+        return null;
+    }
+
+    if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        throw new GoogleAdsCreationError(
+            `${fieldName} must use YYYY-MM-DD format.`,
+            400,
+        );
+    }
+
+    const [year, month, day] = value.split("-").map(Number);
+    const parsed = new Date(Date.UTC(year, month - 1, day));
+
+    if (
+        parsed.getUTCFullYear() !== year ||
+        parsed.getUTCMonth() !== month - 1 ||
+        parsed.getUTCDate() !== day
+    ) {
+        throw new GoogleAdsCreationError(`${fieldName} is not a valid date.`, 400);
+    }
+
+    return {
+        date: value,
+        dateTime: `${value} ${endOfDay ? "23:59:59" : "00:00:00"}`,
+    };
+}
+
+function buildGoogleAdsPerformanceMaxAssetAutomationSettings(
+    settings: CreateGoogleAdsPerformanceMaxCampaignFlowInput["campaign"]["assetAutomation"],
+): Record<string, unknown>[] {
+    if (!settings) {
+        return [];
+    }
+
+    const result: Record<string, unknown>[] = [];
+    const addStatus = (type: string, enabled: boolean) => {
+        result.push({
+            assetAutomationType: type,
+            assetAutomationStatus: enabled ? "OPTED_IN" : "OPTED_OUT",
+        });
+    };
+
+    const finalUrlExpansionEnabled = settings.finalUrlExpansionEnabled;
+    const textCustomizationEnabled = settings.textAssetCustomizationEnabled;
+
+    if (
+        finalUrlExpansionEnabled === true &&
+        textCustomizationEnabled === false
+    ) {
+        throw new GoogleAdsCreationError(
+            "Text asset customization cannot be disabled while Final URL expansion is enabled.",
+            400,
+        );
+    }
+
+    if (finalUrlExpansionEnabled !== undefined) {
+        addStatus(
+            "FINAL_URL_EXPANSION_TEXT_ASSET_AUTOMATION",
+            finalUrlExpansionEnabled,
+        );
+    }
+
+    if (finalUrlExpansionEnabled === true) {
+        // Google requires text automation to remain enabled while URL expansion is on.
+        addStatus("TEXT_ASSET_AUTOMATION", true);
+    } else if (textCustomizationEnabled !== undefined) {
+        addStatus("TEXT_ASSET_AUTOMATION", textCustomizationEnabled);
+    }
+
+    if (settings.generateEnhancedYoutubeVideos !== undefined) {
+        addStatus(
+            "GENERATE_ENHANCED_YOUTUBE_VIDEOS",
+            settings.generateEnhancedYoutubeVideos,
+        );
+    }
+
+    if (settings.generateImageEnhancement !== undefined) {
+        addStatus(
+            "GENERATE_IMAGE_ENHANCEMENT",
+            settings.generateImageEnhancement,
+        );
+    }
+
+    const crawlSources = settings.automatedVideoCrawlSources ?? [];
+
+    if (settings.automatedVideoCrawlEnabled === true) {
+        if (crawlSources.length === 0) {
+            throw new GoogleAdsCreationError(
+                "Automated video crawl requires at least one approved source URL.",
+                400,
+            );
+        }
+
+        if (settings.automatedVideoCrawlRightsConfirmed !== true) {
+            throw new GoogleAdsCreationError(
+                "Confirm that you own or have permission to use every approved video source before enabling automated video crawl.",
+                400,
+            );
+        }
+
+        if (crawlSources.length > 20) {
+            throw new GoogleAdsCreationError(
+                "Automated video crawl supports at most 20 source URLs in this flow.",
+                400,
+            );
+        }
+
+        const seenSources = new Set<string>();
+        const automatedVideoCrawlInfos = crawlSources.map((source) => {
+            let url: URL;
+
+            try {
+                url = new URL(source.url);
+            } catch {
+                throw new GoogleAdsCreationError(
+                    `Invalid automated video crawl source URL: ${source.url}`,
+                    400,
+                );
+            }
+
+            if (![
+                "http:",
+                "https:",
+            ].includes(url.protocol)) {
+                throw new GoogleAdsCreationError(
+                    "Automated video crawl source URLs must use HTTP or HTTPS.",
+                    400,
+                );
+            }
+
+            if (!["LANDING_PAGE", "SOCIAL", "YOUTUBE"].includes(source.sourcePlatform)) {
+                throw new GoogleAdsCreationError(
+                    `Unsupported automated video crawl source platform: ${source.sourcePlatform}`,
+                    400,
+                );
+            }
+
+            const normalizedUrl = url.toString();
+            const identity = `${source.sourcePlatform}:${normalizedUrl.toLowerCase()}`;
+
+            if (seenSources.has(identity)) {
+                throw new GoogleAdsCreationError(
+                    `Duplicate automated video crawl source: ${normalizedUrl}`,
+                    400,
+                );
+            }
+
+            seenSources.add(identity);
+
+            return {
+                url: normalizedUrl,
+                sourcePlatform: source.sourcePlatform,
+                enabled: true,
+            };
+        });
+
+        result.push({
+            assetAutomationType: "AUTOMATED_VIDEO_CRAWL",
+            assetAutomationStatus: "OPTED_IN",
+            automatedVideoCrawlSetting: {
+                automatedVideoCrawlInfos,
+            },
+        });
+    } else if (settings.automatedVideoCrawlEnabled === false) {
+        if (crawlSources.length > 0) {
+            throw new GoogleAdsCreationError(
+                "Remove automated video crawl source URLs when the feature is disabled.",
+                400,
+            );
+        }
+
+        addStatus("AUTOMATED_VIDEO_CRAWL", false);
+    } else if (crawlSources.length > 0 || settings.automatedVideoCrawlRightsConfirmed) {
+        throw new GoogleAdsCreationError(
+            "Set automatedVideoCrawlEnabled:true to submit approved video crawl sources.",
+            400,
+        );
+    }
+
+    return result;
+}
+
+export async function createGoogleAdsPerformanceMaxCampaignFlow(
+    context: GoogleAdsCreationContext,
+    input: CreateGoogleAdsPerformanceMaxCampaignFlowInput,
+): Promise<GoogleAdsPerformanceMaxCampaignFlowResult> {
+    // 1. Validate the execution mode.
+    const validateOnly = input.validateOnly !== false;
+
+    if (!validateOnly && input.confirm !== true) {
+        throw new GoogleAdsCreationError(
+            "Live Performance Max creation requires validateOnly:false and confirm:true.",
+            400,
+        );
+    }
+
+    // 2. Validate campaign and budget basics.
+    const campaignName = input.campaign?.name?.trim();
+    const budgetName = input.budget?.name?.trim();
+
+    if (!campaignName || campaignName.length > 255 || /[\0\r\n]/.test(campaignName)) {
+        throw new GoogleAdsCreationError("A valid Performance Max campaign name is required.", 400);
+    }
+
+    if (!budgetName || budgetName.length > 255) {
+        throw new GoogleAdsCreationError("A valid Performance Max budget name is required.", 400);
+    }
+
+    if (!Number.isFinite(input.budget.amount) || input.budget.amount <= 0) {
+        throw new GoogleAdsCreationError("Performance Max budget amount must be greater than zero.", 400);
+    }
+
+    const budgetAmountMicros = Math.round(input.budget.amount * 1_000_000);
+
+    if (!Number.isSafeInteger(budgetAmountMicros) || budgetAmountMicros <= 0) {
+        throw new GoogleAdsCreationError("Performance Max budget amount is outside the supported range.", 400);
+    }
+
+    const budgetPeriod = input.budget.period ?? "DAILY";
+
+    if (!["DAILY", "CUSTOM_PERIOD"].includes(budgetPeriod)) {
+        throw new GoogleAdsCreationError("Unsupported Performance Max budget period.", 400);
+    }
+
+    const startDate = normalizePmaxCampaignDate(
+        input.campaign.startDate,
+        "Campaign start date",
+        false,
+    );
+    const endDate = normalizePmaxCampaignDate(
+        input.campaign.endDate,
+        "Campaign end date",
+        true,
+    );
+
+    if (startDate && endDate && endDate.date <= startDate.date) {
+        throw new GoogleAdsCreationError(
+            "Campaign end date must be later than the start date.",
+            400,
+        );
+    }
+
+    if (budgetPeriod === "CUSTOM_PERIOD" && (!startDate || !endDate)) {
+        throw new GoogleAdsCreationError(
+            "A campaign total budget requires both start and end dates.",
+            400,
+        );
+    }
+
+    // 3. Validate the supported PMax bidding strategy.
+    const biddingStrategy = input.campaign.biddingStrategy;
+
+    if (![
+        "MAXIMIZE_CONVERSIONS",
+        "MAXIMIZE_CONVERSION_VALUE",
+    ].includes(biddingStrategy)) {
+        throw new GoogleAdsCreationError(
+            "Standard Performance Max supports MAXIMIZE_CONVERSIONS or MAXIMIZE_CONVERSION_VALUE only.",
+            400,
+        );
+    }
+
+    const biddingConfig = buildBiddingConfig(
+        biddingStrategy,
+        input.campaign.biddingOptions ?? {},
+        "PERFORMANCE_MAX",
+    );
+
+    // 4. Validate brand settings and account-owned brand assets.
+    const branding = input.campaign.branding;
+    const businessName = branding?.businessName?.trim();
+
+    if (!businessName || businessName.length > 25) {
+        throw new GoogleAdsCreationError(
+            "Performance Max business name is required and must not exceed 25 characters.",
+            400,
+        );
+    }
+
+    const brandGuidelinesEnabled = input.campaign.brandGuidelinesEnabled !== false;
+
+    if (
+        input.campaign.brandGuidelinesEnabled !== undefined &&
+        typeof input.campaign.brandGuidelinesEnabled !== "boolean"
+    ) {
+        throw new GoogleAdsCreationError("brandGuidelinesEnabled must be a boolean.", 400);
+    }
+
+    const logoAssetResourceNames = validateGoogleAdsAssetList(
+        context,
+        branding.logoAssetResourceNames,
+        "Performance Max logo",
+        1,
+        5,
+    );
+
+    const landscapeLogoAssetResourceNames = validateGoogleAdsAssetList(
+        context,
+        branding.landscapeLogoAssetResourceNames ?? [],
+        "Performance Max landscape logo",
+        0,
+        brandGuidelinesEnabled ? 4 : 20,
+    );
+
+    if (
+        brandGuidelinesEnabled &&
+        logoAssetResourceNames.length + landscapeLogoAssetResourceNames.length > 5
+    ) {
+        throw new GoogleAdsCreationError(
+            "With brand guidelines enabled, use at most five combined LOGO and LANDSCAPE_LOGO assets.",
+            400,
+        );
+    }
+
+    const mainColor = branding.mainColor?.trim();
+    const accentColor = branding.accentColor?.trim();
+
+    if (Boolean(mainColor) !== Boolean(accentColor)) {
+        throw new GoogleAdsCreationError(
+            "Provide both mainColor and accentColor, or leave both empty.",
+            400,
+        );
+    }
+
+    if (
+        (mainColor && !/^#[0-9a-fA-F]{6}$/.test(mainColor)) ||
+        (accentColor && !/^#[0-9a-fA-F]{6}$/.test(accentColor))
+    ) {
+        throw new GoogleAdsCreationError(
+            "Brand colors must be six-digit hexadecimal values such as #112233.",
+            400,
+        );
+    }
+
+    if (!brandGuidelinesEnabled && (mainColor || accentColor || branding.predefinedFontFamily)) {
+        throw new GoogleAdsCreationError(
+            "Brand colors and font can only be configured when brand guidelines are enabled.",
+            400,
+        );
+    }
+
+    const supportedFonts = [
+        "Open Sans",
+        "Roboto",
+        "Montserrat",
+        "Poppins",
+        "Lato",
+        "Oswald",
+        "Playfair Display",
+        "Roboto Slab",
+    ];
+
+    if (
+        branding.predefinedFontFamily &&
+        !supportedFonts.includes(branding.predefinedFontFamily)
+    ) {
+        throw new GoogleAdsCreationError("Unsupported Performance Max brand font.", 400);
+    }
+
+    // 5. Validate campaign-level automation settings.
+    const assetAutomationSettings = buildGoogleAdsPerformanceMaxAssetAutomationSettings(
+        input.campaign.assetAutomation,
+    );
+
+    // 6. Validate asset groups, their creative text, media, and signals.
+    if (
+        !Array.isArray(input.assetGroups) ||
+        input.assetGroups.length === 0 ||
+        input.assetGroups.length > 100
+    ) {
+        throw new GoogleAdsCreationError(
+            "Provide between 1 and 100 Standard Performance Max asset groups.",
+            400,
+        );
+    }
+
+    const seenAssetGroupNames = new Set<string>();
+    const validatedGroups = input.assetGroups.map((group, index) => {
+        const name = group?.name?.trim();
+
+        if (!name || name.length > 128 || /[\0\r\n]/.test(name)) {
+            throw new GoogleAdsCreationError(
+                `Asset Group ${index + 1} must have a valid name of at most 128 characters.`,
+                400,
+            );
+        }
+
+        const nameIdentity = name.toLowerCase();
+
+        if (seenAssetGroupNames.has(nameIdentity)) {
+            throw new GoogleAdsCreationError(`Duplicate Asset Group name: ${name}`, 400);
+        }
+
+        seenAssetGroupNames.add(nameIdentity);
+
+        if (!Array.isArray(group.finalUrls) || group.finalUrls.length === 0 || group.finalUrls.length > 20) {
+            throw new GoogleAdsCreationError(
+                `Asset Group "${name}" requires between 1 and 20 final URLs.`,
+                400,
+            );
+        }
+
+        const finalUrls = group.finalUrls.map((url) => validateDemandGenFinalUrl(url));
+        const uniqueFinalUrls = [...new Set(finalUrls)];
+
+        if (uniqueFinalUrls.length !== finalUrls.length) {
+            throw new GoogleAdsCreationError(`Asset Group "${name}" contains duplicate final URLs.`, 400);
+        }
+
+        const headlines = validateDemandGenTextList(
+            group.headlines,
+            `Asset Group "${name}" headlines`,
+            3,
+            15,
+            30,
+        );
+        const longHeadlines = validateDemandGenTextList(
+            group.longHeadlines,
+            `Asset Group "${name}" long headlines`,
+            1,
+            5,
+            90,
+        );
+        const descriptions = validateDemandGenTextList(
+            group.descriptions,
+            `Asset Group "${name}" descriptions`,
+            2,
+            5,
+            90,
+        );
+
+        if (!descriptions.some((description) => description.length <= 60)) {
+            throw new GoogleAdsCreationError(
+                `Asset Group "${name}" must include at least one description of 60 characters or fewer.`,
+                400,
+            );
+        }
+
+        if (!Array.isArray(group.mediaAssets)) {
+            throw new GoogleAdsCreationError(`Asset Group "${name}" media assets are required.`, 400);
+        }
+
+        const allowedMediaTypes: PerformanceMaxAssetFieldType[] = [
+            "MARKETING_IMAGE",
+            "SQUARE_MARKETING_IMAGE",
+            "PORTRAIT_MARKETING_IMAGE",
+            "YOUTUBE_VIDEO",
+        ];
+        const mediaCounts: Record<string, number> = {};
+        const seenMedia = new Set<string>();
+
+        const mediaAssets = group.mediaAssets.map((asset) => {
+            if (!asset || !allowedMediaTypes.includes(asset.fieldType)) {
+                throw new GoogleAdsCreationError(
+                    `Asset Group "${name}" contains an unsupported media field type. Use MARKETING_IMAGE, SQUARE_MARKETING_IMAGE, PORTRAIT_MARKETING_IMAGE, or YOUTUBE_VIDEO.`,
+                    400,
+                );
+            }
+
+            const assetResourceName = validateGoogleAdsAssetReference(
+                context,
+                asset.assetResourceName,
+                `Asset Group "${name}" ${asset.fieldType}`,
+            );
+            const identity = `${assetResourceName}:${asset.fieldType}`;
+
+            if (seenMedia.has(identity)) {
+                throw new GoogleAdsCreationError(
+                    `Asset Group "${name}" contains a duplicate ${asset.fieldType} asset.`,
+                    400,
+                );
+            }
+
+            seenMedia.add(identity);
+            mediaCounts[asset.fieldType] = (mediaCounts[asset.fieldType] ?? 0) + 1;
+
+            return {
+                assetResourceName,
+                fieldType: asset.fieldType,
+            };
+        });
+
+        const mediaRequirements: Record<string, { min: number; max: number }> = {
+            MARKETING_IMAGE: { min: 1, max: 20 },
+            SQUARE_MARKETING_IMAGE: { min: 1, max: 20 },
+            PORTRAIT_MARKETING_IMAGE: { min: 0, max: 20 },
+            YOUTUBE_VIDEO: { min: 0, max: 15 },
+        };
+
+        for (const [fieldType, requirement] of Object.entries(mediaRequirements)) {
+            const count = mediaCounts[fieldType] ?? 0;
+
+            if (count < requirement.min || count > requirement.max) {
+                throw new GoogleAdsCreationError(
+                    `Asset Group "${name}" requires ${requirement.min}–${requirement.max} ${fieldType} assets. Received ${count}.`,
+                    400,
+                );
+            }
+        }
+
+        if (
+            group.callToAction !== undefined &&
+            !GOOGLE_ADS_PMAX_CALL_TO_ACTIONS.includes(group.callToAction as (typeof GOOGLE_ADS_PMAX_CALL_TO_ACTIONS)[number])
+        ) {
+            throw new GoogleAdsCreationError(
+                `Unsupported Performance Max call to action: ${group.callToAction}`,
+                400,
+            );
+        }
+
+        const searchThemes = group.searchThemes ?? [];
+
+        if (!Array.isArray(searchThemes) || searchThemes.length > 25) {
+            throw new GoogleAdsCreationError(
+                `Asset Group "${name}" supports at most 25 search themes.`,
+                400,
+            );
+        }
+
+        const seenSearchThemes = new Set<string>();
+        const normalizedSearchThemes = searchThemes.map((theme) => {
+            const text = theme?.trim();
+
+            if (!text || text.length > 80 || text.split(/\s+/).length > 10) {
+                throw new GoogleAdsCreationError(
+                    `Each search theme for Asset Group "${name}" must be 1–80 characters and no more than 10 words.`,
+                    400,
+                );
+            }
+
+            const identity = text.toLowerCase();
+
+            if (seenSearchThemes.has(identity)) {
+                throw new GoogleAdsCreationError(
+                    `Asset Group "${name}" contains duplicate search theme "${text}".`,
+                    400,
+                );
+            }
+
+            seenSearchThemes.add(identity);
+            return text;
+        });
+
+        const audienceSignals = group.audienceSignals ?? [];
+
+        if (!Array.isArray(audienceSignals) || audienceSignals.length > 50) {
+            throw new GoogleAdsCreationError(
+                `Asset Group "${name}" supports at most 50 audience signals in this flow.`,
+                400,
+            );
+        }
+
+        const seenAudiences = new Set<string>();
+        const normalizedAudienceSignals = audienceSignals.map((signal) => {
+            const resourceName = signal?.audienceResourceName?.trim();
+
+            if (!new RegExp(`^customers/${context.customerId}/audiences/\\d+$`).test(resourceName)) {
+                throw new GoogleAdsCreationError(
+                    `Invalid audience resource name or account mismatch: ${resourceName}`,
+                    400,
+                );
+            }
+
+            if (seenAudiences.has(resourceName)) {
+                throw new GoogleAdsCreationError(
+                    `Asset Group "${name}" contains a duplicate audience signal.`,
+                    400,
+                );
+            }
+
+            seenAudiences.add(resourceName);
+            return resourceName;
+        });
+
+        return {
+            name,
+            finalUrls: uniqueFinalUrls,
+            headlines,
+            longHeadlines,
+            descriptions,
+            mediaAssets,
+            searchThemes: normalizedSearchThemes,
+            audienceSignals: normalizedAudienceSignals,
+            callToAction: group.callToAction,
+        };
+    });
+
+    // 7. Validate campaign-level targeting and exclusions.
+    const locations = input.locations ?? [];
+
+    if (!Array.isArray(locations) || locations.length > 1000) {
+        throw new GoogleAdsCreationError("Provide no more than 1000 location targets.", 400);
+    }
+
+    const seenLocations = new Set<string>();
+    const normalizedLocations = locations.map((location) => {
+        const resourceName = location?.geoTargetConstantResourceName?.trim();
+
+        if (!/^geoTargetConstants\/\d+$/.test(resourceName)) {
+            throw new GoogleAdsCreationError(
+                `Invalid Google Ads location resource: ${resourceName}`,
+                400,
+            );
+        }
+
+        if (seenLocations.has(resourceName)) {
+            throw new GoogleAdsCreationError(`Duplicate Google Ads location: ${resourceName}`, 400);
+        }
+
+        if (location.negative !== undefined && typeof location.negative !== "boolean") {
+            throw new GoogleAdsCreationError("Location negative must be a boolean.", 400);
+        }
+
+        seenLocations.add(resourceName);
+        return {
+            resourceName,
+            negative: location.negative === true,
+        };
+    });
+
+    const languages = input.languages ?? [];
+
+    if (!Array.isArray(languages) || languages.length > 1000) {
+        throw new GoogleAdsCreationError("Provide no more than 1000 language targets.", 400);
+    }
+
+    const seenLanguages = new Set<string>();
+    const normalizedLanguages = languages.map((language) => {
+        const resourceName = language?.languageConstantResourceName?.trim();
+
+        if (!/^languageConstants\/\d+$/.test(resourceName)) {
+            throw new GoogleAdsCreationError(
+                `Invalid Google Ads language resource: ${resourceName}`,
+                400,
+            );
+        }
+
+        if (seenLanguages.has(resourceName)) {
+            throw new GoogleAdsCreationError(`Duplicate Google Ads language: ${resourceName}`, 400);
+        }
+
+        seenLanguages.add(resourceName);
+        return resourceName;
+    });
+
+    const negativeKeywords = input.negativeKeywords?.length
+        ? validateGoogleAdsKeywords(input.negativeKeywords)
+        : [];
+
+    const urlExclusionsInput = input.urlExclusions ?? [];
+
+    if (!Array.isArray(urlExclusionsInput) || urlExclusionsInput.length > 1000) {
+        throw new GoogleAdsCreationError(
+            "Provide no more than 1000 Performance Max URL exclusions.",
+            400,
+        );
+    }
+
+    const seenUrlExclusions = new Set<string>();
+    const urlExclusions = urlExclusionsInput.map((item) => {
+        const value = item?.value?.trim();
+        const matchType = item?.matchType;
+
+        if (!value || value.length > 2048 || /[\r\n\0]/.test(value)) {
+            throw new GoogleAdsCreationError(
+                "Each Performance Max URL exclusion must contain 1–2048 valid characters.",
+                400,
+            );
+        }
+
+        if (matchType !== "EXACT" && matchType !== "CONTAINS") {
+            throw new GoogleAdsCreationError(
+                `Unsupported URL exclusion match type: ${String(matchType)}. Use EXACT or CONTAINS.`,
+                400,
+            );
+        }
+
+        if (matchType === "EXACT") {
+            let url: URL;
+
+            try {
+                url = new URL(value);
+            } catch {
+                throw new GoogleAdsCreationError(
+                    `Exact URL exclusion must be a complete HTTP or HTTPS URL: ${value}`,
+                    400,
+                );
+            }
+
+            if (!["http:", "https:"].includes(url.protocol)) {
+                throw new GoogleAdsCreationError(
+                    "Exact URL exclusions must use HTTP or HTTPS.",
+                    400,
+                );
+            }
+        }
+
+        const identity = `${matchType}:${value.toLowerCase()}`;
+
+        if (seenUrlExclusions.has(identity)) {
+            throw new GoogleAdsCreationError(
+                `Duplicate Performance Max URL exclusion: ${value}`,
+                400,
+            );
+        }
+
+        seenUrlExclusions.add(identity);
+        return { value, matchType };
+    });
+
+    // 8. Allocate temporary resource names.
+    const budgetResourceName = createGoogleAdsTemporaryResourceName(
+        context,
+        "campaignBudgets",
+        -1,
+    );
+    const campaignResourceName = createGoogleAdsTemporaryResourceName(
+        context,
+        "campaigns",
+        -2,
+    );
+    const assetGroupResourceNames = validatedGroups.map((_, index) =>
+        createGoogleAdsTemporaryResourceName(context, "assetGroups", -3 - index),
+    );
+
+    let temporaryAssetId = -100;
+    const nextTemporaryAssetResourceName = () =>
+        createGoogleAdsTemporaryResourceName(context, "assets", temporaryAssetId--);
+
+    // 9. Build operation arrays in Google's required dependency order.
+    const operations: GoogleAdsMutateOperation[] = [];
+    const operationIndexes = {
+        budget: -1,
+        campaign: -1,
+        assets: [] as number[],
+        campaignAssets: [] as number[],
+        assetGroups: [] as number[],
+        assetGroupAssets: validatedGroups.map(() => [] as number[]),
+        assetGroupSignals: validatedGroups.map(() => [] as number[]),
+        locations: [] as number[],
+        languages: [] as number[],
+        negativeKeywords: [] as number[],
+        urlExclusions: [] as number[],
+    };
+
+    // Campaign Budget must precede the Campaign that references it.
+    const budgetPayload: Record<string, unknown> = {
+        resourceName: budgetResourceName,
+        name: budgetName,
+        deliveryMethod: "STANDARD",
+        explicitlyShared: false,
+        period: budgetPeriod,
+    };
+
+    if (budgetPeriod === "CUSTOM_PERIOD") {
+        budgetPayload.totalAmountMicros = String(budgetAmountMicros);
+    } else {
+        budgetPayload.amountMicros = String(budgetAmountMicros);
+    }
+
+    operationIndexes.budget = operations.length;
+    operations.push({
+        campaignBudgetOperation: {
+            create: budgetPayload,
+        },
+    });
+
+    // All new Assets must be created before their CampaignAsset/AssetGroupAsset links.
+    const businessNameAssetResourceName = nextTemporaryAssetResourceName();
+    operationIndexes.assets.push(operations.length);
+    operations.push({
+        assetOperation: {
+            create: {
+                resourceName: businessNameAssetResourceName,
+                name: createUniqueAssetName(`${campaignName} Business Name`),
+                textAsset: {
+                    text: businessName,
+                },
+            },
+        },
+    });
+
+    const groupAssetResources = validatedGroups.map(() => ({
+        headlines: [] as string[],
+        longHeadlines: [] as string[],
+        descriptions: [] as string[],
+        callToAction: null as string | null,
+    }));
+
+    validatedGroups.forEach((group, groupIndex) => {
+        const createTextAssets = (values: string[], field: "headlines" | "longHeadlines" | "descriptions", textPrefix: string) => {
+            for (const text of values) {
+                const resourceName = nextTemporaryAssetResourceName();
+                operationIndexes.assets.push(operations.length);
+                operations.push({
+                    assetOperation: {
+                        create: {
+                            resourceName,
+                            name: createUniqueAssetName(`${campaignName} ${group.name} ${textPrefix}`),
+                            textAsset: { text },
+                        },
+                    },
+                });
+                groupAssetResources[groupIndex][field].push(resourceName);
+            }
+        };
+
+        createTextAssets(group.headlines, "headlines", "Headline");
+        createTextAssets(group.longHeadlines, "longHeadlines", "Long Headline");
+        createTextAssets(group.descriptions, "descriptions", "Description");
+
+        if (group.callToAction) {
+            const resourceName = nextTemporaryAssetResourceName();
+            operationIndexes.assets.push(operations.length);
+            operations.push({
+                assetOperation: {
+                    create: {
+                        resourceName,
+                        name: createUniqueAssetName(`${campaignName} ${group.name} CTA`),
+                        callToActionAsset: {
+                            callToAction: group.callToAction,
+                        },
+                    },
+                },
+            });
+            groupAssetResources[groupIndex].callToAction = resourceName;
+        }
+    });
+
+    // Campaign and mandatory CampaignAsset resources must be in the same request.
+    const politicalStatus = input.campaign.containsEuPoliticalAdvertising ??
+        "DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING";
+
+    if (!["DOES_NOT_CONTAIN_EU_POLITICAL_ADVERTISING", "CONTAINS_EU_POLITICAL_ADVERTISING"].includes(politicalStatus)) {
+        throw new GoogleAdsCreationError("Invalid EU political advertising declaration.", 400);
+    }
+
+    const campaignPayload: Record<string, unknown> = {
+        resourceName: campaignResourceName,
+        name: campaignName,
+        advertisingChannelType: "PERFORMANCE_MAX",
+        status: "PAUSED",
+        campaignBudget: budgetResourceName,
+        containsEuPoliticalAdvertising: politicalStatus,
+        brandGuidelinesEnabled,
+        ...biddingConfig,
+    };
+
+    if (startDate) {
+        campaignPayload.startDateTime = startDate.dateTime;
+    }
+
+    if (endDate) {
+        campaignPayload.endDateTime = endDate.dateTime;
+    }
+
+    if (brandGuidelinesEnabled && (mainColor || accentColor || branding.predefinedFontFamily)) {
+        campaignPayload.brandGuidelines = {
+            ...(mainColor ? { mainColor } : {}),
+            ...(accentColor ? { accentColor } : {}),
+            ...(branding.predefinedFontFamily
+                ? { predefinedFontFamily: branding.predefinedFontFamily }
+                : {}),
+        };
+    }
+
+    if (assetAutomationSettings.length > 0) {
+        campaignPayload.assetAutomationSettings = assetAutomationSettings;
+    }
+
+    operationIndexes.campaign = operations.length;
+    operations.push({
+        campaignOperation: {
+            create: campaignPayload,
+        },
+    });
+
+    if (brandGuidelinesEnabled) {
+        const campaignBrandAssets: Array<{
+            assetResourceName: string;
+            fieldType: "BUSINESS_NAME" | "LOGO" | "LANDSCAPE_LOGO";
+        }> = [
+            {
+                assetResourceName: businessNameAssetResourceName,
+                fieldType: "BUSINESS_NAME",
+            },
+            ...logoAssetResourceNames.map((assetResourceName) => ({
+                assetResourceName,
+                fieldType: "LOGO" as const,
+            })),
+            ...landscapeLogoAssetResourceNames.map((assetResourceName) => ({
+                assetResourceName,
+                fieldType: "LANDSCAPE_LOGO" as const,
+            })),
+        ];
+
+        for (const brandAsset of campaignBrandAssets) {
+            operationIndexes.campaignAssets.push(operations.length);
+            operations.push({
+                campaignAssetOperation: {
+                    create: {
+                        campaign: campaignResourceName,
+                        asset: brandAsset.assetResourceName,
+                        fieldType: brandAsset.fieldType,
+                    },
+                },
+            });
+        }
+    }
+
+    // Optional campaign criteria reference the temporary Campaign created above.
+    for (const location of normalizedLocations) {
+        operationIndexes.locations.push(operations.length);
+        operations.push({
+            campaignCriterionOperation: {
+                create: {
+                    campaign: campaignResourceName,
+                    negative: location.negative,
+                    location: {
+                        geoTargetConstant: location.resourceName,
+                    },
+                },
+            },
+        });
+    }
+
+    for (const languageResourceName of normalizedLanguages) {
+        operationIndexes.languages.push(operations.length);
+        operations.push({
+            campaignCriterionOperation: {
+                create: {
+                    campaign: campaignResourceName,
+                    language: {
+                        languageConstant: languageResourceName,
+                    },
+                },
+            },
+        });
+    }
+
+    for (const keyword of negativeKeywords) {
+        operationIndexes.negativeKeywords.push(operations.length);
+        operations.push({
+            campaignCriterionOperation: {
+                create: {
+                    campaign: campaignResourceName,
+                    negative: true,
+                    keyword: {
+                        text: keyword.text,
+                        matchType: keyword.matchType,
+                    },
+                },
+            },
+        });
+    }
+
+    // Negative WEBPAGE criteria control which pages Final URL expansion may use.
+    for (const exclusion of urlExclusions) {
+        operationIndexes.urlExclusions.push(operations.length);
+        operations.push({
+            campaignCriterionOperation: {
+                create: {
+                    campaign: campaignResourceName,
+                    negative: true,
+                    webpage: {
+                        conditions: [
+                            {
+                                operand: "URL",
+                                operator: exclusion.matchType === "EXACT" ? "EQUALS" : "CONTAINS",
+                                argument: exclusion.value,
+                            },
+                        ],
+                    },
+                },
+            },
+        });
+    }
+
+    // Create every AssetGroup before the consecutive block of AssetGroupAsset links.
+    validatedGroups.forEach((group, index) => {
+        operationIndexes.assetGroups.push(operations.length);
+        operations.push({
+            assetGroupOperation: {
+                create: {
+                    resourceName: assetGroupResourceNames[index],
+                    name: group.name,
+                    campaign: campaignResourceName,
+                    finalUrls: group.finalUrls,
+                    status: "PAUSED",
+                },
+            },
+        });
+    });
+
+    // Keep all AssetGroupAsset operations consecutive so Google validates each group
+    // only after its complete required asset set has been included.
+    validatedGroups.forEach((group, groupIndex) => {
+        const assetGroupResourceName = assetGroupResourceNames[groupIndex];
+        const addAssetGroupAsset = (
+            assetResourceName: string,
+            fieldType: PerformanceMaxAssetFieldType,
+        ) => {
+            operationIndexes.assetGroupAssets[groupIndex].push(operations.length);
+            operations.push({
+                assetGroupAssetOperation: {
+                    create: {
+                        assetGroup: assetGroupResourceName,
+                        asset: assetResourceName,
+                        fieldType,
+                    },
+                },
+            });
+        };
+
+        for (const assetResourceName of groupAssetResources[groupIndex].headlines) {
+            addAssetGroupAsset(assetResourceName, "HEADLINE");
+        }
+        for (const assetResourceName of groupAssetResources[groupIndex].longHeadlines) {
+            addAssetGroupAsset(assetResourceName, "LONG_HEADLINE");
+        }
+        for (const assetResourceName of groupAssetResources[groupIndex].descriptions) {
+            addAssetGroupAsset(assetResourceName, "DESCRIPTION");
+        }
+
+        for (const mediaAsset of group.mediaAssets) {
+            addAssetGroupAsset(mediaAsset.assetResourceName, mediaAsset.fieldType);
+        }
+
+        if (!brandGuidelinesEnabled) {
+            addAssetGroupAsset(businessNameAssetResourceName, "BUSINESS_NAME");
+            for (const assetResourceName of logoAssetResourceNames) {
+                addAssetGroupAsset(assetResourceName, "LOGO");
+            }
+            for (const assetResourceName of landscapeLogoAssetResourceNames) {
+                addAssetGroupAsset(assetResourceName, "LANDSCAPE_LOGO");
+            }
+        }
+
+        const callToActionAsset = groupAssetResources[groupIndex].callToAction;
+        if (callToActionAsset) {
+            addAssetGroupAsset(callToActionAsset, "CALL_TO_ACTION_SELECTION");
+        }
+    });
+
+    // Optional audience and search theme signals are individual AssetGroupSignal operations.
+    validatedGroups.forEach((group, groupIndex) => {
+        const assetGroupResourceName = assetGroupResourceNames[groupIndex];
+
+        for (const audienceResourceName of group.audienceSignals) {
+            operationIndexes.assetGroupSignals[groupIndex].push(operations.length);
+            operations.push({
+                assetGroupSignalOperation: {
+                    create: {
+                        assetGroup: assetGroupResourceName,
+                        audience: {
+                            audience: audienceResourceName,
+                        },
+                    },
+                },
+            });
+        }
+
+        for (const searchTheme of group.searchThemes) {
+            operationIndexes.assetGroupSignals[groupIndex].push(operations.length);
+            operations.push({
+                assetGroupSignalOperation: {
+                    create: {
+                        assetGroup: assetGroupResourceName,
+                        searchTheme: {
+                            text: searchTheme,
+                        },
+                    },
+                },
+            });
+        }
+    });
+
+    // 10. Submit all resources in one atomic request (partialFailure:false).
+    const googleResponse = await googleAdsBulkMutate(context, {
+        operations,
+        validateOnly,
+        confirm: input.confirm,
+    });
+
+    const temporaryResourceNames = {
+        budget: budgetResourceName,
+        campaign: campaignResourceName,
+        assetGroups: assetGroupResourceNames,
+    };
+
+    if (validateOnly) {
+        return {
+            validateOnly: true,
+            operationCount: operations.length,
+            validationWarnings: [],
+            temporaryResourceNames,
+            createdResources: null,
+            googleResponse,
+            relatedGoogleResponses: [],
+        };
+    }
+
+    // 11. Extract the resource names returned for each operation after a live mutation.
+    const extractRequiredResource = (index: number, label: string): string => {
+        const resourceName = getGoogleAdsBulkMutationResourceName(googleResponse, index);
+
+        if (!resourceName) {
+            throw new GoogleAdsCreationError(
+                `Google Ads did not return the ${label} resource name.`,
+                502,
+                googleResponse,
+            );
+        }
+
+        return resourceName;
+    };
+
+    const extractMultipleResources = (indexes: number[], label: string): string[] =>
+        indexes.map((index) => extractRequiredResource(index, label));
+
+    const createdResources = {
+        budget: extractRequiredResource(operationIndexes.budget, "Performance Max Campaign Budget"),
+        campaign: extractRequiredResource(operationIndexes.campaign, "Performance Max Campaign"),
+        assets: extractMultipleResources(operationIndexes.assets, "Performance Max Asset"),
+        campaignAssets: extractMultipleResources(operationIndexes.campaignAssets, "Performance Max Campaign Asset"),
+        assetGroups: validatedGroups.map((group, index) => ({
+            name: group.name,
+            assetGroup: extractRequiredResource(operationIndexes.assetGroups[index], "Performance Max Asset Group"),
+            assetGroupAssets: extractMultipleResources(
+                operationIndexes.assetGroupAssets[index],
+                `Performance Max Asset Group Asset (${group.name})`,
+            ),
+            assetGroupSignals: extractMultipleResources(
+                operationIndexes.assetGroupSignals[index],
+                `Performance Max Asset Group Signal (${group.name})`,
+            ),
+        })),
+        locationCriteria: extractMultipleResources(operationIndexes.locations, "Performance Max Location Criterion"),
+        languageCriteria: extractMultipleResources(operationIndexes.languages, "Performance Max Language Criterion"),
+        negativeKeywords: extractMultipleResources(operationIndexes.negativeKeywords, "Performance Max Negative Keyword Criterion"),
+        urlExclusions: extractMultipleResources(operationIndexes.urlExclusions, "Performance Max URL Exclusion Criterion"),
+    };
+
+    return {
+        validateOnly: false,
+        operationCount: operations.length,
+        validationWarnings: [],
+        temporaryResourceNames,
+        createdResources,
+        googleResponse,
+        relatedGoogleResponses: [],
+    };
+}
+
+
+// ==========================================
 // PERFORMANCE MAX ASSET GROUP CREATION
 // ==========================================
 
@@ -1222,9 +2401,12 @@ export async function createGoogleAdsPerformanceMaxAssetGroup(
         "DESCRIPTION",
         "MARKETING_IMAGE",
         "SQUARE_MARKETING_IMAGE",
+        "PORTRAIT_MARKETING_IMAGE",
         "BUSINESS_NAME",
         "LOGO",
+        "LANDSCAPE_LOGO",
         "YOUTUBE_VIDEO",
+        "CALL_TO_ACTION_SELECTION",
     ];
 
     const assetCounts: Record<string, number> = {};
@@ -1266,9 +2448,12 @@ export async function createGoogleAdsPerformanceMaxAssetGroup(
         DESCRIPTION: { min: 2, max: 5 },
         MARKETING_IMAGE: { min: 1, max: 20 },
         SQUARE_MARKETING_IMAGE: { min: 1, max: 20 },
+        PORTRAIT_MARKETING_IMAGE: { min: 0, max: 20 },
         BUSINESS_NAME: { min: 1, max: 1 },
         LOGO: { min: 1, max: 5 },
+        LANDSCAPE_LOGO: { min: 0, max: 20 },
         YOUTUBE_VIDEO: { min: 0, max: 15 },
+        CALL_TO_ACTION_SELECTION: { min: 0, max: 1 },
     };
 
     for (const [fieldType, requirement] of Object.entries(requirements)) {

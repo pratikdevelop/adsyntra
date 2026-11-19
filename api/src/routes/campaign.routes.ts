@@ -24,7 +24,11 @@ import {
 import {
     getGoogleAdsCreationContext,
     createGoogleAdsCampaignFlow,
-    createGoogleAdsDisplayCampaignFlow
+    createGoogleAdsDisplayCampaignFlow,
+    createGoogleAdsPerformanceMaxCampaignFlow,
+    createGoogleAdsYouTubeVideoAsset,
+    createGoogleAdsImageAsset,
+    GoogleAdsCreationError,
 } from "../googleadsAPI/services/campaign-creation.js";
 import {
     createMetaAdsCampaignForUser,
@@ -37,7 +41,11 @@ import {
     type CreateMetaAdsAdSetInput,
     type MetaAdsCampaignObjective,
 } from "../metaadsAPI/services/campaign-creation.js";
-import type { CreateGoogleAdsDisplayCampaignFlowInput, CreateGoogleAdsSearchCampaignFlowInput } from "../../interfaces/campaign-creation.js";
+import type {
+    CreateGoogleAdsDisplayCampaignFlowInput,
+    CreateGoogleAdsSearchCampaignFlowInput,
+    CreateGoogleAdsPerformanceMaxCampaignFlowInput,
+} from "../interfaces/campaign-creation.js";
 import {
     searchMetaLocations,
     searchMetaDetailedTargeting,
@@ -56,10 +64,6 @@ import {
     updateMetaAdsStatus,
     deleteMetaAdsCampaign
 } from "../metaadsAPI/services/campaign.js";
-import {
-    createGoogleAdsImageAsset,
-    GoogleAdsCreationError,
-} from "../googleadsAPI/services/campaign-creation.js";
 import multer from "multer";
 import AssetModel from "../models/asset.model.js";
 import { readFile } from "node:fs/promises";
@@ -678,6 +682,274 @@ function getGoogleDisplayCampaignImageReferences(
     square.sort(byAssetIndex);
 
     return { landscape, square };
+}
+
+const GOOGLE_PMAX_CAMPAIGN_CREATIVE_CAPABILITY =
+    "google-performance-max-asset-group";
+
+const GOOGLE_PMAX_IMAGE_REQUIREMENTS = {
+    "google-pmax-logo-images": {
+        fieldType: "LOGO",
+        kind: "LOGO",
+    },
+    "google-pmax-landscape-images": {
+        fieldType: "MARKETING_IMAGE",
+        kind: "IMAGE",
+    },
+    "google-pmax-square-images": {
+        fieldType: "SQUARE_MARKETING_IMAGE",
+        kind: "IMAGE",
+    },
+    "google-pmax-portrait-images": {
+        fieldType: "PORTRAIT_MARKETING_IMAGE",
+        kind: "IMAGE",
+    },
+    "google-pmax-landscape-logo-images": {
+        fieldType: "LANDSCAPE_LOGO",
+        kind: "LOGO",
+    },
+} as const;
+
+type GooglePmaxImageFieldType =
+    (typeof GOOGLE_PMAX_IMAGE_REQUIREMENTS)[keyof typeof GOOGLE_PMAX_IMAGE_REQUIREMENTS]["fieldType"];
+
+type GooglePmaxImageCampaignReference = ResolvedCampaignAssetReference & {
+    campaignCreativeTarget: CampaignCreativeTargetReference;
+    fieldType: GooglePmaxImageFieldType;
+};
+
+function getGooglePmaxCampaignImageReferences(
+    references: ResolvedCampaignAssetReference[],
+): GooglePmaxImageCampaignReference[] {
+    const pmaxReferences: GooglePmaxImageCampaignReference[] = [];
+    const seenIndexes = new Set<string>();
+
+    for (const reference of references) {
+        const target = reference.campaignCreativeTarget;
+        if (
+            target?.platform !== "googleAds" ||
+            target.capabilityId !== GOOGLE_PMAX_CAMPAIGN_CREATIVE_CAPABILITY
+        ) {
+            continue;
+        }
+
+        const requirement =
+            GOOGLE_PMAX_IMAGE_REQUIREMENTS[
+                target.requirementId as keyof typeof GOOGLE_PMAX_IMAGE_REQUIREMENTS
+            ];
+
+        if (!requirement) {
+            throw new CampaignRequestValidationError(
+                `Google Performance Max asset ${reference.assetId} has an unsupported image requirement: ${target.requirementId}.`,
+            );
+        }
+
+        const allowedKinds = requirement.kind === "LOGO"
+            ? ["IMAGE", "LOGO"]
+            : ["IMAGE"];
+
+        if (!allowedKinds.includes(reference.kind)) {
+            throw new CampaignRequestValidationError(
+                `Google Performance Max requirement ${target.requirementId} does not accept ${reference.kind} assets.`,
+            );
+        }
+
+        if (
+            !reference.providerUploadRequired ||
+            reference.storageReference !== "ADSYNTRA_PRIVATE_STORAGE" ||
+            !reference.contentUrl
+        ) {
+            throw new CampaignRequestValidationError(
+                `Google Performance Max asset ${reference.assetId} must be stored in the private AdSyntra Asset Library before provider upload.`,
+            );
+        }
+
+        const indexKey = `${requirement.fieldType}:${target.assetIndex}`;
+        if (seenIndexes.has(indexKey)) {
+            throw new CampaignRequestValidationError(
+                `Google Performance Max ${requirement.fieldType} asset index ${target.assetIndex} is duplicated.`,
+            );
+        }
+        seenIndexes.add(indexKey);
+
+        pmaxReferences.push({
+            ...reference,
+            fieldType: requirement.fieldType,
+        });
+    }
+
+    return pmaxReferences.sort(
+        (left, right) => left.fieldType.localeCompare(right.fieldType) ||
+            left.campaignCreativeTarget.assetIndex - right.campaignCreativeTarget.assetIndex,
+    );
+}
+
+interface GooglePmaxImageNormalizationResult {
+    buffer: Buffer;
+    fileName: string;
+    mimeType: "image/jpeg" | "image/png";
+    width: number;
+    height: number;
+    sourceWidth: number;
+    sourceHeight: number;
+}
+
+/**
+ * Create a Google-specific derivative without modifying the private Asset Library
+ * original. Marketing images use a provider crop; brand marks use contain so the
+ * logo itself is not clipped.
+ */
+async function normalizeGooglePmaxImage(
+    file: { buffer: Buffer; fileName: string },
+    fieldType: GooglePmaxImageFieldType,
+): Promise<GooglePmaxImageNormalizationResult> {
+    const targetByFieldType: Record<GooglePmaxImageFieldType, {
+        width: number;
+        height: number;
+        minWidth: number;
+        minHeight: number;
+        isBrandMark: boolean;
+    }> = {
+        MARKETING_IMAGE: { width: 1200, height: 628, minWidth: 600, minHeight: 314, isBrandMark: false },
+        SQUARE_MARKETING_IMAGE: { width: 1200, height: 1200, minWidth: 300, minHeight: 300, isBrandMark: false },
+        PORTRAIT_MARKETING_IMAGE: { width: 960, height: 1200, minWidth: 480, minHeight: 600, isBrandMark: false },
+        LOGO: { width: 1200, height: 1200, minWidth: 128, minHeight: 128, isBrandMark: true },
+        LANDSCAPE_LOGO: { width: 1200, height: 300, minWidth: 512, minHeight: 128, isBrandMark: true },
+    };
+    const target = targetByFieldType[fieldType];
+
+    let metadata: sharp.Metadata;
+    try {
+        metadata = await sharp(file.buffer, {
+            animated: false,
+            failOn: "error",
+            limitInputPixels: 80_000_000,
+        }).metadata();
+    } catch {
+        throw new CampaignRequestValidationError(
+            `The selected ${fieldType} image is not a valid readable image.`,
+        );
+    }
+
+    if (
+        !metadata.width ||
+        !metadata.height ||
+        !["jpeg", "png", "webp", "gif"].includes(metadata.format ?? "")
+    ) {
+        throw new CampaignRequestValidationError(
+            `The selected ${fieldType} image must be a valid JPEG, PNG, WebP or GIF file.`,
+        );
+    }
+
+    const swapsDimensions = [5, 6, 7, 8].includes(metadata.orientation ?? 1);
+    const sourceWidth = swapsDimensions ? metadata.height! : metadata.width;
+    const sourceHeight = swapsDimensions ? metadata.width! : metadata.height;
+
+    if (target.isBrandMark) {
+        if (sourceWidth < target.minWidth || sourceHeight < target.minHeight) {
+            throw new CampaignRequestValidationError(
+                `The selected ${fieldType} is too small. Google requires at least ${target.minWidth}x${target.minHeight} source pixels; this file is ${sourceWidth}x${sourceHeight}.`,
+            );
+        }
+    } else {
+        const targetRatio = target.width / target.height;
+        const cropWidth = Math.min(sourceWidth, sourceHeight * targetRatio);
+        const cropHeight = Math.min(sourceHeight, sourceWidth / targetRatio);
+        if (cropWidth < target.minWidth || cropHeight < target.minHeight) {
+            throw new CampaignRequestValidationError(
+                `The selected ${fieldType} is too small after cropping. Google requires at least ${target.minWidth}x${target.minHeight} retained pixels; this file is ${sourceWidth}x${sourceHeight}.`,
+            );
+        }
+    }
+
+    const baseName = file.fileName.replace(/\.[^/.]+$/, "") || "pmax-image";
+    const extension = target.isBrandMark ? "png" : "jpg";
+    const outputFileName = `${baseName}-${fieldType.toLowerCase()}-google.${extension}`;
+    const pipeline = sharp(file.buffer, {
+        animated: false,
+        failOn: "error",
+        limitInputPixels: 80_000_000,
+    })
+        .rotate()
+        .resize(target.width, target.height, {
+            fit: target.isBrandMark ? "contain" : "cover",
+            position: target.isBrandMark ? "centre" : sharp.strategy.attention,
+            ...(target.isBrandMark
+                ? { background: { r: 0, g: 0, b: 0, alpha: 0 } }
+                : {}),
+        });
+
+    const output = target.isBrandMark
+        ? await pipeline.png({ compressionLevel: 9, adaptiveFiltering: true }).toBuffer()
+        : await pipeline.jpeg({ quality: 88, mozjpeg: true }).toBuffer();
+
+    if (!output.length || output.length > 5 * 1024 * 1024) {
+        throw new CampaignRequestValidationError(
+            `The normalized ${fieldType} exceeds Google's 5 MB image asset upload limit.`,
+        );
+    }
+
+    return {
+        buffer: output,
+        fileName: outputFileName,
+        mimeType: target.isBrandMark ? "image/png" : "image/jpeg",
+        width: target.width,
+        height: target.height,
+        sourceWidth,
+        sourceHeight,
+    };
+}
+
+function readPmaxStringArray(value: unknown, fieldName: string): string[] {
+    if (value === undefined || value === null) return [];
+    if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
+        throw new CampaignRequestValidationError(`${fieldName} must be an array of strings.`);
+    }
+    return value.map((item) => item.trim()).filter(Boolean);
+}
+
+function normalizePmaxDate(value: unknown, fieldName: string): string | undefined {
+    if (value === undefined || value === null || value === "") return undefined;
+    if (typeof value !== "string") {
+        throw new CampaignRequestValidationError(`${fieldName} must be a calendar date string.`);
+    }
+    const raw = value.trim();
+    const normalized = /^\d{8}$/.test(raw)
+        ? `${raw.slice(0, 4)}-${raw.slice(4, 6)}-${raw.slice(6, 8)}`
+        : /^\d{4}-\d{2}-\d{2}$/.test(raw)
+            ? raw
+            : null;
+    if (!normalized) {
+        throw new CampaignRequestValidationError(`${fieldName} must use YYYY-MM-DD or YYYYMMDD format.`);
+    }
+    const parsed = new Date(`${normalized}T00:00:00.000Z`);
+    if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== normalized) {
+        throw new CampaignRequestValidationError(`${fieldName} must be a real calendar date.`);
+    }
+    return normalized;
+}
+
+function readPmaxNegativeKeywords(value: unknown): Array<{
+    text: string;
+    matchType: "BROAD" | "PHRASE" | "EXACT";
+}> {
+    if (value === undefined || value === null) return [];
+    if (!Array.isArray(value)) {
+        throw new CampaignRequestValidationError("Performance Max negativeKeywords must be an array.");
+    }
+    return value.map((entry, index) => {
+        if (!isRecord(entry) || typeof entry.text !== "string" || !entry.text.trim()) {
+            throw new CampaignRequestValidationError(`Performance Max negative keyword ${index + 1} is invalid.`);
+        }
+        const matchType = String(entry.matchType ?? "BROAD").toUpperCase();
+        if (!["BROAD", "PHRASE", "EXACT"].includes(matchType)) {
+            throw new CampaignRequestValidationError(`Performance Max negative keyword ${index + 1} has an unsupported match type.`);
+        }
+        return {
+            text: entry.text.trim(),
+            matchType: matchType as "BROAD" | "PHRASE" | "EXACT",
+        };
+    });
 }
 
 function readGoogleAdsImageAssetResourceNames(
@@ -1730,13 +2002,21 @@ router.post("/", async (req: Request, res: Response) => {
                 resourceName: string;
                 resourceId: string | null;
             }> = [];
+            const uploadedGooglePmaxAssets: Array<{
+                assetId: string | null;
+                fieldType: string;
+                resourceName: string;
+                resourceId: string | null;
+                fileName?: string;
+            }> = [];
+            let result: any;
 
             try {
                 if (!googleRequest) {
                     throw new Error("Google Ads provider configuration is missing.");
                 }
 
-                // Current Google campaign flow supports Search and Display campaigns.
+                // Search, Display and Standard Performance Max have independent execution paths.
                 const campaignType =
                     googleRequest.providerCampaignType.trim().toUpperCase();
 
@@ -2012,9 +2292,530 @@ router.post("/", async (req: Request, res: Response) => {
                     }
                 }
 
-                // 3. Dispatch to the correct campaign workflow.
-                let result: any;
+                // Standard Performance Max uses campaign-level brand assets and
+                // Asset Group asset links. Its private Asset Library media must be
+                // uploaded to this Google Ads customer before the campaign flow runs.
+                if (campaignType === "PERFORMANCE_MAX") {
+                    const campaignDraft = requireConfigObject(
+                        flowInput.campaign,
+                        "Google Performance Max campaign configuration",
+                    );
+                    const budgetDraft = requireConfigObject(
+                        campaignDraft.campaignBudget,
+                        "Google Performance Max campaignBudget",
+                    );
+                    const assetGroupDraft = requireConfigObject(
+                        flowInput.assetGroup,
+                        "Google Performance Max assetGroup",
+                    );
+                    const textAssets = requireConfigObject(
+                        assetGroupDraft.textAssets,
+                        "Google Performance Max assetGroup.textAssets",
+                    );
 
+                    const pmaxReferences = getGooglePmaxCampaignImageReferences(
+                        selectedAssetReferences,
+                    );
+                    const pmaxImagesByFieldType = new Map<string, GooglePmaxImageCampaignReference[]>();
+                    for (const reference of pmaxReferences) {
+                        const current = pmaxImagesByFieldType.get(reference.fieldType) ?? [];
+                        current.push(reference);
+                        pmaxImagesByFieldType.set(reference.fieldType, current);
+                    }
+
+                    const logoReferences = pmaxImagesByFieldType.get("LOGO") ?? [];
+                    const landscapeLogoReferences = pmaxImagesByFieldType.get("LANDSCAPE_LOGO") ?? [];
+                    const marketingImageReferences = pmaxImagesByFieldType.get("MARKETING_IMAGE") ?? [];
+                    const squareImageReferences = pmaxImagesByFieldType.get("SQUARE_MARKETING_IMAGE") ?? [];
+                    const portraitImageReferences = pmaxImagesByFieldType.get("PORTRAIT_MARKETING_IMAGE") ?? [];
+
+                    if (logoReferences.length === 0) {
+                        throw new CampaignRequestValidationError(
+                            "Google Performance Max requires at least one Logo asset from the Asset Library.",
+                        );
+                    }
+                    if (marketingImageReferences.length === 0 || squareImageReferences.length === 0) {
+                        throw new CampaignRequestValidationError(
+                            "Google Performance Max requires at least one landscape image and one square image assigned to the Asset Group.",
+                        );
+                    }
+
+                    const pmaxName =
+                        optionalConfigString(campaignDraft, ["name"], "Performance Max campaign name") ??
+                        request.name;
+                    const assetGroupName = requireConfigString(
+                        assetGroupDraft,
+                        ["name"],
+                        "Performance Max Asset Group name",
+                    );
+                    const finalUrls = readPmaxStringArray(
+                        assetGroupDraft.final_urls ?? assetGroupDraft.finalUrls,
+                        "Performance Max final_urls",
+                    );
+                    if (finalUrls.length === 0) {
+                        throw new CampaignRequestValidationError(
+                            "Google Performance Max requires at least one Asset Group final URL.",
+                        );
+                    }
+                    for (const finalUrl of finalUrls) {
+                        try {
+                            const parsed = new URL(finalUrl);
+                            if (!["http:", "https:"].includes(parsed.protocol)) throw new Error();
+                        } catch {
+                            throw new CampaignRequestValidationError(
+                                `Invalid Google Performance Max final URL: ${finalUrl}`,
+                            );
+                        }
+                    }
+
+                    const headlines = readPmaxStringArray(textAssets.headlines, "Performance Max headlines");
+                    const longHeadlines = readPmaxStringArray(textAssets.longHeadlines, "Performance Max longHeadlines");
+                    const descriptions = readPmaxStringArray(textAssets.descriptions, "Performance Max descriptions");
+                    const businessName = requireConfigString(
+                        textAssets,
+                        ["businessName"],
+                        "Performance Max business name",
+                    );
+
+                    if (headlines.length < 3 || headlines.length > 15 || headlines.some((value) => value.length > 30)) {
+                        throw new CampaignRequestValidationError(
+                            "Performance Max requires 3–15 headlines, each no longer than 30 characters.",
+                        );
+                    }
+                    if (longHeadlines.length < 1 || longHeadlines.length > 5 || longHeadlines.some((value) => value.length > 90)) {
+                        throw new CampaignRequestValidationError(
+                            "Performance Max requires 1–5 long headlines, each no longer than 90 characters.",
+                        );
+                    }
+                    if (
+                        descriptions.length < 2 ||
+                        descriptions.length > 5 ||
+                        descriptions.some((value) => value.length > 90) ||
+                        !descriptions.some((value) => value.length <= 60)
+                    ) {
+                        throw new CampaignRequestValidationError(
+                            "Performance Max requires 2–5 descriptions (maximum 90 characters) and at least one description of 60 characters or fewer.",
+                        );
+                    }
+                    if (businessName.length > 25) {
+                        throw new CampaignRequestValidationError(
+                            "Performance Max business name must not exceed 25 characters.",
+                        );
+                    }
+
+                    const biddingStrategy = optionalConfigString(
+                        campaignDraft,
+                        ["biddingStrategy"],
+                        "Performance Max biddingStrategy",
+                    )?.toUpperCase();
+                    if (
+                        campaignDraft.biddingMode === "PORTFOLIO" ||
+                        optionalConfigString(campaignDraft, ["portfolioBiddingStrategyResourceName"], "Performance Max portfolio strategy")
+                    ) {
+                        throw new CampaignRequestValidationError(
+                            "Standard Performance Max currently supports standard Maximize Conversions or Maximize Conversion Value bidding, not portfolio bidding.",
+                        );
+                    }
+                    if (![
+                        "MAXIMIZE_CONVERSIONS",
+                        "MAXIMIZE_CONVERSION_VALUE",
+                    ].includes(biddingStrategy ?? "")) {
+                        throw new CampaignRequestValidationError(
+                            "Select Maximize Conversions or Maximize Conversion Value for Standard Performance Max bidding.",
+                        );
+                    }
+
+                    const budgetPeriod = String(budgetDraft.period ?? "DAILY").toUpperCase();
+                    if (!["DAILY", "CUSTOM_PERIOD"].includes(budgetPeriod)) {
+                        throw new CampaignRequestValidationError(
+                            "Performance Max budget period must be DAILY or CUSTOM_PERIOD.",
+                        );
+                    }
+                    const budgetAmount = optionalConfigNumber(
+                        budgetDraft,
+                        budgetPeriod === "CUSTOM_PERIOD"
+                            ? ["totalAmount"]
+                            : ["averageDailyAmount"],
+                        "Performance Max budget amount",
+                    );
+                    if (budgetAmount === undefined || budgetAmount <= 0) {
+                        throw new CampaignRequestValidationError(
+                            "Enter a Performance Max budget amount greater than zero.",
+                        );
+                    }
+                    const startDate = normalizePmaxDate(campaignDraft.startDate, "Performance Max startDate");
+                    const endDate = normalizePmaxDate(campaignDraft.endDate, "Performance Max endDate");
+                    if (budgetPeriod === "CUSTOM_PERIOD" && (!startDate || !endDate)) {
+                        throw new CampaignRequestValidationError(
+                            "A Performance Max campaign-total budget requires both start and end dates.",
+                        );
+                    }
+                    if (startDate && endDate && endDate <= startDate) {
+                        throw new CampaignRequestValidationError(
+                            "Performance Max endDate must be later than startDate.",
+                        );
+                    }
+
+                    const rawVideoIds = readPmaxStringArray(
+                        assetGroupDraft.youtubeVideoIds,
+                        "Performance Max youtubeVideoIds",
+                    );
+                    if (rawVideoIds.length > 15) {
+                        throw new CampaignRequestValidationError(
+                            "Performance Max supports at most 15 YouTube video assets per Asset Group.",
+                        );
+                    }
+                    const videoTitles = readPmaxStringArray(
+                        assetGroupDraft.youtubeVideoTitles,
+                        "Performance Max youtubeVideoTitles",
+                    );
+                    if (videoTitles.length > 0 && videoTitles.length !== rawVideoIds.length) {
+                        throw new CampaignRequestValidationError(
+                            "youtubeVideoTitles must contain one title for each YouTube video ID.",
+                        );
+                    }
+                    if (videoTitles.some((title) => title.length > 100)) {
+                        throw new CampaignRequestValidationError(
+                            "Each Performance Max YouTube video title must not exceed 100 characters.",
+                        );
+                    }
+                    const seenVideoIds = new Set<string>();
+                    for (const videoId of rawVideoIds) {
+                        if (!/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+                            throw new CampaignRequestValidationError(
+                                `Invalid YouTube video ID for Performance Max: ${videoId}`,
+                            );
+                        }
+                        if (seenVideoIds.has(videoId)) {
+                            throw new CampaignRequestValidationError(
+                                `Duplicate Performance Max YouTube video ID: ${videoId}`,
+                            );
+                        }
+                        seenVideoIds.add(videoId);
+                    }
+
+                    const brandGuidelinesEnabled = flowInput.brandGuidelinesEnabled !== false;
+                    if (
+                        flowInput.brandGuidelinesEnabled !== undefined &&
+                        typeof flowInput.brandGuidelinesEnabled !== "boolean"
+                    ) {
+                        throw new CampaignRequestValidationError(
+                            "brandGuidelinesEnabled must be a boolean.",
+                        );
+                    }
+                    if (logoReferences.length > 5 || landscapeLogoReferences.length > (brandGuidelinesEnabled ? 4 : 20)) {
+                        throw new CampaignRequestValidationError(
+                            "Performance Max supports up to five square logos and up to four additional landscape logos when brand guidelines are enabled.",
+                        );
+                    }
+                    if (brandGuidelinesEnabled && logoReferences.length + landscapeLogoReferences.length > 5) {
+                        throw new CampaignRequestValidationError(
+                            "With brand guidelines enabled, use at most five combined Logo and Landscape Logo assets.",
+                        );
+                    }
+                    if (
+                        marketingImageReferences.length > 20 ||
+                        squareImageReferences.length > 20 ||
+                        portraitImageReferences.length > 20
+                    ) {
+                        throw new CampaignRequestValidationError(
+                            "Each Performance Max marketing image slot supports at most 20 images.",
+                        );
+                    }
+
+                    const rawCampaignCriteria = isRecord(campaignDraft.campaignCriteria)
+                        ? campaignDraft.campaignCriteria
+                        : {};
+                    const locationResourceNames = readPmaxStringArray(
+                        rawCampaignCriteria.locationResourceNames,
+                        "Performance Max locationResourceNames",
+                    );
+                    const languageResourceNames = readPmaxStringArray(
+                        rawCampaignCriteria.languageResourceNames,
+                        "Performance Max languageResourceNames",
+                    );
+                    const searchThemes = readPmaxStringArray(
+                        assetGroupDraft.searchThemes,
+                        "Performance Max searchThemes",
+                    );
+                    const rawAudienceSignals = isRecord(assetGroupDraft.audienceSignals)
+                        ? assetGroupDraft.audienceSignals
+                        : {};
+                    const audienceResourceNames = readPmaxStringArray(
+                        rawAudienceSignals.audienceResourceNames,
+                        "Performance Max audienceResourceNames",
+                    );
+                    const negativeKeywords = readPmaxNegativeKeywords(
+                        flowInput.negativeKeywords ?? campaignDraft.negativeKeywords,
+                    );
+
+                    // Validate and normalize every selected image before the first
+                    // Google Ads asset upload. Originals remain untouched.
+                    const pendingPmaxUploads: Array<{
+                        reference: GooglePmaxImageCampaignReference;
+                        file: Awaited<ReturnType<typeof readOwnedCampaignImageAsset>> & {
+                            mimeType: "image/jpeg" | "image/png";
+                        };
+                    }> = [];
+                    for (const reference of pmaxReferences) {
+                        const sourceFile = await readOwnedCampaignImageAsset(
+                            userId,
+                            reference.assetId,
+                            { allowConvertibleImageFormats: true },
+                        );
+                        const normalized = await normalizeGooglePmaxImage(
+                            {
+                                buffer: sourceFile.buffer,
+                                fileName: sourceFile.fileName,
+                            },
+                            reference.fieldType,
+                        );
+                        pendingPmaxUploads.push({
+                            reference,
+                            file: {
+                                ...sourceFile,
+                                buffer: normalized.buffer,
+                                fileName: normalized.fileName,
+                                mimeType: normalized.mimeType,
+                                width: normalized.width,
+                                height: normalized.height,
+                            },
+                        });
+                    }
+
+                    // Validate every Asset upload request with Google before any
+                    // live upload. validateOnly:true does not create provider assets.
+                    const pmaxAssetUploadValidationResponses: unknown[] = [];
+                    for (const pendingUpload of pendingPmaxUploads) {
+                        const validation = await createGoogleAdsImageAsset(
+                            context,
+                            {
+                                buffer: pendingUpload.file.buffer,
+                                name: `${pmaxName} - ${pendingUpload.reference.fieldType} - ${pendingUpload.reference.campaignCreativeTarget.assetIndex + 1}`,
+                                originalName: pendingUpload.file.fileName,
+                                validateOnly: true,
+                                confirm: false,
+                            },
+                        );
+                        pmaxAssetUploadValidationResponses.push(validation.googleResponse);
+                    }
+                    for (const [index, videoId] of rawVideoIds.entries()) {
+                        const videoTitle = videoTitles[index] || `${pmaxName.slice(0, 75)} video ${index + 1}`;
+                        const validation = await createGoogleAdsYouTubeVideoAsset(
+                            context,
+                            {
+                                videoId,
+                                videoTitle,
+                                name: `${pmaxName} - YouTube video ${index + 1}`,
+                                validateOnly: true,
+                                confirm: false,
+                            },
+                        );
+                        pmaxAssetUploadValidationResponses.push(validation.googleResponse);
+                    }
+
+                    if (execution.validateOnly) {
+                        // Campaign + Asset Group validation requires real uploaded
+                        // Asset resource names. Do not manufacture resource names or
+                        // create media just to validate; report this boundary clearly.
+                        result = {
+                            validateOnly: true,
+                            operationCount: pmaxAssetUploadValidationResponses.length,
+                            temporaryResourceNames: {
+                                budget: "",
+                                campaign: "",
+                                assetGroups: [],
+                            },
+                            createdResources: null,
+                            googleResponse: pmaxAssetUploadValidationResponses[0] ?? null,
+                            relatedGoogleResponses: pmaxAssetUploadValidationResponses.slice(1),
+                            assetUploadRequired: true,
+                            validationWarnings: [
+                                "Local Performance Max configuration and private media checks passed. Google Ads VALIDATE_ONLY accepted each image/YouTube Asset upload request. The Campaign, budget, brand links and Asset Group link mutation is deferred until LIVE execution because the Asset Group must reference real Google Ads Asset resource names.",
+                            ],
+                        };
+                    } else {
+                        if (execution.confirm !== true) {
+                            throw new CampaignRequestValidationError(
+                                "Live Google Performance Max creation requires execution.confirm:true.",
+                            );
+                        }
+
+                        // Upload all private image derivatives and record each returned
+                        // resource name immediately so failures can be reconciled later.
+                        for (const pendingUpload of pendingPmaxUploads) {
+                            const uploadResult = await createGoogleAdsImageAsset(
+                                context,
+                                {
+                                    buffer: pendingUpload.file.buffer,
+                                    name: `${pmaxName} - ${pendingUpload.reference.fieldType} - ${pendingUpload.reference.campaignCreativeTarget.assetIndex + 1}`,
+                                    originalName: pendingUpload.file.fileName,
+                                    validateOnly: false,
+                                    confirm: true,
+                                },
+                            );
+                            if (!uploadResult.resourceName) {
+                                throw new GoogleAdsCreationError(
+                                    `Google Ads did not return a ${pendingUpload.reference.fieldType} asset resource name.`,
+                                    502,
+                                    uploadResult.googleResponse,
+                                );
+                            }
+                            uploadedGooglePmaxAssets.push({
+                                assetId: pendingUpload.reference.assetId,
+                                fieldType: pendingUpload.reference.fieldType,
+                                resourceName: uploadResult.resourceName,
+                                resourceId: uploadResult.resourceId,
+                                fileName: pendingUpload.file.fileName,
+                            });
+                        }
+
+                        // The frontend currently collects YouTube IDs rather than a
+                        // private MP4 file. Only YouTube-hosted IDs can fill this slot.
+                        for (const [index, videoId] of rawVideoIds.entries()) {
+                            const videoTitle = videoTitles[index] || `${pmaxName.slice(0, 75)} video ${index + 1}`;
+                            const uploadResult = await createGoogleAdsYouTubeVideoAsset(
+                                context,
+                                {
+                                    videoId,
+                                    videoTitle,
+                                    name: `${pmaxName} - YouTube video ${index + 1}`,
+                                    validateOnly: false,
+                                    confirm: true,
+                                },
+                            );
+                            if (!uploadResult.resourceName) {
+                                throw new GoogleAdsCreationError(
+                                    `Google Ads did not return a YouTube video asset resource name for video ${index + 1}.`,
+                                    502,
+                                    uploadResult.googleResponse,
+                                );
+                            }
+                            uploadedGooglePmaxAssets.push({
+                                assetId: null,
+                                fieldType: "YOUTUBE_VIDEO",
+                                resourceName: uploadResult.resourceName,
+                                resourceId: uploadResult.resourceId,
+                                fileName: videoTitle,
+                            });
+                        }
+
+                        const getUploadedResources = (fieldType: string) =>
+                            uploadedGooglePmaxAssets
+                                .filter((asset) => asset.fieldType === fieldType)
+                                .map((asset) => asset.resourceName);
+                        const pmaxBrandingDraft = isRecord(campaignDraft.branding)
+                            ? campaignDraft.branding
+                            : {};
+                        const targetCpaAmount = optionalConfigNumber(
+                            campaignDraft,
+                            ["targetCpaAmount"],
+                            "Performance Max target CPA",
+                        );
+                        const targetRoas = optionalConfigNumber(
+                            campaignDraft,
+                            ["targetRoas"],
+                            "Performance Max target ROAS",
+                        );
+                        const biddingOptions: Record<string, number> = {};
+                        if (targetCpaAmount !== undefined) biddingOptions.targetCpa = targetCpaAmount;
+                        if (targetRoas !== undefined) biddingOptions.targetRoas = targetRoas;
+
+                        const pmaxInput: CreateGoogleAdsPerformanceMaxCampaignFlowInput = {
+                            budget: {
+                                name: `${pmaxName} - Performance Max Budget`,
+                                amount: budgetAmount,
+                                period: budgetPeriod as "DAILY" | "CUSTOM_PERIOD",
+                            },
+                            campaign: {
+                                name: pmaxName,
+                                biddingStrategy: biddingStrategy as "MAXIMIZE_CONVERSIONS" | "MAXIMIZE_CONVERSION_VALUE",
+                                ...(Object.keys(biddingOptions).length > 0
+                                    ? { biddingOptions: biddingOptions as any }
+                                    : {}),
+                                ...(startDate ? { startDate } : {}),
+                                ...(endDate ? { endDate } : {}),
+                                ...(typeof campaignDraft.contains_eu_political_advertising === "string"
+                                    ? { containsEuPoliticalAdvertising: campaignDraft.contains_eu_political_advertising }
+                                    : {}),
+                                brandGuidelinesEnabled,
+                                branding: {
+                                    businessName,
+                                    logoAssetResourceNames: getUploadedResources("LOGO"),
+                                    landscapeLogoAssetResourceNames: getUploadedResources("LANDSCAPE_LOGO"),
+                                    ...(typeof pmaxBrandingDraft.mainColor === "string" && pmaxBrandingDraft.mainColor.trim()
+                                        ? { mainColor: pmaxBrandingDraft.mainColor.trim() }
+                                        : {}),
+                                    ...(typeof pmaxBrandingDraft.accentColor === "string" && pmaxBrandingDraft.accentColor.trim()
+                                        ? { accentColor: pmaxBrandingDraft.accentColor.trim() }
+                                        : {}),
+                                    ...(typeof pmaxBrandingDraft.predefinedFontFamily === "string" && pmaxBrandingDraft.predefinedFontFamily.trim()
+                                        ? { predefinedFontFamily: pmaxBrandingDraft.predefinedFontFamily.trim() as any }
+                                        : {}),
+                                },
+                                ...(isRecord(campaignDraft.assetAutomation)
+                                    ? { assetAutomation: campaignDraft.assetAutomation as any }
+                                    : isRecord(flowInput.assetAutomation)
+                                        ? { assetAutomation: flowInput.assetAutomation as any }
+                                        : {}),
+                            },
+                            assetGroups: [
+                                {
+                                    name: assetGroupName,
+                                    finalUrls,
+                                    headlines,
+                                    longHeadlines,
+                                    descriptions,
+                                    mediaAssets: [
+                                        ...getUploadedResources("MARKETING_IMAGE").map((assetResourceName) => ({
+                                            assetResourceName,
+                                            fieldType: "MARKETING_IMAGE" as const,
+                                        })),
+                                        ...getUploadedResources("SQUARE_MARKETING_IMAGE").map((assetResourceName) => ({
+                                            assetResourceName,
+                                            fieldType: "SQUARE_MARKETING_IMAGE" as const,
+                                        })),
+                                        ...getUploadedResources("PORTRAIT_MARKETING_IMAGE").map((assetResourceName) => ({
+                                            assetResourceName,
+                                            fieldType: "PORTRAIT_MARKETING_IMAGE" as const,
+                                        })),
+                                        ...getUploadedResources("YOUTUBE_VIDEO").map((assetResourceName) => ({
+                                            assetResourceName,
+                                            fieldType: "YOUTUBE_VIDEO" as const,
+                                        })),
+                                    ],
+                                    ...(typeof assetGroupDraft.callToAction === "string" && assetGroupDraft.callToAction.trim()
+                                        ? { callToAction: assetGroupDraft.callToAction.trim() as any }
+                                        : {}),
+                                    ...(audienceResourceNames.length > 0
+                                        ? { audienceSignals: audienceResourceNames.map((audienceResourceName) => ({ audienceResourceName })) }
+                                        : {}),
+                                    ...(searchThemes.length > 0 ? { searchThemes } : {}),
+                                },
+                            ],
+                            ...(locationResourceNames.length > 0
+                                ? { locations: locationResourceNames.map((geoTargetConstantResourceName) => ({ geoTargetConstantResourceName })) }
+                                : {}),
+                            ...(languageResourceNames.length > 0
+                                ? { languages: languageResourceNames.map((languageConstantResourceName) => ({ languageConstantResourceName })) }
+                                : {}),
+                            ...(negativeKeywords.length > 0 ? { negativeKeywords } : {}),
+                            ...(Array.isArray(flowInput.urlExclusions)
+                                ? { urlExclusions: flowInput.urlExclusions as CreateGoogleAdsPerformanceMaxCampaignFlowInput["urlExclusions"] }
+                                : {}),
+                            validateOnly: false,
+                            confirm: true,
+                        };
+
+                        result = await createGoogleAdsPerformanceMaxCampaignFlow(
+                            context,
+                            pmaxInput,
+                        );
+                        result.assetUploadValidationResponses = pmaxAssetUploadValidationResponses;
+                    }
+                }
+
+                // 3. Dispatch to the correct campaign workflow.
                 if (campaignType === "SEARCH") {
                     result = await createGoogleAdsCampaignFlow(
                         context,
@@ -2025,9 +2826,15 @@ router.post("/", async (req: Request, res: Response) => {
                         context,
                         flowInput as CreateGoogleAdsDisplayCampaignFlowInput,
                     );
-                } else {
+                } else if (campaignType !== "DISPLAY" && campaignType !== "PERFORMANCE_MAX") {
                     throw new Error(
                         `Google Ads ${campaignType} campaign creation is not yet connected to the global execution route.`,
+                    );
+                }
+
+                if (!result) {
+                    throw new Error(
+                        `Google Ads ${campaignType} campaign flow did not return an execution result.`,
                     );
                 }
 
@@ -2198,6 +3005,55 @@ router.post("/", async (req: Request, res: Response) => {
                         );
                     }
 
+                    if (campaignType === "PERFORMANCE_MAX") {
+                        savedResources.push(
+                            ...resources.assets.map((resourceName: string) => ({
+                                resourceType: "textAsset",
+                                resourceName,
+                            })),
+                            ...resources.campaignAssets.map((resourceName: string) => ({
+                                resourceType: "campaignAsset",
+                                resourceName,
+                            })),
+                            ...resources.assetGroups.flatMap((assetGroup: any) => [
+                                {
+                                    resourceType: "assetGroup",
+                                    resourceName: assetGroup.assetGroup,
+                                },
+                                ...assetGroup.assetGroupAssets.map((resourceName: string) => ({
+                                    resourceType: "assetGroupAsset",
+                                    resourceName,
+                                })),
+                                ...assetGroup.assetGroupSignals.map((resourceName: string) => ({
+                                    resourceType: "assetGroupSignal",
+                                    resourceName,
+                                })),
+                            ]),
+                            ...resources.locationCriteria.map((resourceName: string) => ({
+                                resourceType: "locationCriterion",
+                                resourceName,
+                            })),
+                            ...resources.languageCriteria.map((resourceName: string) => ({
+                                resourceType: "languageCriterion",
+                                resourceName,
+                            })),
+                            ...resources.negativeKeywords.map((resourceName: string) => ({
+                                resourceType: "negativeKeyword",
+                                resourceName,
+                            })),
+                            ...resources.urlExclusions.map((resourceName: string) => ({
+                                resourceType: "urlExclusion",
+                                resourceName,
+                            })),
+                            ...uploadedGooglePmaxAssets.map((asset) => ({
+                                resourceType: asset.fieldType === "YOUTUBE_VIDEO"
+                                    ? "youtubeVideoAsset"
+                                    : "imageAsset",
+                                resourceName: asset.resourceName,
+                            })),
+                        );
+                    }
+
                     googleProvider.resources = savedResources;
                 }
 
@@ -2208,6 +3064,17 @@ router.post("/", async (req: Request, res: Response) => {
                     googleProvider.configuration = {
                         ...existingConfiguration,
                         googleDisplayUploadedAssets: uploadedGoogleDisplayAssets,
+                    };
+                    campaign.markModified("providers.googleAds.configuration");
+                }
+
+                if (campaignType === "PERFORMANCE_MAX") {
+                    const existingConfiguration = isRecord(googleProvider.configuration)
+                        ? googleProvider.configuration
+                        : {};
+                    googleProvider.configuration = {
+                        ...existingConfiguration,
+                        googlePmaxUploadedAssets: uploadedGooglePmaxAssets,
                     };
                     campaign.markModified("providers.googleAds.configuration");
                 }
@@ -2227,8 +3094,11 @@ router.post("/", async (req: Request, res: Response) => {
                     temporaryResourceNames: result.temporaryResourceNames,
                     createdResources: result.createdResources,
                     googleResponse: result.googleResponse,
+                    relatedGoogleResponses: result.relatedGoogleResponses ?? [],
+                    assetUploadValidationResponses: result.assetUploadValidationResponses ?? [],
                     assetUploadRequired: result.assetUploadRequired ?? false,
                     uploadedImageAssets: uploadedGoogleDisplayAssets,
+                    uploadedPmaxAssets: uploadedGooglePmaxAssets,
                     validationWarnings: result.validationWarnings ?? [],
                 };
             } catch (error) {
@@ -2278,6 +3148,35 @@ router.post("/", async (req: Request, res: Response) => {
                         ];
                     }
 
+                    if (uploadedGooglePmaxAssets.length > 0) {
+                        const existingConfiguration = isRecord(googleProvider.configuration)
+                            ? googleProvider.configuration
+                            : {};
+                        googleProvider.configuration = {
+                            ...existingConfiguration,
+                            googlePmaxUploadedAssets: uploadedGooglePmaxAssets,
+                        };
+                        campaign.markModified("providers.googleAds.configuration");
+
+                        const existingResources = Array.isArray(googleProvider.resources)
+                            ? googleProvider.resources
+                            : [];
+                        const existingResourceNames = new Set(
+                            existingResources.map((resource: any) => resource.resourceName),
+                        );
+                        googleProvider.resources = [
+                            ...existingResources,
+                            ...uploadedGooglePmaxAssets
+                                .filter((asset) => !existingResourceNames.has(asset.resourceName))
+                                .map((asset) => ({
+                                    resourceType: asset.fieldType === "YOUTUBE_VIDEO"
+                                        ? "youtubeVideoAsset"
+                                        : "imageAsset",
+                                    resourceName: asset.resourceName,
+                                })),
+                        ];
+                    }
+
                     googleProvider.creationStatus = "failed";
                     googleProvider.lastError = message;
 
@@ -2294,6 +3193,7 @@ router.post("/", async (req: Request, res: Response) => {
                     providerStatusCode,
                     providerErrorDetails,
                     uploadedImageAssets: uploadedGoogleDisplayAssets,
+                    uploadedPmaxAssets: uploadedGooglePmaxAssets,
                 };
             }
         }
@@ -3880,8 +4780,6 @@ router.post(
 router.get("/", async (req: Request, res: Response) => {
     try {
         const { userId } = getAuth(req);
-        console.log("userId, ", userId);
-
 
         if (!userId) {
             return res.status(401).json({
@@ -3920,35 +4818,6 @@ router.get("/", async (req: Request, res: Response) => {
             ownerUserId: userId,
         }).lean() as any;
 
-        // console.log("CampaignModel diagnostic:", {
-        //     authenticatedUserId: userId,
-        //     collection: CampaignModel.collection.name,
-        //     totalDocuments,
-        //     schemaPaths: Object.keys(CampaignModel.schema.paths),
-
-        //     sample: sample
-        //         ? {
-        //             documentKeys: Object.keys(sample),
-
-        //             ownership: {
-        //                 userId: sample.userId ?? null,
-        //                 clerkUserId: sample.clerkUserId ?? null,
-        //                 createdBy: sample.createdBy ?? null,
-        //                 ownerId: sample.ownerId ?? null,
-        //             },
-
-        //             providerKeys: Object.keys(sample.providers ?? {}),
-
-        //             googleAds: sample.providers?.googleAds
-        //                 ? {
-        //                     keys: Object.keys(sample.providers.googleAds),
-        //                     accountId: sample.providers.googleAds.accountId ?? null,
-        //                     campaignId: sample.providers.googleAds.campaignId ?? null,
-        //                 }
-        //                 : null,
-        //         }
-        //         : null,
-        // });
 
         // Fetch both providers independently.
         const [googleResult, metaResult]: any = await Promise.all([
@@ -3969,10 +4838,6 @@ router.get("/", async (req: Request, res: Response) => {
                 ),
             };
         }
-        console.log(
-            "googleResult", googleResult
-        );
-
 
         const providers = {
             googleAds: googleResult,

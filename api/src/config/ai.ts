@@ -14,9 +14,6 @@ async function main() {
     max_tokens: 262144,
     stream: false,
   })
-
-  // console.log(completion.choices[0]?.message);
-
 }
 
 main();

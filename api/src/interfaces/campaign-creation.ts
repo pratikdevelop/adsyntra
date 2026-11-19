@@ -91,6 +91,158 @@ export interface CreateGoogleAdsAssetGroupInput {
 }
 
 
+// ==========================================
+// PERFORMANCE MAX CAMPAIGN FLOW CONTRACTS
+// ==========================================
+
+export type GoogleAdsPerformanceMaxBrandGuidelineFont =
+    | "Open Sans"
+    | "Roboto"
+    | "Montserrat"
+    | "Poppins"
+    | "Lato"
+    | "Oswald"
+    | "Playfair Display"
+    | "Roboto Slab";
+
+/**
+ * Brand assets are uploaded to the selected Google Ads customer before the
+ * PMax campaign mutation. Depending on brandGuidelinesEnabled, the service
+ * links these resources to CampaignAsset or AssetGroupAsset resources.
+ */
+export interface GoogleAdsPerformanceMaxBrandingInput {
+    businessName: string;
+    logoAssetResourceNames: string[];
+    landscapeLogoAssetResourceNames?: string[];
+    mainColor?: string;
+    accentColor?: string;
+    predefinedFontFamily?: GoogleAdsPerformanceMaxBrandGuidelineFont;
+}
+
+export interface GoogleAdsPerformanceMaxAssetAutomationInput {
+    /** Controls FINAL_URL_EXPANSION_TEXT_ASSET_AUTOMATION. */
+    finalUrlExpansionEnabled?: boolean;
+    /** Controls TEXT_ASSET_AUTOMATION. Must remain enabled when URL expansion is enabled. */
+    textAssetCustomizationEnabled?: boolean;
+    generateEnhancedYoutubeVideos?: boolean;
+    generateImageEnhancement?: boolean;
+    /** Automated video crawl requires approved sources and an explicit rights confirmation. */
+    automatedVideoCrawlEnabled?: boolean;
+    automatedVideoCrawlSources?: Array<{
+        url: string;
+        sourcePlatform: "LANDING_PAGE" | "SOCIAL" | "YOUTUBE";
+    }>;
+    automatedVideoCrawlRightsConfirmed?: boolean;
+}
+
+export interface GoogleAdsPerformanceMaxAudienceSignalInput {
+    /** Must belong to the selected Google Ads customer. */
+    audienceResourceName: string;
+}
+
+export interface GoogleAdsPerformanceMaxAssetGroupInput {
+    name: string;
+    finalUrls: string[];
+    headlines: string[];
+    longHeadlines: string[];
+    descriptions: string[];
+    /**
+     * Already-uploaded Google Ads media assets for this group. Business name
+     * and logos are supplied through `branding` and linked at the correct
+     * resource level according to the campaign's brand-guideline mode.
+     */
+    mediaAssets: PerformanceMaxAssetInput[];
+    /** Optional explicit CallToActionAsset. Omit to let Google choose automatically. */
+    callToAction?:
+        | "APPLY_NOW"
+        | "BOOK_NOW"
+        | "CONTACT_US"
+        | "DOWNLOAD"
+        | "GET_QUOTE"
+        | "LEARN_MORE"
+        | "SHOP_NOW"
+        | "SIGN_UP"
+        | "SUBSCRIBE";
+    audienceSignals?: GoogleAdsPerformanceMaxAudienceSignalInput[];
+    searchThemes?: string[];
+}
+
+export interface CreateGoogleAdsPerformanceMaxCampaignFlowInput {
+    budget: {
+        name: string;
+        amount: number;
+        /** DAILY uses amountMicros; CUSTOM_PERIOD uses totalAmountMicros. */
+        period?: "DAILY" | "CUSTOM_PERIOD";
+    };
+
+    campaign: {
+        name: string;
+        biddingStrategy: "MAXIMIZE_CONVERSIONS" | "MAXIMIZE_CONVERSION_VALUE";
+        biddingOptions?: BiddingOptions;
+        /** Calendar date in YYYY-MM-DD format (customer account timezone). */
+        startDate?: string;
+        /** Calendar date in YYYY-MM-DD format (customer account timezone). */
+        endDate?: string;
+        containsEuPoliticalAdvertising?: string;
+        /** Defaults to true for new standard PMax campaigns. */
+        brandGuidelinesEnabled?: boolean;
+        branding: GoogleAdsPerformanceMaxBrandingInput;
+        assetAutomation?: GoogleAdsPerformanceMaxAssetAutomationInput;
+    };
+
+    assetGroups: GoogleAdsPerformanceMaxAssetGroupInput[];
+    locations?: GoogleAdsLocationTargetInput[];
+    languages?: Array<{
+        languageConstantResourceName: string;
+    }>;
+    negativeKeywords?: GoogleAdsKeywordInput[];
+    /** Negative WEBPAGE criteria used to exclude exact URLs or URL substrings. */
+    urlExclusions?: Array<{
+        value: string;
+        matchType: "EXACT" | "CONTAINS";
+    }>;
+
+    validateOnly?: boolean;
+    confirm?: boolean;
+}
+
+export interface GoogleAdsPerformanceMaxAssetGroupCreatedResource {
+    name: string;
+    assetGroup: string;
+    assetGroupAssets: string[];
+    assetGroupSignals: string[];
+}
+
+export interface GoogleAdsPerformanceMaxCampaignCreatedResources {
+    budget: string;
+    campaign: string;
+    /** Text and CTA Asset resources created inline with this campaign. */
+    assets: string[];
+    campaignAssets: string[];
+    assetGroups: GoogleAdsPerformanceMaxAssetGroupCreatedResource[];
+    locationCriteria: string[];
+    languageCriteria: string[];
+    negativeKeywords: string[];
+    urlExclusions: string[];
+}
+
+export interface GoogleAdsPerformanceMaxCampaignFlowResult {
+    validateOnly: boolean;
+    operationCount: number;
+    validationWarnings: string[];
+    temporaryResourceNames: {
+        budget: string;
+        campaign: string;
+        assetGroups: string[];
+    };
+    createdResources: GoogleAdsPerformanceMaxCampaignCreatedResources | null;
+    /** Primary response containing the budget/campaign/campaign-asset mutation. */
+    googleResponse: GoogleAdsBulkMutateResponse;
+    /** Additional responses for asset groups, signals and campaign criteria. */
+    relatedGoogleResponses: GoogleAdsBulkMutateResponse[];
+}
+
+
 
 export interface GoogleAdsKeywordInput {
     text: string;
@@ -257,7 +409,9 @@ export interface CreateGoogleAdsDisplayCampaignFlowInput {
         name: string;
         biddingStrategy: string;
         biddingOptions?: BiddingOptions;
+        /** Calendar date in YYYY-MM-DD format (customer account timezone). */
         startDate?: string;
+        /** Calendar date in YYYY-MM-DD format (customer account timezone). */
         endDate?: string;
         containsEuPoliticalAdvertising?: string;
     };

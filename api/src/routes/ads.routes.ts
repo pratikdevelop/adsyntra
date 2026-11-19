@@ -10,6 +10,8 @@ import { getMetaAdsCreationContext } from "../metaadsAPI/services/campaign-creat
 import {
     listGoogleAds,
     listGoogleAdsAdGroups,
+    listGoogleAdsAssetGroups,
+    listGoogleAdsAssetGroupAssets,
     type ListGoogleAdsInput,
 } from "../googleadsAPI/services/ads.js";
 import {
@@ -116,6 +118,7 @@ async function getSelectedAccount(userId: string, provider: "googleAds" | "metaA
         userId,
         provider,
         isSelected: true,
+        status: "active",
     })
         .select("externalAccountId")
         .lean()
@@ -127,6 +130,21 @@ async function getSelectedAccount(userId: string, provider: "googleAds" | "metaA
 
     return account;
 }
+
+
+function sameSelectedAccount(
+    provider: "googleAds" | "metaAds",
+    requested: string,
+    selected: string,
+): boolean {
+    if (provider === "googleAds") {
+        const normalize = (value: string) => value.replace(/^customers\//, "").replace(/-/g, "");
+        return normalize(requested) === normalize(selected);
+    }
+    const normalize = (value: string) => value.replace(/^act_/, "");
+    return normalize(requested) === normalize(selected);
+}
+
 
 
 /* -------------------------------------------------------------------------- */
@@ -147,6 +165,58 @@ router.get("/google/campaigns/:campaignId/ad-groups", async (req: Request, res: 
             queryString(req, "pageToken"),
         );
         return res.status(200).json({ success: true, ...result });
+    } catch (error) {
+        return sendError(res, error);
+    }
+});
+
+
+/* -------------------------------------------------------------------------- */
+/* Campaign hierarchy: Google Ads Performance Max asset groups                */
+/* GET /google/campaigns/:campaignId/asset-groups?pageToken=...                */
+/* -------------------------------------------------------------------------- */
+
+router.get("/google/campaigns/:campaignId/asset-groups", async (req: Request, res: Response) => {
+    try {
+        const userId = requireAuthenticatedUser(req, res);
+        if (!userId) return;
+        const account = await getSelectedAccount(userId, "googleAds");
+        const campaignId = String(req.params.campaignId ?? "").trim();
+        const result = await listGoogleAdsAssetGroups(
+            userId,
+            account.externalAccountId,
+            campaignId,
+            queryString(req, "pageToken"),
+        );
+        return res.status(200).json({ success: true, ...result, count: result.assetGroups.length });
+    } catch (error) {
+        return sendError(res, error);
+    }
+});
+
+/* -------------------------------------------------------------------------- */
+/* Campaign hierarchy: assets linked to a Performance Max asset group         */
+/* GET /google/asset-groups/:assetGroupId/assets?campaignId=...                */
+/* -------------------------------------------------------------------------- */
+
+router.get("/google/asset-groups/:assetGroupId/assets", async (req: Request, res: Response) => {
+    try {
+        const userId = requireAuthenticatedUser(req, res);
+        if (!userId) return;
+        const account = await getSelectedAccount(userId, "googleAds");
+        const campaignId = queryString(req, "campaignId");
+        if (!campaignId) {
+            throw new RouteError("campaignId is required when loading Performance Max asset-group assets.");
+        }
+        const assetGroupId = String(req.params.assetGroupId ?? "").trim();
+        const result = await listGoogleAdsAssetGroupAssets(
+            userId,
+            account.externalAccountId,
+            campaignId,
+            assetGroupId,
+            queryString(req, "pageToken"),
+        );
+        return res.status(200).json({ success: true, ...result, count: result.assets.length });
     } catch (error) {
         return sendError(res, error);
     }
@@ -239,6 +309,7 @@ router.get("/google/ads", async (req: Request, res: Response) => {
         return res.status(200).json({
             success: true,
             provider: "googleAds",
+            accountId: account.externalAccountId,
             ...result,
             count: result.ads.length,
         });

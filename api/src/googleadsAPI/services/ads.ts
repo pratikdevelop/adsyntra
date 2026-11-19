@@ -186,6 +186,64 @@ export interface ListGoogleAdsAdGroupsResult {
     nextPageToken: string | null;
 }
 
+
+export interface GoogleAdsAssetGroupRecord {
+    id: string;
+    resourceName: string | null;
+    name: string | null;
+    status: string | null;
+    primaryStatus: string | null;
+    primaryStatusReasons: string[];
+    adStrength: string | null;
+    finalUrls: string[];
+    path1: string | null;
+    path2: string | null;
+    campaignId: string;
+    campaignName: string | null;
+}
+
+export interface ListGoogleAdsAssetGroupsResult {
+    provider: "googleAds";
+    accountId: string;
+    campaignId: string;
+    assetGroups: GoogleAdsAssetGroupRecord[];
+    nextPageToken: string | null;
+}
+
+export interface GoogleAdsAssetGroupAssetRecord {
+    id: string | null;
+    resourceName: string | null;
+    assetGroupId: string;
+    campaignId: string;
+    fieldType: string | null;
+    status: string | null;
+    primaryStatus: string | null;
+    primaryStatusReasons: string[];
+    source: string | null;
+    name: string | null;
+    type: string | null;
+    mediaUrl: string | null;
+    thumbnailUrl: string | null;
+    videoId: string | null;
+    videoTitle: string | null;
+    textContent: string | null;
+    callToAction: string | null;
+    mimeType: string | null;
+    width: number | null;
+    height: number | null;
+    finalUrls: string[];
+    details: Record<string, unknown>;
+}
+
+export interface ListGoogleAdsAssetGroupAssetsResult {
+    provider: "googleAds";
+    accountId: string;
+    campaignId: string;
+    assetGroupId: string;
+    assets: GoogleAdsAssetGroupAssetRecord[];
+    nextPageToken: string | null;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Google Ads response types                                                  */
 /* -------------------------------------------------------------------------- */
@@ -1325,6 +1383,205 @@ export async function listGoogleAdsAdGroups(
         accountId: context.customerId,
         campaignId: normalizedCampaignId,
         adGroups,
+        nextPageToken: page.nextPageToken ?? null,
+    };
+}
+
+/**
+ * Lists Performance Max asset groups for one campaign. Asset groups are a
+ * different resource hierarchy from standard ad groups, so this query is
+ * intentionally built from `asset_group` and does not apply a date filter.
+ */
+export async function listGoogleAdsAssetGroups(
+    userId: string,
+    accountId: string,
+    campaignId: string,
+    pageToken?: string,
+): Promise<ListGoogleAdsAssetGroupsResult> {
+    if (!userId?.trim()) {
+        throw new GoogleAdsAdServiceError("Authenticated user ID is required.", 401);
+    }
+    if (!accountId?.trim()) {
+        throw new GoogleAdsAdServiceError("Google Ads customer ID is required.", 400);
+    }
+
+    const normalizedCampaignId = validateNumericId(campaignId, "campaignId");
+    if (!normalizedCampaignId) {
+        throw new GoogleAdsAdServiceError("A valid numeric campaignId is required.", 400);
+    }
+    if (pageToken && pageToken.length > 10000) {
+        throw new GoogleAdsAdServiceError("Google Ads page token is invalid or too long.", 400);
+    }
+
+    const context = await getGoogleAdsCreationContext(userId, accountId);
+    const query = [
+        "SELECT campaign.id, campaign.name,",
+        "asset_group.id, asset_group.resource_name, asset_group.name,",
+        "asset_group.status, asset_group.primary_status,",
+        "asset_group.primary_status_reasons, asset_group.ad_strength,",
+        "asset_group.final_urls, asset_group.path1, asset_group.path2",
+        "FROM asset_group",
+        `WHERE campaign.id = ${normalizedCampaignId}`,
+        "AND asset_group.status != 'REMOVED'",
+        "ORDER BY asset_group.name",
+    ].join(" ");
+
+    const page = await searchGoogleAds<{
+        results?: Array<{ campaign?: UnknownRecord; assetGroup?: UnknownRecord }>;
+        nextPageToken?: string;
+    }>(context, query, pageToken);
+
+    const assetGroups = (page.results ?? []).flatMap((row) => {
+        const group = asRecord(row.assetGroup);
+        const campaign = asRecord(row.campaign);
+        const id = normalizeString(group.id);
+        if (!id) return [];
+
+        return [{
+            id,
+            resourceName: normalizeString(group.resourceName),
+            name: normalizeString(group.name),
+            status: normalizeString(group.status),
+            primaryStatus: normalizeString(group.primaryStatus),
+            primaryStatusReasons: Array.isArray(group.primaryStatusReasons)
+                ? uniqueStrings(group.primaryStatusReasons.map((value) => normalizeString(value)))
+                : [],
+            adStrength: normalizeString(group.adStrength),
+            finalUrls: Array.isArray(group.finalUrls)
+                ? uniqueStrings(group.finalUrls.map((value) => normalizeString(value)))
+                : [],
+            path1: normalizeString(group.path1),
+            path2: normalizeString(group.path2),
+            campaignId: normalizeString(campaign.id) ?? normalizedCampaignId,
+            campaignName: normalizeString(campaign.name),
+        }];
+    });
+
+    return {
+        provider: "googleAds",
+        accountId: context.customerId,
+        campaignId: normalizedCampaignId,
+        assetGroups,
+        nextPageToken: page.nextPageToken ?? null,
+    };
+}
+
+/**
+ * Lists the assets linked to one Performance Max asset group. Both campaign
+ * and asset-group IDs are validated and included in the GAQL filter so a
+ * caller cannot use an asset-group ID from another campaign in this view.
+ */
+export async function listGoogleAdsAssetGroupAssets(
+    userId: string,
+    accountId: string,
+    campaignId: string,
+    assetGroupId: string,
+    pageToken?: string,
+): Promise<ListGoogleAdsAssetGroupAssetsResult> {
+    if (!userId?.trim()) {
+        throw new GoogleAdsAdServiceError("Authenticated user ID is required.", 401);
+    }
+    if (!accountId?.trim()) {
+        throw new GoogleAdsAdServiceError("Google Ads customer ID is required.", 400);
+    }
+
+    const normalizedCampaignId = validateNumericId(campaignId, "campaignId");
+    const normalizedAssetGroupId = validateNumericId(assetGroupId, "assetGroupId");
+    if (!normalizedCampaignId || !normalizedAssetGroupId) {
+        throw new GoogleAdsAdServiceError("Valid numeric campaignId and assetGroupId are required.", 400);
+    }
+    if (pageToken && pageToken.length > 10000) {
+        throw new GoogleAdsAdServiceError("Google Ads page token is invalid or too long.", 400);
+    }
+
+    const context = await getGoogleAdsCreationContext(userId, accountId);
+    const query = [
+        "SELECT campaign.id, asset_group.id,",
+        "asset_group_asset.resource_name, asset_group_asset.field_type,",
+        "asset_group_asset.status, asset_group_asset.primary_status,",
+        "asset_group_asset.primary_status_reasons, asset_group_asset.source,",
+        "asset.id, asset.resource_name, asset.name, asset.type, asset.final_urls,",
+        "asset.image_asset.mime_type, asset.image_asset.full_size.url,",
+        "asset.image_asset.full_size.width_pixels, asset.image_asset.full_size.height_pixels,",
+        "asset.youtube_video_asset.youtube_video_id,",
+        "asset.youtube_video_asset.youtube_video_title,",
+        "asset.text_asset.text, asset.call_to_action_asset.call_to_action",
+        "FROM asset_group_asset",
+        `WHERE campaign.id = ${normalizedCampaignId}`,
+        `AND asset_group.id = ${normalizedAssetGroupId}`,
+        "AND asset_group_asset.status != 'REMOVED'",
+        "ORDER BY asset_group_asset.field_type, asset.id",
+    ].join(" ");
+
+    const page = await searchGoogleAds<{
+        results?: Array<{
+            campaign?: UnknownRecord;
+            assetGroup?: UnknownRecord;
+            assetGroupAsset?: UnknownRecord;
+            asset?: UnknownRecord;
+        }>;
+        nextPageToken?: string;
+    }>(context, query, pageToken);
+
+    const assets = (page.results ?? []).flatMap((row) => {
+        const link = asRecord(row.assetGroupAsset);
+        const asset = asRecord(row.asset);
+        const image = getRecord(asset, "imageAsset");
+        const imageFullSize = getRecord(image, "fullSize");
+        const youtube = getRecord(asset, "youtubeVideoAsset");
+        const textAsset = getRecord(asset, "textAsset");
+        const ctaAsset = getRecord(asset, "callToActionAsset");
+        const assetGroup = asRecord(row.assetGroup);
+        const campaign = asRecord(row.campaign);
+        const id = normalizeString(asset.id);
+        const resourceName = normalizeString(link.resourceName);
+        const mediaUrlCandidate = normalizeString(imageFullSize.url);
+        const mediaUrl = mediaUrlCandidate && /^https?:\/\//i.test(mediaUrlCandidate)
+            ? mediaUrlCandidate
+            : null;
+        const assetType = normalizeString(asset.type);
+        const finalUrls = Array.isArray(asset.finalUrls)
+            ? uniqueStrings(asset.finalUrls.map((value) => normalizeString(value)))
+            : [];
+
+        // A linked asset row without an asset record is not useful to the UI;
+        // skip it rather than displaying a misleading placeholder.
+        if (!id && !resourceName) return [];
+
+        return [{
+            id,
+            resourceName,
+            assetGroupId: normalizeString(assetGroup.id) ?? normalizedAssetGroupId,
+            campaignId: normalizeString(campaign.id) ?? normalizedCampaignId,
+            fieldType: normalizeString(link.fieldType),
+            status: normalizeString(link.status),
+            primaryStatus: normalizeString(link.primaryStatus),
+            primaryStatusReasons: Array.isArray(link.primaryStatusReasons)
+                ? uniqueStrings(link.primaryStatusReasons.map((value) => normalizeString(value)))
+                : [],
+            source: normalizeString(link.source),
+            name: normalizeString(asset.name),
+            type: assetType,
+            mediaUrl,
+            thumbnailUrl: mediaUrl,
+            videoId: normalizeString(youtube.youtubeVideoId),
+            videoTitle: normalizeString(youtube.youtubeVideoTitle),
+            textContent: normalizeString(textAsset.text),
+            callToAction: normalizeString(ctaAsset.callToAction),
+            mimeType: normalizeString(image.mimeType),
+            width: imageFullSize.widthPixels == null ? null : normalizeNumber(imageFullSize.widthPixels),
+            height: imageFullSize.heightPixels == null ? null : normalizeNumber(imageFullSize.heightPixels),
+            finalUrls,
+            details: asset,
+        }];
+    });
+
+    return {
+        provider: "googleAds",
+        accountId: context.customerId,
+        campaignId: normalizedCampaignId,
+        assetGroupId: normalizedAssetGroupId,
+        assets,
         nextPageToken: page.nextPageToken ?? null,
     };
 }

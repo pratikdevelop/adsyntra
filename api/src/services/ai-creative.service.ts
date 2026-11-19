@@ -93,6 +93,9 @@ function isAllowedValue<T extends readonly string[]>(
 /* Backend campaign asset-generation allowlist                               */
 /* -------------------------------------------------------------------------- */
 
+type BackendCreativeGenerationMode =
+    | "TEXT_ONLY"
+    | "CAMPAIGN_ASSET_PACK";
 interface BackendAssetRequirement {
     role: CreativeAssetRole;
     allowedAspectRatios: readonly CreativeAspectRatio[];
@@ -105,6 +108,8 @@ interface BackendCampaignCapability {
     campaignType: string;
     adFormat: string;
     requirements: Record<string, BackendAssetRequirement>;
+    generationMode: BackendCreativeGenerationMode;
+
 }
 
 /**
@@ -117,6 +122,8 @@ const BACKEND_CAMPAIGN_CREATIVE_CAPABILITIES: Record<
 > = {
     "google-search-responsive-search": {
         platform: "googleAds",
+        generationMode: "TEXT_ONLY",
+
         campaignType: "SEARCH",
         adFormat: "RESPONSIVE_SEARCH",
         requirements: {},
@@ -126,6 +133,7 @@ const BACKEND_CAMPAIGN_CREATIVE_CAPABILITIES: Record<
         platform: "googleAds",
         campaignType: "DISPLAY",
         adFormat: "RESPONSIVE_DISPLAY",
+        generationMode: "CAMPAIGN_ASSET_PACK",
         requirements: {
             "google-display-landscape-images": {
                 role: "LANDSCAPE_IMAGE",
@@ -145,6 +153,7 @@ const BACKEND_CAMPAIGN_CREATIVE_CAPABILITIES: Record<
     "google-performance-max-asset-group": {
         platform: "googleAds",
         campaignType: "PERFORMANCE_MAX",
+        generationMode: "CAMPAIGN_ASSET_PACK",
         adFormat: "ASSET_GROUP",
         requirements: {
             "google-pmax-landscape-images": {
@@ -172,6 +181,7 @@ const BACKEND_CAMPAIGN_CREATIVE_CAPABILITIES: Record<
         platform: "googleAds",
         campaignType: "DEMAND_GEN",
         adFormat: "SINGLE_IMAGE",
+        generationMode: "CAMPAIGN_ASSET_PACK",
         requirements: {
             "google-demand-gen-landscape-images": {
                 role: "LANDSCAPE_IMAGE",
@@ -198,6 +208,7 @@ const BACKEND_CAMPAIGN_CREATIVE_CAPABILITIES: Record<
         platform: "googleAds",
         campaignType: "DEMAND_GEN",
         adFormat: "CAROUSEL",
+        generationMode: "CAMPAIGN_ASSET_PACK",
         requirements: {
             "google-demand-gen-carousel-card-images": {
                 role: "CAROUSEL_CARD_IMAGE",
@@ -212,6 +223,7 @@ const BACKEND_CAMPAIGN_CREATIVE_CAPABILITIES: Record<
         platform: "metaAds",
         campaignType: "OBJECTIVE_BASED",
         adFormat: "SINGLE_IMAGE",
+        generationMode: "CAMPAIGN_ASSET_PACK",
         requirements: {
             "meta-single-primary-image": {
                 role: "PRIMARY_IMAGE",
@@ -226,6 +238,7 @@ const BACKEND_CAMPAIGN_CREATIVE_CAPABILITIES: Record<
         platform: "metaAds",
         campaignType: "OBJECTIVE_BASED",
         adFormat: "CAROUSEL",
+        generationMode: "CAMPAIGN_ASSET_PACK",
         requirements: {
             "meta-carousel-card-images": {
                 role: "CAROUSEL_CARD_IMAGE",
@@ -466,13 +479,23 @@ function validateCampaignAssetRequests(
      * Once a target requests images, all mandatory image groups for that
      * target must be included. Optional groups, such as PMax portrait images,
      * can be omitted.
+     * Campaign-aware image packs must explicitly request every mandatory
+     * image group. TEXT_ONLY targets, such as Search RSA, do not generate
+     * generic images just because their requirement list is empty.
+     * A caller can still request copy-only output for a media capability by
+     * setting textOnly: true.
      */
-    if (assetRequests.length > 0) {
+    if (!body.textOnly) {
         for (const target of creativeTargets) {
-            const capability =
+            const capability: any =
                 BACKEND_CAMPAIGN_CREATIVE_CAPABILITIES[
                 target.capabilityId
                 ];
+
+          if (capability.generationMode === "TEXT_ONLY") {
+              continue;
+          }
+ 
 
             for (const [requirementId, requirement] of Object.entries(
                 capability.requirements,
@@ -1752,7 +1775,8 @@ export async function generateCreativeVariations(
     const generateVariationMedia =
         !textOnly &&
         creativeKind === "IMAGE" &&
-        assetRequests.length === 0;
+        assetRequests.length === 0 &&
+        creativeTargets.length === 0;
 
     const generationId = makeGenerationId();
 
@@ -1801,7 +1825,6 @@ export async function generateCreativeVariations(
                 `[${generationId}] Variation ${index + 1} started.`,
             );
 
-            // Step 1: Generate structured copy.
             // Step 1: Generate structured copy.
             if (!apiKey) {
                 throw new Error(

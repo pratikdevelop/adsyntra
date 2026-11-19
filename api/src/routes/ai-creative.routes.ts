@@ -355,53 +355,6 @@ router.post(
                 );
             }
 
-            /* ---------------------------------------------------------------- */
-            /* 5. Build response message                                        */
-            /* ---------------------------------------------------------------- */
-            /*
-            let message: string;
-
-            if (result.partialSuccess) {
-                message =
-                    `${result.generatedCount} of ${result.requestedCount} ` +
-                    "creative variations generated successfully. " +
-                    `${result.failedCount} variation(s) failed.`;
-            } else {
-                message =
-                    `Successfully generated ${result.generatedCount} ` +
-                    "creative variation(s).";
-            }
-
-            if (result.requestedAssetCount > 0) {
-                if (result.failedAssetCount === 0) {
-                    message +=
-                        ` Generated all ${result.generatedAssetCount} requested ` +
-                        "campaign asset(s).";
-                } else {
-                    message +=
-                        ` Generated ${result.generatedAssetCount} of ` +
-                        `${result.requestedAssetCount} requested campaign asset(s). ` +
-                        `${result.failedAssetCount} asset(s) failed.`;
-                }
-            }
-            const containsPlaceholder = result.variations.some(
-                (variation) => variation.media?.isPlaceholder === true,
-            );
-
-            if (containsPlaceholder) {
-                message +=
-                    " Development placeholder media is included. " +
-                    "Replace it with generated media before saving or publishing.";
-            }
-
-            const containsTextOnlyVariation = result.variations.some(
-                (variation) => !variation.media && !variation.url,
-            );
-
-            if (containsTextOnlyVariation) {
-                message +=
-                    " Some variations contain advertising copy only, without image media.";
-            }*/
 
             /* -------------------------------------------------------------------------- */
             /* 5. Build response message                                                  */

@@ -20,15 +20,17 @@ export type DemandGenAdField =
 // ==========================================
 
 export type PerformanceMaxAssetFieldType =
-    | "HEADLINE"
-    | "LONG_HEADLINE"
-    | "DESCRIPTION"
-    | "MARKETING_IMAGE"
-    | "SQUARE_MARKETING_IMAGE"
-    | "BUSINESS_NAME"
-    | "LOGO"
-    | "YOUTUBE_VIDEO";
-
+  | "HEADLINE"
+  | "LONG_HEADLINE"
+  | "DESCRIPTION"
+  | "MARKETING_IMAGE"
+  | "SQUARE_MARKETING_IMAGE"
+  | "PORTRAIT_MARKETING_IMAGE"
+  | "BUSINESS_NAME"
+  | "LOGO"
+  | "LANDSCAPE_LOGO"
+  | "YOUTUBE_VIDEO"
+  | "CALL_TO_ACTION_SELECTION";
 // ==========================================
 // GOOGLE ADS KEYWORD CONFIGURATION
 // ==========================================

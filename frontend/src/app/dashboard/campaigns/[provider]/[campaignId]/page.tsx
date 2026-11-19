@@ -46,29 +46,21 @@ import {
   Typography,
 } from "@mui/material";
 import { getCampaigns } from "@/lib/campaign-api";
+import {
+  CampaignRecord,
+  CampaignApiResponse,
+  CreativeMediaItem,
+  CreativeVideoItem,
+  CreativeAssetItem,
+  RecordValue,
+  ProviderKey,
+  ChildRecord,
+  Accent,
+  ACCENT_MAP,
+
+} from "@/interfaces/campaign-view.interface";
 
 /* ---------------------------------------------------------------- types */
-type ProviderKey = "googleAds" | "metaAds";
-type RecordValue = Record<string, any>;
-type ChildRecord = RecordValue;
-
-interface CampaignRecord extends RecordValue {
-  id: string;
-  provider: ProviderKey;
-  name: string;
-  accountId: string | null;
-  status: string | null;
-  effectiveStatus: string | null;
-  objective: string | null;
-  source: RecordValue;
-}
-
-interface CampaignApiResponse {
-  success?: boolean;
-  message?: string;
-  campaigns?: RecordValue[];
-  providers?: Partial<Record<ProviderKey, RecordValue>>;
-}
 
 /* --------------------------------------------------------------- helpers */
 function asRecord(value: unknown): RecordValue {
@@ -214,38 +206,6 @@ function getSpend(campaign: CampaignRecord): number | null {
   if (spend !== null) return spend;
   const micros = numberValue(metrics.costMicros ?? metrics.cost_micros);
   return micros === null ? null : micros / 1_000_000;
-}
-
-/* ------------------------------- creative extraction (unchanged) --------- */
-interface CreativeMediaItem {
-  url: string;
-  label: string;
-  sourcePath: string;
-  width?: number | null;
-  height?: number | null;
-  mimeType?: string | null;
-}
-interface CreativeVideoItem {
-  videoId: string;
-  title: string;
-  thumbnailUrl: string | null;
-  sourcePath: string;
-  embedUrl: string | null;
-}
-interface CreativeAssetItem {
-  id: string;
-  type: string;
-  name: string | null;
-  text: string | null;
-  url: string | null;
-  videoId: string | null;
-  width?: number | null;
-  height?: number | null;
-  thumbnailUrl?: string | null;
-  mimeType?: string | null;
-  resolutionError?: string | null;
-  sourcePath: string;
-  details: RecordValue;
 }
 
 function textValues(value: unknown): string[] {
@@ -596,17 +556,6 @@ function CopyField({ label, value }: { label: string; value: string }) {
   );
 }
 
-type Accent = "blue" | "emerald" | "amber" | "violet" | "rose" | "cyan" | "slate";
-
-const ACCENT_MAP: Record<Accent, { bg: string; fg: string }> = {
-  blue: { bg: "rgba(59,130,246,0.10)", fg: "#2563eb" },
-  emerald: { bg: "rgba(16,185,129,0.10)", fg: "#059669" },
-  amber: { bg: "rgba(245,158,11,0.12)", fg: "#d97706" },
-  violet: { bg: "rgba(139,92,246,0.10)", fg: "#7c3aed" },
-  rose: { bg: "rgba(244,63,94,0.10)", fg: "#e11d48" },
-  cyan: { bg: "rgba(6,182,212,0.10)", fg: "#0891b2" },
-  slate: { bg: "rgba(100,116,139,0.10)", fg: "#475569" },
-};
 
 function MetricCard({
   label,
@@ -763,6 +712,154 @@ function CampaignSkeleton() {
   );
 }
 
+function PerformanceMaxAssetGroupAccordion({
+  group,
+  expanded,
+  assets,
+  loading,
+  loaded,
+  error,
+  nextPageToken,
+  onExpand,
+  onRetry,
+  onLoadMore,
+}: {
+  group: ChildRecord;
+  expanded: boolean;
+  assets: ChildRecord[];
+  loading: boolean;
+  loaded: boolean;
+  error: string | null;
+  nextPageToken: string | null;
+  onExpand: (expanded: boolean) => void;
+  onRetry: () => void;
+  onLoadMore: () => void;
+}) {
+  const groupId = stringValue(group.id, group.resourceName) ?? "—";
+  const groupName = stringValue(group.name) ?? `Asset group ${groupId}`;
+  const status = stringValue(group.status, group.primaryStatus) ?? "Unknown";
+  const adStrength = stringValue(group.adStrength, group.ad_strength);
+  const finalUrls = Array.isArray(group.finalUrls) ? group.finalUrls : [];
+
+  return (
+    <Accordion
+      expanded={expanded}
+      onChange={(_event, isExpanded) => onExpand(isExpanded)}
+      disableGutters
+      elevation={0}
+      sx={{
+        border: 1,
+        borderColor: "divider",
+        borderRadius: "14px !important",
+        overflow: "hidden",
+        "&:before": { display: "none" },
+        "&:hover": { borderColor: "primary.main" },
+      }}
+    >
+      <AccordionSummary expandIcon={<ExpandMoreRoundedIcon />} sx={{ px: { xs: 1.5, md: 2 }, py: 1 }}>
+        <Box sx={{ minWidth: 0, width: "100%", pr: 1 }}>
+          <Stack direction={{ xs: "column", sm: "row" }} alignItems={{ xs: "flex-start", sm: "center" }} spacing={1} flexWrap="wrap" useFlexGap>
+            <Typography fontWeight={750} sx={{ overflowWrap: "anywhere" }}>{groupName}</Typography>
+            <Chip size="small" label={status.replace(/_/g, " ")} color={statusColor(status)} />
+            <Chip size="small" label="Asset group" variant="outlined" />
+            {adStrength && <Chip size="small" label={`Ad strength: ${adStrength.replace(/_/g, " ")}`} color={adStrength === "EXCELLENT" || adStrength === "GOOD" ? "success" : "default"} variant="outlined" />}
+          </Stack>
+          <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.6 }}>
+            ID: {groupId}{finalUrls.length ? ` · ${finalUrls.length} final URL${finalUrls.length === 1 ? "" : "s"}` : ""}
+          </Typography>
+        </Box>
+      </AccordionSummary>
+      <AccordionDetails sx={{ pt: 0, px: { xs: 1.5, md: 2 } }}>
+        <Divider sx={{ mb: 2 }} />
+        <Box className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4" sx={{ mb: 2 }}>
+          <DetailField label="Asset group ID" value={groupId} />
+          <DetailField label="Status" value={status} />
+          <DetailField label="Serving status" value={group.primaryStatus} />
+          <DetailField label="Ad strength" value={adStrength} />
+          <DetailField label="Display path" value={[group.path1, group.path2].filter(Boolean).join(" / ") || null} />
+        </Box>
+        {Array.isArray(group.primaryStatusReasons) && group.primaryStatusReasons.length > 0 && (
+          <Alert severity="warning" variant="outlined" sx={{ mb: 2, borderRadius: 2 }}>
+            Serving diagnostics: {group.primaryStatusReasons.map((reason) => String(reason).replace(/_/g, " ")).join(", ")}
+          </Alert>
+        )}
+        {finalUrls.length > 0 && (
+          <Box sx={{ mb: 2 }}>
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>Final URLs</Typography>
+            <Stack spacing={0.5}>
+              {finalUrls.map((url, index) => (
+                <Typography key={`${String(url)}-${index}`} variant="body2" sx={{ overflowWrap: "anywhere" }}>
+                  {String(url)}
+                </Typography>
+              ))}
+            </Stack>
+          </Box>
+        )}
+        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
+          <Typography variant="subtitle2" fontWeight={750}>Linked assets</Typography>
+          <Chip size="small" label={loaded ? `${assets.length} loaded` : "Not loaded"} variant="outlined" />
+          {loading && <CircularProgress size={16} />}
+        </Stack>
+        {error && (
+          <Alert severity="error" sx={{ mb: 1.5, borderRadius: 2 }} action={<Button color="inherit" size="small" onClick={onRetry}>Retry</Button>}>
+            {error}
+          </Alert>
+        )}
+        {loaded && assets.length === 0 && !error && (
+          <EmptyState
+            title="No linked assets returned"
+            description="Google did not return custom assets linked to this asset group. Some Merchant Center or automatically created assets may be managed outside this link list."
+          />
+        )}
+        <Stack spacing={1.25}>
+          {assets.map((asset, index) => {
+            const assetId = stringValue(asset.id, asset.resourceName) ?? `asset-${index}`;
+            const fieldType = stringValue(asset.fieldType, asset.field_type) ?? "ASSET";
+            const assetType = stringValue(asset.type) ?? "UNKNOWN";
+            const assetStatus = stringValue(asset.primaryStatus, asset.status) ?? "Unknown";
+            const mediaUrl = stringValue(asset.mediaUrl, asset.thumbnailUrl);
+            const videoId = stringValue(asset.videoId);
+            const textContent = stringValue(asset.textContent);
+            const cta = stringValue(asset.callToAction);
+            const finalAssetUrls = Array.isArray(asset.finalUrls) ? asset.finalUrls : [];
+            const youtubeEmbed = videoId && /^[A-Za-z0-9_-]{11}$/.test(videoId)
+              ? `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}`
+              : null;
+
+            return (
+              <Paper key={`${fieldType}:${assetId}`} variant="outlined" sx={{ p: 1.5, borderRadius: 2.5 }}>
+                <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} alignItems={{ xs: "stretch", sm: "flex-start" }}>
+                  {mediaUrl && assetType === "IMAGE" ? (
+                    <Box component="img" src={mediaUrl} alt={stringValue(asset.name) ?? fieldType} sx={{ width: { xs: "100%", sm: 136 }, height: 104, objectFit: "contain", bgcolor: "action.hover", borderRadius: 1.5 }} />
+                  ) : youtubeEmbed ? (
+                    <Box component="iframe" src={youtubeEmbed} title={stringValue(asset.videoTitle, asset.name) ?? "Performance Max video asset"} sx={{ width: { xs: "100%", sm: 180 }, height: 104, border: 0, borderRadius: 1.5, bgcolor: "action.hover" }} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen />
+                  ) : null}
+                  <Box sx={{ minWidth: 0, flex: 1 }}>
+                    <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mb: 0.5 }}>
+                      <Typography variant="body2" fontWeight={750}>{stringValue(asset.name, asset.videoTitle) ?? fieldType.replace(/_/g, " ")}</Typography>
+                      <Chip size="small" label={fieldType.replace(/_/g, " ")} variant="outlined" />
+                      <Chip size="small" label={assetStatus.replace(/_/g, " ")} color={statusColor(assetStatus)} />
+                    </Stack>
+                    {textContent && <Typography variant="body2" sx={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{textContent}</Typography>}
+                    {cta && <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>Call to action: {cta.replace(/_/g, " ")}</Typography>}
+                    {finalAssetUrls.map((url, urlIndex) => <Typography key={`${String(url)}-${urlIndex}`} variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5, overflowWrap: "anywhere" }}>{String(url)}</Typography>)}
+                    <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5, overflowWrap: "anywhere" }}>{assetType}{asset.source ? ` · ${String(asset.source).replace(/_/g, " ")}` : ""} · {assetId}</Typography>
+                  </Box>
+                </Stack>
+              </Paper>
+            );
+          })}
+        </Stack>
+        {nextPageToken && (
+          <Button size="small" onClick={onLoadMore} disabled={loading} sx={{ mt: 1.5, textTransform: "none" }}>
+            {loading ? "Loading…" : "Load more assets"}
+          </Button>
+        )}
+      </AccordionDetails>
+    </Accordion>
+  );
+}
+
 /* ----------------------------------------------------------- main page */
 export default function CampaignDetailPage() {
   const params = useParams<{ provider: string; campaignId: string }>();
@@ -785,6 +882,12 @@ export default function CampaignDetailPage() {
   const [adsLoading, setAdsLoading] = useState<string | null>(null);
   const [adsErrors, setAdsErrors] = useState<Record<string, string>>({});
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+  const [assetsByGroup, setAssetsByGroup] = useState<Record<string, ChildRecord[]>>({});
+  const [assetsLoaded, setAssetsLoaded] = useState<Record<string, boolean>>({});
+  const [assetsNext, setAssetsNext] = useState<Record<string, string | null>>({});
+  const [assetsLoading, setAssetsLoading] = useState<string | null>(null);
+  const [assetsErrors, setAssetsErrors] = useState<Record<string, string>>({});
+  const isPerformanceMax = String(campaign?.campaignType ?? "").toUpperCase().includes("PERFORMANCE_MAX");
 
   const getToken = useCallback(async () => {
     const response = await axios.get("/api/token");
@@ -831,10 +934,13 @@ export default function CampaignDetailPage() {
       setGroupsError(null);
       try {
         const token = await getToken();
+        const useAssetGroups = provider === "googleAds" && isPerformanceMax;
         const path =
           provider === "metaAds"
             ? `/api/ads/meta/campaigns/${encodeURIComponent(campaignId)}/ad-sets`
-            : `/api/ads/google/campaigns/${encodeURIComponent(campaignId)}/ad-groups`;
+            : useAssetGroups
+              ? `/api/ads/google/campaigns/${encodeURIComponent(campaignId)}/asset-groups`
+              : `/api/ads/google/campaigns/${encodeURIComponent(campaignId)}/ad-groups`;
         const qp: Record<string, string> = {};
         if (pageToken) qp[provider === "metaAds" ? "after" : "pageToken"] = pageToken;
         const response = await axios.get(`${backendUrl}${path}`, {
@@ -843,8 +949,11 @@ export default function CampaignDetailPage() {
         });
         if (!response.data?.success)
           throw new Error(response.data?.message ?? "Unable to load campaign groups.");
-        const rows: ChildRecord[] =
-          provider === "metaAds" ? response.data.adSets ?? [] : response.data.adGroups ?? [];
+        const rows: ChildRecord[] = provider === "metaAds"
+          ? response.data.adSets ?? []
+          : useAssetGroups
+            ? response.data.assetGroups ?? []
+            : response.data.adGroups ?? [];
         setGroups((current) => (pageToken ? [...current, ...rows] : rows));
         setGroupsNext(
           provider === "metaAds"
@@ -857,7 +966,7 @@ export default function CampaignDetailPage() {
         setGroupsLoading(false);
       }
     },
-    [backendUrl, campaignId, getToken, provider]
+    [backendUrl, campaignId, getToken, isPerformanceMax, provider]
   );
 
   const loadAds = useCallback(
@@ -912,18 +1021,65 @@ export default function CampaignDetailPage() {
     [backendUrl, campaignId, getToken, provider]
   );
 
+
+  const loadAssetGroupAssets = useCallback(
+    async (group: ChildRecord, nextCursor?: string) => {
+      if (provider !== "googleAds" || !campaignId) return;
+      const assetGroupId = stringValue(group.id);
+      if (!assetGroupId) return;
+      const key = `googleAds:pmax:${assetGroupId}`;
+      setAssetsLoading(key);
+      setAssetsErrors((current) => ({ ...current, [key]: "" }));
+      try {
+        const token = await getToken();
+        const path = `/api/ads/google/asset-groups/${encodeURIComponent(assetGroupId)}/assets`;
+        const params: Record<string, string> = { campaignId };
+        if (nextCursor) params.pageToken = nextCursor;
+        const response = await axios.get(`${backendUrl}${path}`, {
+          headers: { Authorization: `Bearer ${token}` },
+          params,
+        });
+        if (!response.data?.success) {
+          throw new Error(response.data?.message ?? "Unable to load Performance Max assets.");
+        }
+        const rows: ChildRecord[] = response.data.assets ?? [];
+        setAssetsByGroup((current) => ({
+          ...current,
+          [key]: nextCursor ? [...(current[key] ?? []), ...rows] : rows,
+        }));
+        setAssetsLoaded((current) => ({ ...current, [key]: true }));
+        setAssetsNext((current) => ({ ...current, [key]: response.data.nextPageToken ?? null }));
+      } catch (error) {
+        setAssetsErrors((current) => ({
+          ...current,
+          [key]: error instanceof Error ? error.message : "Unable to load Performance Max assets.",
+        }));
+      } finally {
+        setAssetsLoading(null);
+      }
+    },
+    [backendUrl, campaignId, getToken, provider]
+  );
+
   useEffect(() => {
     void loadCampaign();
+  }, [loadCampaign]);
+
+  // Wait for campaign metadata before deciding between ad groups and PMax asset groups.
+  useEffect(() => {
+    if (!campaign || campaignLoading) return;
     void loadGroups();
-  }, [loadCampaign, loadGroups]);
+  }, [campaign, campaignLoading, loadGroups]);
 
   const currency = campaign ? getCurrency(campaign) : null;
   const metrics = campaign ? asRecord(campaign.source.metrics ?? campaign.metrics) : {};
   const budget = campaign ? getBudget(campaign) : { amount: null, period: null };
   const totalAdsLoaded = Object.values(adsByGroup).reduce((total, rows) => total + rows.length, 0);
+  const totalAssetsLoaded = groups.reduce((total, group) => {
+    const assetGroupId = stringValue(group.id);
+    return total + (assetGroupId ? (assetsByGroup[`googleAds:pmax:${assetGroupId}`]?.length ?? 0) : 0);
+  }, 0);
   const campaignStatus = campaign?.effectiveStatus ?? campaign?.status ?? "Unknown";
-  const isPerformanceMax = String(campaign?.campaignType ?? "").toUpperCase().includes("PERFORMANCE_MAX");
-
   const settingFields = useMemo(() => {
     if (!campaign) return [];
     const source = campaign.source;
@@ -1021,7 +1177,6 @@ export default function CampaignDetailPage() {
             <Typography
               component="h1"
               variant="h5"
-              fontWeight={800}
               sx={{ mt: 0.75, letterSpacing: "-0.03em", overflowWrap: "anywhere" }}
             >
               {campaign.name}
@@ -1132,15 +1287,21 @@ export default function CampaignDetailPage() {
           <CardContent sx={{ p: { xs: 2, md: 2.75 } }}>
             <SectionHeader
               icon={<AccountTreeRoundedIcon fontSize="small" />}
-              title={provider === "googleAds" ? "Ad groups & ads" : "Ad sets & ads"}
+              title={provider === "googleAds" ? (isPerformanceMax ? "Asset groups & assets" : "Ad groups & ads") : "Ad sets & ads"}
               subtitle="Explore the campaign structure, ad content and creative assets"
               end={
                 <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-                  <Chip size="small" label={`${groups.length} ${provider === "googleAds" ? "ad groups" : "ad sets"}`} variant="outlined" />
-                  <Chip size="small" label={`${totalAdsLoaded} ads loaded`} variant="outlined" />
+                  <Chip size="small" label={`${groups.length} ${provider === "googleAds" ? (isPerformanceMax ? "asset groups" : "ad groups") : "ad sets"}`} variant="outlined" />
+                  <Chip size="small" label={isPerformanceMax ? `${totalAssetsLoaded} assets loaded` : `${totalAdsLoaded} ads loaded`} variant="outlined" />
                 </Stack>
               }
             />
+
+            {isPerformanceMax && (
+              <Alert severity="info" variant="outlined" sx={{ mb: 2, borderRadius: 2 }}>
+                Performance Max assembles ads dynamically from each asset group. This view shows the linked assets rather than separate ad-group ads. Some brand-guideline assets, such as business name and logo, can be linked at campaign level instead of inside an asset group.
+              </Alert>
+            )}
 
             {groupsError && (
               <Alert
@@ -1168,12 +1329,12 @@ export default function CampaignDetailPage() {
               <EmptyState
                 title={
                   isPerformanceMax
-                    ? "Performance Max campaign detected"
+                    ? "No asset groups returned"
                     : `No ${provider === "googleAds" ? "ad groups" : "ad sets"} returned`
                 }
                 description={
                   isPerformanceMax
-                    ? "Performance Max campaigns organize creatives into Asset Groups rather than standard ad groups. Asset Group browsing isn't included on this page yet."
+                    ? "Google did not return any asset groups for this Performance Max campaign. Check that the selected Google Ads account is the one that owns this campaign."
                     : "The provider did not return any child groups for this campaign."
                 }
               />
@@ -1181,6 +1342,32 @@ export default function CampaignDetailPage() {
 
             <Stack spacing={1.5}>
               {groups.map((group, index) => {
+                if (isPerformanceMax && provider === "googleAds") {
+                  const assetGroupId = stringValue(group.id) ?? `asset-group-${index}`;
+                  const key = `googleAds:pmax:${assetGroupId}`;
+                  const expanded = Boolean(expandedGroups[key]);
+                  return (
+                    <PerformanceMaxAssetGroupAccordion
+                      key={key}
+                      group={group}
+                      expanded={expanded}
+                      assets={assetsByGroup[key] ?? []}
+                      loading={assetsLoading === key}
+                      loaded={Boolean(assetsLoaded[key])}
+                      error={assetsErrors[key] || null}
+                      nextPageToken={assetsNext[key] ?? null}
+                      onExpand={(isOpen) => {
+                        setExpandedGroups((current) => ({ ...current, [key]: isOpen }));
+                        if (isOpen && !assetsLoaded[key] && assetsLoading !== key) {
+                          void loadAssetGroupAssets(group);
+                        }
+                      }}
+                      onRetry={() => void loadAssetGroupAssets(group)}
+                      onLoadMore={() => void loadAssetGroupAssets(group, assetsNext[key] ?? undefined)}
+                    />
+                  );
+                }
+
                 const groupId = stringValue(group.id, group.resourceName) ?? `group-${index}`;
                 const key = `${provider}:${groupId}`;
                 const expanded = Boolean(expandedGroups[key]);
@@ -1726,14 +1913,14 @@ export default function CampaignDetailPage() {
               >
                 {groupsLoading
                   ? "Loading…"
-                  : `Load more ${provider === "googleAds" ? "ad groups" : "ad sets"}`}
+                  : `Load more ${provider === "googleAds" ? (isPerformanceMax ? "asset groups" : "ad groups") : "ad sets"}`}
               </Button>
             )}
             {groupsLoading && groups.length > 0 && (
               <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }}>
                 <CircularProgress size={16} />
                 <Typography variant="caption" color="text.secondary">
-                  Loading more groups…
+                  {isPerformanceMax ? "Loading more asset groups…" : "Loading more groups…"}
                 </Typography>
               </Stack>
             )}

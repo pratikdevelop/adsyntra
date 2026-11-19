@@ -1,8 +1,8 @@
 
 import type {
     CampaignCreativeCapability,
-} from "./interfaces";
-import { AdPlatform } from './type'
+} from "@/interfaces/campaign-creation.interface";
+import { AdPlatform } from '@/types/campaign-creation.type'
 
 /* -------------------------------------------------------------------------- */
 /* Campaign Creative Capability Registry                                      */

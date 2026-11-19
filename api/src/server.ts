@@ -13,7 +13,8 @@ import adsRouter from "./routes/ads.routes.js";
 import assetRouter from "./routes/asset.routes.js";
 import aiCreativeRouter from "./routes/ai-creative.routes.js";
 import audiencesRouter from "./routes/audiences.routes.js";
-import overviewRouter from './routes/overview.routes.js'
+import overviewRouter from './routes/overview.routes.js';
+import conversionsRouter from './routes/conversions.routes.js';
 
 
 
@@ -80,7 +81,8 @@ app.use("/api/assets", assetRouter);
 app.use("/api/auth", providerAuthRoutes);
 app.use("/api/ai-creative", aiCreativeRouter);
 app.use("/api/audiences", audiencesRouter);
-app.use("/api/overview", overviewRouter)
+app.use("/api/overview", overviewRouter);
+app.use("/api/conversions", conversionsRouter);
 
 
 // --------------------------------------------------

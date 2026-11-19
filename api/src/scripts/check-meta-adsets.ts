@@ -44,12 +44,10 @@ async function checkMetaAdSets() {
 
 
 
-    console.log("\nConnecting to application MongoDB...");
 
     await mongoose.connect(mongoUri);
 
     try {
-        console.log("MongoDB connected.");
 
         // Retrieves the same stored Meta token used by the application.
         const context = await getMetaAdsCreationContext(
@@ -57,9 +55,6 @@ async function checkMetaAdSets() {
             accountId,
         );
 
-        console.log("\nMeta access token retrieved successfully.");
-        console.log("Meta Ad Account:", context.adAccountId);
-        console.log("Graph API Version:", context.apiVersion);
 
 
         const url = new URL(
@@ -72,9 +67,6 @@ async function checkMetaAdSets() {
         );
         url.searchParams.set("limit", "100");
 
-        console.log("Checking Meta Ad Sets...");
-        console.log("Campaign ID:", META_CAMPAIGN_ID);
-        console.log("accessToken", context.accessToken)
 
         const response = await fetch(url, {
             method: "GET",
@@ -95,7 +87,6 @@ async function checkMetaAdSets() {
         const adSets = result.data ?? [];
 
         if (adSets.length === 0) {
-            console.log("\nNo Ad Sets found for this campaign.");
             return;
         }
 
@@ -103,7 +94,6 @@ async function checkMetaAdSets() {
         console.log(JSON.stringify(adSets, null, 2));
 
         if (result.paging?.next) {
-            console.log("\nMore results may exist. Pagination is available.");
         }
     } catch (error) {
         console.error("Error: ", error)

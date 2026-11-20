@@ -309,7 +309,6 @@ router.get("/google/ads", async (req: Request, res: Response) => {
         return res.status(200).json({
             success: true,
             provider: "googleAds",
-            accountId: account.externalAccountId,
             ...result,
             count: result.ads.length,
         });

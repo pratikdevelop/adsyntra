@@ -238,6 +238,28 @@ type LiveProviderErrorDetails = {
   };
 };
 
+type MetaInstantFormResource = {
+  id: string;
+  pageId: string;
+  name: string;
+  status: string | null;
+  createdTime: string | null;
+  locale: string | null;
+  isArchived: boolean;
+  isUnavailable: boolean;
+};
+
+type MetaInstantFormLookupResponse = {
+  success: boolean;
+  message?: string;
+  pageId?: string;
+  forms?: MetaInstantFormResource[];
+  pagination?: {
+    hasNextPage?: boolean;
+    nextCursor?: string | null;
+  };
+};
+
 type LiveProviderResult = {
   success?: boolean;
   accountId?: string;
@@ -333,6 +355,49 @@ async function requestMetaPageLookup(
   return payload;
 }
 
+async function requestMetaInstantForms(
+  getToken: () => Promise<string | null>,
+  pageId: string,
+  after?: string,
+): Promise<MetaInstantFormLookupResponse> {
+  const token = await getToken();
+
+  if (!token) {
+    throw new Error(
+      "Unable to retrieve your authentication token.",
+    );
+  }
+
+  const url = new URL(
+    `${API_BASE_URL}/api/campaigns/lookups/meta/pages/${encodeURIComponent(pageId)}/instant-forms`,
+  );
+
+  if (after) {
+    url.searchParams.set("after", after);
+  }
+
+  const response = await fetch(url.toString(), {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+    },
+    cache: "no-store",
+  });
+
+  const payload =
+    (await response.json().catch(() => null)) as
+      | MetaInstantFormLookupResponse
+      | null;
+
+  if (!response.ok || payload?.success !== true) {
+    throw new Error(
+      payload?.message ||
+        `Meta Instant Form lookup failed (${response.status}).`,
+    );
+  }
+
+  return payload;
+}
 
 function formatLiveResourceName(resourceType: string): string {
   const normalized = resourceType.replace(/[\s_-]/g, "").toLowerCase();
@@ -1422,8 +1487,21 @@ export default function CreateCampaignPage() {
   const [metaDestinationType, setMetaDestinationType] = useState<
     "WEBSITE" | "INSTANT_FORM" | "MESSAGING" | "APP"
   >("WEBSITE");
-  const [metaInstantFormId, setMetaInstantFormId] = useState("123456789012345");
-  const [metaMessagingDestinationId, setMetaMessagingDestinationId] =
+const [metaInstantFormId, setMetaInstantFormId] =
+  useState("");
+
+const [metaInstantFormOptions, setMetaInstantFormOptions] =
+  useState<MetaInstantFormResource[]>([]);
+
+const [metaInstantFormsLoading, setMetaInstantFormsLoading] =
+  useState(false);
+
+const [metaInstantFormsError, setMetaInstantFormsError] =
+  useState("");
+
+const [metaInstantFormsNextCursor, setMetaInstantFormsNextCursor] =
+  useState<string | null>(null);
+    const [metaMessagingDestinationId, setMetaMessagingDestinationId] =
     useState("123456789012345");
   const [metaAppId, setMetaAppId] = useState("com.example.demostore");
   const [metaAppStoreUrl, setMetaAppStoreUrl] = useState(
@@ -1781,6 +1859,69 @@ export default function CreateCampaignPage() {
     );
     writeManagedCampaigns(localDrafts);
   }, [campaignRecords, campaignRecordsLoaded]);
+  useEffect(() => {
+  let cancelled = false;
+
+  // A form belongs to a specific Page. Clear the previous
+  // selection whenever the Page or destination changes.
+  setMetaInstantFormId("");
+  setMetaInstantFormOptions([]);
+  setMetaInstantFormsNextCursor(null);
+  setMetaInstantFormsError("");
+
+  if (
+    !isLoaded ||
+    !isSignedIn ||
+    metaDestinationType !== "INSTANT_FORM" ||
+    !metaPageId.trim()
+  ) {
+    setMetaInstantFormsLoading(false);
+    return;
+  }
+
+  const loadInstantForms = async () => {
+    setMetaInstantFormsLoading(true);
+
+    try {
+      const result = await requestMetaInstantForms(
+        getToken,
+        metaPageId.trim(),
+      );
+
+      if (cancelled) return;
+
+      setMetaInstantFormOptions(result.forms ?? []);
+      setMetaInstantFormsNextCursor(
+        result.pagination?.nextCursor ?? null,
+      );
+    } catch (error) {
+      if (cancelled) return;
+
+      setMetaInstantFormOptions([]);
+      setMetaInstantFormsError(
+        error instanceof Error
+          ? error.message
+          : "Unable to load Meta Instant Forms.",
+      );
+    } finally {
+      if (!cancelled) {
+        setMetaInstantFormsLoading(false);
+      }
+    }
+  };
+
+  void loadInstantForms();
+
+  return () => {
+    cancelled = true;
+  };
+}, [
+  getToken,
+  isLoaded,
+  isSignedIn,
+  metaDestinationType,
+  metaPageId,
+]);
 
   const [campaignSearch, setCampaignSearch] = useState("");
   const [campaignPlatformFilter, setCampaignPlatformFilter] =
@@ -2272,6 +2413,53 @@ export default function CreateCampaignPage() {
     }
   };
 
+  const loadMoreMetaInstantForms = async () => {
+  if (
+    !metaPageId ||
+    !metaInstantFormsNextCursor ||
+    metaInstantFormsLoading
+  ) {
+    return;
+  }
+
+  try {
+    setMetaInstantFormsLoading(true);
+    setMetaInstantFormsError("");
+
+    const result = await requestMetaInstantForms(
+      getToken,
+      metaPageId,
+      metaInstantFormsNextCursor,
+    );
+
+    const incomingForms = result.forms ?? [];
+
+    setMetaInstantFormOptions((current) => {
+      const existingIds = new Set(
+        current.map((form) => form.id),
+      );
+
+      return [
+        ...current,
+        ...incomingForms.filter(
+          (form) => !existingIds.has(form.id),
+        ),
+      ];
+    });
+
+    setMetaInstantFormsNextCursor(
+      result.pagination?.nextCursor ?? null,
+    );
+  } catch (error) {
+    setMetaInstantFormsError(
+      error instanceof Error
+        ? error.message
+        : "Unable to load more Meta Instant Forms.",
+    );
+  } finally {
+    setMetaInstantFormsLoading(false);
+  }
+};
   // Load the current user's saved assets from the same API used by the Asset Library page.
   useEffect(() => {
     if (!isLoaded) return;
@@ -4371,12 +4559,27 @@ if (
         setError("Enter a valid Meta website destination URL.");
         return false;
       }
-      if (metaDestinationType === "INSTANT_FORM" && !metaInstantFormId.trim()) {
-        setError(
-          "Select or enter an existing Meta Instant Form ID for this lead ad.",
-        );
-        return false;
-      }
+const selectedMetaInstantForm =
+  metaInstantFormOptions.find(
+    (form) => form.id === metaInstantFormId,
+  );
+
+const hasValidMetaInstantForm = Boolean(
+  selectedMetaInstantForm &&
+    selectedMetaInstantForm.pageId === metaPageId &&
+    !selectedMetaInstantForm.isArchived &&
+    !selectedMetaInstantForm.isUnavailable,
+);
+
+if (
+  metaDestinationType === "INSTANT_FORM" &&
+  !hasValidMetaInstantForm
+) {
+  setError(
+    "Select an available Instant Form belonging to the selected Facebook Page.",
+  );
+  return false;
+}
       if (
         metaDestinationType === "MESSAGING" &&
         !metaMessagingDestinationId.trim()
@@ -11050,7 +11253,7 @@ if (
                     <p className="mt-1 text-xs text-slate-500">
                       Search Meta's location and audience catalogues below. Selected country codes and geo keys are inserted into the provider targeting fields; the API resource IDs are never invented.
                     </p>
-                    +                    <div className="mt-4 space-y-4">
+                    <div className="mt-4 space-y-4">
                       <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                         <label className={labelClass}>Saved Audience template (optional)</label>
                         <Autocomplete
@@ -13171,7 +13374,9 @@ if (
                       asset group.
                     </p>
                   </div>
-                  <button
+                  <Button
+                    variant="outlined"
+                  
                     type="button"
                     onClick={() => {
                       setAssetLibraryOpen(true);
@@ -13180,7 +13385,7 @@ if (
                     className="rounded-lg border border-blue-200 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-50"
                   >
                     Open Asset Library
-                  </button>
+                  </Button>
                 </div>
 
                 {googleCampaignType === "SEARCH" && (
@@ -13198,7 +13403,7 @@ if (
                           websiteUrl || "https://www.example.com/landing-page"
                         }
                         className={inputClass}
-                      />
+                    />
                     </div>
                     <div className="grid gap-4 sm:grid-cols-2">
                       <div>
@@ -14499,21 +14704,91 @@ if (
                       />
                     </div>
                   )}
-                  {metaDestinationType === "INSTANT_FORM" && (
-                    <div>
-                      <label className={labelClass}>
-                        Existing Instant Form ID *
-                      </label>
-                      <input
-                        value={metaInstantFormId}
-                        onChange={(e) => {
-                          setMetaInstantFormId(e.target.value);
-                          clearPreview();
-                        }}
-                        className={inputClass}
-                      />
-                    </div>
-                  )}
+{metaDestinationType === "INSTANT_FORM" && (
+  <div>
+    <label className={labelClass}>
+      Facebook Instant Form *
+    </label>
+
+    <select
+      value={metaInstantFormId}
+      disabled={
+        !metaPageId ||
+        metaInstantFormsLoading ||
+        metaInstantFormOptions.length === 0
+      }
+      onChange={(e) => {
+        setMetaInstantFormId(e.target.value);
+        clearPreview();
+      }}
+      className={inputClass}
+    >
+      <option value="">
+        {metaInstantFormsLoading
+          ? "Loading Instant Forms..."
+          : metaInstantFormOptions.length > 0
+            ? "Select an existing Instant Form"
+            : "No Instant Forms available"}
+      </option>
+
+      {metaInstantFormOptions.map((form) => (
+        <option
+          key={form.id}
+          value={form.id}
+          disabled={form.isArchived || form.isUnavailable}
+        >
+          {form.name} · {form.id}
+          {form.isArchived
+            ? " (Archived)"
+            : form.isUnavailable
+              ? ` (${form.status ?? "Unavailable"})`
+              : ""}
+        </option>
+      ))}
+    </select>
+
+    {metaInstantFormsLoading && (
+      <p className="mt-1 text-xs text-slate-500">
+        Loading forms belonging to the selected Facebook Page...
+      </p>
+    )}
+
+    {metaInstantFormsError && (
+      <p className="mt-1 text-xs text-red-600">
+        {metaInstantFormsError}
+      </p>
+    )}
+
+    {!metaInstantFormsLoading &&
+      !metaInstantFormsError &&
+      metaPageId &&
+      metaInstantFormOptions.length === 0 && (
+        <p className="mt-1 text-xs text-slate-500">
+          No Instant Forms were returned for this Facebook Page.
+          Check your Page permissions and Meta app access.
+        </p>
+      )}
+
+    {metaInstantFormsNextCursor && (
+      <Button
+        type="button"
+        size="small"
+        disabled={metaInstantFormsLoading}
+        onClick={loadMoreMetaInstantForms}
+        sx={{ mt: 1, textTransform: "none" }}
+      >
+        {metaInstantFormsLoading
+          ? "Loading..."
+          : "Load more forms"}
+      </Button>
+    )}
+
+    <p className="mt-1 text-xs text-slate-500">
+      Forms are loaded from the selected Facebook Page.
+      Archived or unavailable forms cannot be selected.
+    </p>
+  </div>
+)}
                   {metaDestinationType === "MESSAGING" && (
                     <>
                       <div>

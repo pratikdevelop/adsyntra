@@ -17,9 +17,13 @@ import {
     listMetaSavedAudiences,
 } from "../metaadsAPI/services/targeting.js";
 import {
-  listMetaCustomConversionsForPixel,
-  MetaCustomConversionLookupError,
+    listMetaCustomConversionsForPixel,
+    MetaCustomConversionLookupError,
 } from "../metaadsAPI/services/meta-custom-conversion-lookups.service.js";
+import {
+  listMetaInstantFormsForPage,
+  MetaInstantFormLookupError,
+} from "../metaadsAPI/services/meta-instant-form-lookups.service.js";
 // import ProviderConnectionModel from "../models/provider-connection.model.js";
 import {
     CampaignRequestValidationError,
@@ -84,9 +88,9 @@ import {
     MetaPageIdentityLookupError,
 } from "../metaadsAPI/services/meta-page-identity.service.js";
 import {
-  listMetaPixelsForAdAccount,
-  getMetaPixelEventOptions,
-  MetaPixelLookupError,
+    listMetaPixelsForAdAccount,
+    getMetaPixelEventOptions,
+    MetaPixelLookupError,
 } from "../metaadsAPI/services/meta-pixel-resource-lookups.service.js";
 const router = Router();
 
@@ -641,7 +645,7 @@ function getGoogleDisplayCampaignImageReferences(
         const target = reference.campaignCreativeTarget!;
         const expectedRole =
             GOOGLE_DISPLAY_IMAGE_REQUIREMENT_ROLES[
-                target.requirementId as keyof typeof GOOGLE_DISPLAY_IMAGE_REQUIREMENT_ROLES
+            target.requirementId as keyof typeof GOOGLE_DISPLAY_IMAGE_REQUIREMENT_ROLES
             ];
 
         if (!expectedRole) {
@@ -752,7 +756,7 @@ function getGooglePmaxCampaignImageReferences(
 
         const requirement =
             GOOGLE_PMAX_IMAGE_REQUIREMENTS[
-                target.requirementId as keyof typeof GOOGLE_PMAX_IMAGE_REQUIREMENTS
+            target.requirementId as keyof typeof GOOGLE_PMAX_IMAGE_REQUIREMENTS
             ];
 
         if (!requirement) {
@@ -788,7 +792,6 @@ function getGooglePmaxCampaignImageReferences(
             );
         }
         seenIndexes.add(indexKey);
-
         pmaxReferences.push({
             ...reference,
             fieldType: requirement.fieldType,
@@ -2140,18 +2143,18 @@ router.post("/", async (req: Request, res: Response) => {
                                     ...existingImageAssets,
                                     landscapeImageUrl:
                                         typeof existingImageAssets.landscapeImageUrl === "string" &&
-                                        existingImageAssets.landscapeImageUrl.trim()
+                                            existingImageAssets.landscapeImageUrl.trim()
                                             ? existingImageAssets.landscapeImageUrl.trim()
                                             : landscapeReference?.contentUrl ??
-                                                existingLandscapeResourceNames[0] ??
-                                                "",
+                                            existingLandscapeResourceNames[0] ??
+                                            "",
                                     squareImageUrl:
                                         typeof existingImageAssets.squareImageUrl === "string" &&
-                                        existingImageAssets.squareImageUrl.trim()
+                                            existingImageAssets.squareImageUrl.trim()
                                             ? existingImageAssets.squareImageUrl.trim()
                                             : squareReference?.contentUrl ??
-                                                existingSquareResourceNames[0] ??
-                                                "",
+                                            existingSquareResourceNames[0] ??
+                                            "",
                                     // The selected private campaign images have not been
                                     // uploaded in VALIDATE_ONLY mode. Leave both provider
                                     // asset lists empty so the flow accurately reports that
@@ -2186,18 +2189,18 @@ router.post("/", async (req: Request, res: Response) => {
                                         ...existingImageAssets,
                                         landscapeImageUrl:
                                             typeof existingImageAssets.landscapeImageUrl === "string" &&
-                                            existingImageAssets.landscapeImageUrl.trim()
+                                                existingImageAssets.landscapeImageUrl.trim()
                                                 ? existingImageAssets.landscapeImageUrl.trim()
                                                 : preflightLandscapeReference?.contentUrl ??
-                                                    existingLandscapeResourceNames[0] ??
-                                                    "",
+                                                existingLandscapeResourceNames[0] ??
+                                                "",
                                         squareImageUrl:
                                             typeof existingImageAssets.squareImageUrl === "string" &&
-                                            existingImageAssets.squareImageUrl.trim()
+                                                existingImageAssets.squareImageUrl.trim()
                                                 ? existingImageAssets.squareImageUrl.trim()
                                                 : preflightSquareReference?.contentUrl ??
-                                                    existingSquareResourceNames[0] ??
-                                                    "",
+                                                existingSquareResourceNames[0] ??
+                                                "",
                                         marketingImageAssetResourceNames: [],
                                         squareMarketingImageAssetResourceNames: [],
                                     },
@@ -3428,7 +3431,7 @@ router.post("/", async (req: Request, res: Response) => {
             } catch (error) {
                 const message = getErrorMessage(error);
                 console.log("errorDetails", error)
-                const errorDetails : any =
+                const errorDetails: any =
                     error instanceof MetaAdsCampaignCreationError &&
                         isRecord(error.details)
                         ? error.details
@@ -3620,7 +3623,7 @@ router.post("/", async (req: Request, res: Response) => {
             providers: providerResults,
         });
 
-        } catch (error) {
+    } catch (error) {
         if (error instanceof CampaignRequestValidationError) {
             return res.status(400).json({
                 success: false,
@@ -5026,6 +5029,9 @@ router.get("/lookups/meta/pages", async (req, res) => {
             ? req.query.after.trim()
             : undefined;
 
+
+
+
     if (after && after.length > 2048) {
         return res.status(400).json({
             success: false,
@@ -5799,29 +5805,29 @@ async function withGoogleAdsLookup(
     } catch (error) {
         console.error("Google Ads lookup route failed:", error);
 
-       const lookupStatusCode =
+        const lookupStatusCode =
             error && typeof error === "object" &&
                 "statusCode" in error &&
                 typeof (error as { statusCode?: unknown }).statusCode === "number"
                 ? (error as { statusCode: number }).statusCode
                 : undefined;
-         const statusCode =
-             error instanceof GoogleAdsLookupError
-                 ? error.statusCode
+        const statusCode =
+            error instanceof GoogleAdsLookupError
+                ? error.statusCode
                 : lookupStatusCode ?? 500;
         const lookupDetails =
             error && typeof error === "object" && "details" in error
                 ? (error as { details?: unknown }).details
                 : undefined;
- 
-         return res.status(statusCode).json({
-             success: false,
-             message: getErrorMessage(error),
+
+        return res.status(statusCode).json({
+            success: false,
+            message: getErrorMessage(error),
 
             ...(lookupDetails !== undefined && { details: lookupDetails }),
 
-    })
-}
+        })
+    }
 }
 
 
@@ -5858,51 +5864,51 @@ router.get("/lookups/google/portfolio-strategies", async (req, res) =>
 
 
 async function getSelectedMetaPixelLookupAccount(
-  userId: string,
+    userId: string,
 ): Promise<string | null> {
-  const account = await AdAccountModel.findOne({
-    userId,
-    provider: "metaAds",
-    status: "active",
-    isSelected: true,
-  })
-    .select("externalAccountId")
-    .lean();
+    const account = await AdAccountModel.findOne({
+        userId,
+        provider: "metaAds",
+        status: "active",
+        isSelected: true,
+    })
+        .select("externalAccountId")
+        .lean();
 
-  return account?.externalAccountId
-    ? String(account.externalAccountId)
-    : null;
+    return account?.externalAccountId
+        ? String(account.externalAccountId)
+        : null;
 }
 
 function sendMetaPixelLookupError(
-  res: Response,
-  error: unknown,
-  fallbackMessage: string,
+    res: Response,
+    error: unknown,
+    fallbackMessage: string,
 ) {
-  if (error instanceof MetaPixelLookupError) {
-    return res.status(error.statusCode).json({
-      success: false,
-      message: error.message,
-      metaError: error.metaError
-        ? {
-            type: error.metaError.type ?? null,
-            code: error.metaError.code ?? null,
-            subcode: error.metaError.error_subcode ?? null,
-            fbtraceId: error.metaError.fbtrace_id ?? null,
-          }
-        : null,
+    if (error instanceof MetaPixelLookupError) {
+        return res.status(error.statusCode).json({
+            success: false,
+            message: error.message,
+            metaError: error.metaError
+                ? {
+                    type: error.metaError.type ?? null,
+                    code: error.metaError.code ?? null,
+                    subcode: error.metaError.error_subcode ?? null,
+                    fbtraceId: error.metaError.fbtrace_id ?? null,
+                }
+                : null,
+        });
+    }
+
+    console.error(
+        fallbackMessage,
+        error instanceof Error ? error.message : "Unknown error",
+    );
+
+    return res.status(502).json({
+        success: false,
+        message: fallbackMessage,
     });
-  }
-
-  console.error(
-    fallbackMessage,
-    error instanceof Error ? error.message : "Unknown error",
-  );
-
-  return res.status(502).json({
-    success: false,
-    message: fallbackMessage,
-  });
 }
 
 // -----------------------------------------------------------------------------
@@ -5910,71 +5916,73 @@ function sendMetaPixelLookupError(
 // GET /api/campaigns/lookups/meta/pixels
 // -----------------------------------------------------------------------------
 router.get(
-  "/lookups/meta/pixels",
-  async (req: Request, res: Response) => {
-    try {
-      const { userId } = getAuth(req);
+    "/lookups/meta/pixels",
+    async (req: Request, res: Response) => {
+        try {
+            const { userId } = getAuth(req);
 
-      if (!userId) {
-        return res.status(401).json({
-          success: false,
-          message: "Unauthorized.",
-        });
-      }
+            if (!userId) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Unauthorized.",
+                });
+            }
 
-      const afterValue = req.query.after;
+            const afterValue = req.query.after;
 
-      if (
-        afterValue !== undefined &&
-        typeof afterValue !== "string"
-      ) {
-        return res.status(400).json({
-          success: false,
-          message: "The Pixel pagination cursor is invalid.",
-        });
-      }
+            if (
+                afterValue !== undefined &&
+                typeof afterValue !== "string"
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid pagination cursor.",
+                });
+            }
 
-      const after =
-        typeof afterValue === "string"
-          ? afterValue.trim()
-          : undefined;
+            const after =
+                typeof afterValue === "string"
+                    ? afterValue.trim()
+                    : undefined;
 
-      if (after && after.length > 2048) {
-        return res.status(400).json({
-          success: false,
-          message: "The Pixel pagination cursor is too long.",
-        });
-      }
+            if (after && after.length > 2048) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid pagination cursor.",
+                });
+            }
 
-      const selectedAccount =
-        await getSelectedMetaPixelLookupAccount(userId);
 
-      if (!selectedAccount) {
-        return res.status(409).json({
-          success: false,
-          message:
-            "Select an active Meta Ad Account before loading Pixels/Datasets.",
-        });
-      }
 
-      const result = await listMetaPixelsForAdAccount(
-        userId,
-        selectedAccount,
-        after,
-      );
+            const selectedAccount =
+                await getSelectedMetaPixelLookupAccount(userId);
 
-      return res.status(200).json({
-        success: true,
-        ...result,
-      });
-    } catch (error) {
-      return sendMetaPixelLookupError(
-        res,
-        error,
-        "Unable to retrieve Meta Pixels/Datasets.",
-      );
-    }
-  },
+            if (!selectedAccount) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "Select an active Meta Ad Account before loading Pixels/Datasets.",
+                });
+            }
+
+            const result = await listMetaPixelsForAdAccount(
+                userId,
+                selectedAccount,
+                after,
+            );
+
+            return res.status(200).json({
+                success: true,
+                ...result,
+            });
+        } catch (error) {
+            return sendMetaPixelLookupError(
+                res,
+                error,
+                "Unable to retrieve Meta Pixels/Datasets.",
+            );
+        }
+    },
 );
 
 // -----------------------------------------------------------------------------
@@ -5982,72 +5990,72 @@ router.get(
 // GET /api/campaigns/lookups/meta/pixels/:pixelId/events?days=7
 // -----------------------------------------------------------------------------
 router.get(
-  "/lookups/meta/pixels/:pixelId/events",
-  async (req: Request, res: Response) => {
-    try {
-      const { userId } = getAuth(req);
+    "/lookups/meta/pixels/:pixelId/events",
+    async (req: Request, res: Response) => {
+        try {
+            const { userId } = getAuth(req);
 
-      if (!userId) {
-        return res.status(401).json({
-          success: false,
-          message: "Unauthorized.",
-        });
-      }
+            if (!userId) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Unauthorized.",
+                });
+            }
 
-      const pixelId = String(req.params.pixelId ?? "").trim();
+            const pixelId = String(req.params.pixelId ?? "").trim();
 
-      if (!/^\d+$/.test(pixelId)) {
-        return res.status(400).json({
-          success: false,
-          message: "A valid numeric Meta Pixel ID is required.",
-        });
-      }
+            if (!/^\d+$/.test(pixelId)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "A valid numeric Meta Pixel ID is required.",
+                });
+            }
 
-      const rawDays = req.query.days;
-      const days =
-        rawDays === undefined
-          ? 7
-          : typeof rawDays === "string"
-            ? Number(rawDays)
-            : Number.NaN;
+            const rawDays = req.query.days;
+            const days =
+                rawDays === undefined
+                    ? 7
+                    : typeof rawDays === "string"
+                        ? Number(rawDays)
+                        : Number.NaN;
 
-      if (!Number.isInteger(days) || days < 1 || days > 7) {
-        return res.status(400).json({
-          success: false,
-          message: "days must be an integer between 1 and 7.",
-        });
-      }
+            if (!Number.isInteger(days) || days < 1 || days > 7) {
+                return res.status(400).json({
+                    success: false,
+                    message: "days must be an integer between 1 and 7.",
+                });
+            }
 
-      const selectedAccount =
-        await getSelectedMetaPixelLookupAccount(userId);
+            const selectedAccount =
+                await getSelectedMetaPixelLookupAccount(userId);
 
-      if (!selectedAccount) {
-        return res.status(409).json({
-          success: false,
-          message:
-            "Select an active Meta Ad Account before retrieving Pixel events.",
-        });
-      }
+            if (!selectedAccount) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "Select an active Meta Ad Account before retrieving Pixel events.",
+                });
+            }
 
-      const result = await getMetaPixelEventOptions(
-        userId,
-        selectedAccount,
-        pixelId,
-        days,
-      );
+            const result = await getMetaPixelEventOptions(
+                userId,
+                selectedAccount,
+                pixelId,
+                days,
+            );
 
-      return res.status(200).json({
-        success: true,
-        ...result,
-      });
-    } catch (error) {
-      return sendMetaPixelLookupError(
-        res,
-        error,
-        "Unable to retrieve Meta Pixel events.",
-      );
-    }
-  },
+            return res.status(200).json({
+                success: true,
+                ...result,
+            });
+        } catch (error) {
+            return sendMetaPixelLookupError(
+                res,
+                error,
+                "Unable to retrieve Meta Pixel events.",
+            );
+        }
+    },
 );
 
 // ==========================================
@@ -6130,7 +6138,104 @@ router.get(
 // ==========================================
 
 router.get(
-  "/lookups/meta/custom-conversions",
+    "/lookups/meta/custom-conversions",
+    async (req: Request, res: Response) => {
+        try {
+            const { userId } = getAuth(req);
+
+            if (!userId) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Authentication required.",
+                });
+            }
+
+            const pixelId =
+                typeof req.query.pixelId === "string"
+                    ? req.query.pixelId.trim()
+                    : "";
+
+            const after =
+                typeof req.query.after === "string"
+                    ? req.query.after.trim()
+                    : undefined;
+
+            if (!/^\d+$/.test(pixelId)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "A valid Pixel/Dataset ID is required.",
+                });
+            }
+
+            if (after && after.length > 2048) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid pagination cursor.",
+                });
+            }
+
+            const selectedAccount = await AdAccountModel.findOne({
+                userId,
+                provider: "metaAds",
+                status: "active",
+                isSelected: true,
+            })
+                .select("externalAccountId")
+                .lean();
+
+            if (!selectedAccount?.externalAccountId) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "No active Meta Ads account is selected. Select a Meta Ad Account first.",
+                });
+            }
+
+            const result =
+                await listMetaCustomConversionsForPixel(
+                    userId,
+                    selectedAccount.externalAccountId,
+                    pixelId,
+                    after,
+                );
+
+            return res.status(200).json({
+                success: true,
+                ...result,
+            });
+        } catch (error) {
+            console.error(
+                "Meta Custom Conversion lookup failed:",
+                error,
+            );
+
+            const statusCode =
+                error instanceof MetaCustomConversionLookupError
+                    ? error.statusCode
+                    : 500;
+
+            return res.status(statusCode).json({
+                success: false,
+                message:
+                    error instanceof Error
+                        ? error.message
+                        : "Failed to retrieve Meta Custom Conversions.",
+                ...(error instanceof MetaCustomConversionLookupError &&
+                    error.details !== undefined && {
+                    details: error.details,
+                }),
+            });
+        }
+    },
+);
+
+// ==========================================
+// META PAGE-OWNED INSTANT FORM LOOKUP
+// GET /lookups/meta/pages/:pageId/instant-forms
+// ==========================================
+
+router.get(
+  "/lookups/meta/pages/:pageId/instant-forms",
   async (req: Request, res: Response) => {
     try {
       const { userId } = getAuth(req);
@@ -6142,67 +6247,58 @@ router.get(
         });
       }
 
-      const pixelId =
-        typeof req.query.pixelId === "string"
-          ? req.query.pixelId.trim()
-          : "";
+      const pageId = String(req.params.pageId ?? "").trim();
 
-      const after =
-        typeof req.query.after === "string"
-          ? req.query.after.trim()
-          : undefined;
-
-      if (!/^\d+$/.test(pixelId)) {
+      if (!/^\d+$/.test(pageId)) {
         return res.status(400).json({
           success: false,
-          message: "A valid Pixel/Dataset ID is required.",
+          message: "A valid numeric Facebook Page ID is required.",
         });
       }
+
+      const afterValue = req.query.after;
+
+      if (
+        afterValue !== undefined &&
+        typeof afterValue !== "string"
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid Instant Form pagination cursor.",
+        });
+      }
+
+      const after =
+        typeof afterValue === "string"
+          ? afterValue.trim()
+          : undefined;
 
       if (after && after.length > 2048) {
         return res.status(400).json({
           success: false,
-          message: "Invalid pagination cursor.",
+          message: "Instant Form pagination cursor is too long.",
         });
       }
 
-      const selectedAccount = await AdAccountModel.findOne({
+      const result = await listMetaInstantFormsForPage(
         userId,
-        provider: "metaAds",
-        status: "active",
-        isSelected: true,
-      })
-        .select("externalAccountId")
-        .lean();
-
-      if (!selectedAccount?.externalAccountId) {
-        return res.status(409).json({
-          success: false,
-          message:
-            "No active Meta Ads account is selected. Select a Meta Ad Account first.",
-        });
-      }
-
-      const result =
-        await listMetaCustomConversionsForPixel(
-          userId,
-          selectedAccount.externalAccountId,
-          pixelId,
-          after,
-        );
+        pageId,
+        after,
+      );
 
       return res.status(200).json({
         success: true,
+        provider: "metaAds",
         ...result,
       });
     } catch (error) {
       console.error(
-        "Meta Custom Conversion lookup failed:",
+        "Meta Instant Form lookup failed:",
         error,
       );
 
       const statusCode =
-        error instanceof MetaCustomConversionLookupError
+        error instanceof MetaInstantFormLookupError
           ? error.statusCode
           : 500;
 
@@ -6211,8 +6307,8 @@ router.get(
         message:
           error instanceof Error
             ? error.message
-            : "Failed to retrieve Meta Custom Conversions.",
-        ...(error instanceof MetaCustomConversionLookupError &&
+            : "Failed to retrieve Meta Instant Forms.",
+        ...(error instanceof MetaInstantFormLookupError &&
           error.details !== undefined && {
             details: error.details,
           }),

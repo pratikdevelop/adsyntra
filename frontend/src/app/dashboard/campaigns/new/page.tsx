@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import Link from "next/link";
 import { useAuth } from "@clerk/nextjs";
 import {
@@ -87,6 +87,14 @@ import {
   Checkbox,
   Autocomplete,
 } from "@mui/material";
+
+import { googleAdsLookups } from "@/lib/googleAdsLookups";
+import Popper from "@mui/material/Popper";
+import Fade from "@mui/material/Fade";
+import { useRef, useState } from "react";
+import AddIcon from "@mui/icons-material/Add";
+import LanguageIcon from "@mui/icons-material/Language";
+
 
 const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:5000";
@@ -198,6 +206,12 @@ async function normalizeImageBlobForGoogleAds(
     bitmap.close();
   }
 }
+const getTodayString = () => new Date().toISOString().split("T")[0];
+const getNextMonthString = () => {
+  const d = new Date();
+  d.setMonth(d.getMonth() + 1);
+  return d.toISOString().split("T")[0];
+};
 
 function getLibraryAssetAspectRatio(asset: LibraryAsset): number | null {
   const storedRatio = asset.aspectRatio?.trim();
@@ -259,6 +273,127 @@ type MetaInstantFormLookupResponse = {
     nextCursor?: string | null;
   };
 };
+
+type MetaMessagingDestinationType =
+  | "MESSENGER"
+  | "INSTAGRAM_DIRECT"
+  | "WHATSAPP";
+
+type MetaMessagingDestinationResource = {
+  type: MetaMessagingDestinationType;
+  id: string;
+  pageId: string;
+  name: string;
+  isAvailable: boolean;
+  unavailableReason: string | null;
+  whatsappNumber?: string | null;
+};
+
+type MetaMessagingDestinationLookupResponse = {
+  success: boolean;
+  message?: string;
+  pageId?: string;
+  pageName?: string | null;
+  count?: number;
+  destinations?: MetaMessagingDestinationResource[];
+};
+
+type MetaAdvertisableApplicationResource = {
+  id: string;
+  name: string;
+  advertisableAppEvents: string[];
+};
+
+type MetaAdvertisableApplicationsLookupResponse = {
+  success: boolean;
+  message?: string;
+  adAccountId?: string;
+  count?: number;
+  applications?: MetaAdvertisableApplicationResource[];
+  pagination?: {
+    hasNextPage?: boolean;
+    nextCursor?: string | null;
+  };
+};
+async function requestMetaMessagingDestinations(
+  getToken: () => Promise<string | null>,
+  pageId: string,
+): Promise<MetaMessagingDestinationLookupResponse> {
+  const token = await getToken();
+
+  if (!token) {
+    throw new Error("Unable to retrieve your authentication token.");
+  }
+
+  const url = new URL(
+    `${API_BASE_URL}/api/campaigns/lookups/meta/pages/${encodeURIComponent(pageId)}/messaging-destinations`,
+  );
+
+  const response = await fetch(url.toString(), {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+    },
+    cache: "no-store",
+  });
+
+  const payload =
+    (await response.json().catch(() => null)) as
+    | MetaMessagingDestinationLookupResponse
+    | null;
+
+  if (!response.ok || payload?.success !== true) {
+    throw new Error(
+      payload?.message ||
+      `Meta messaging destination lookup failed (${response.status}).`,
+    );
+  }
+
+  return payload;
+}
+
+async function requestMetaAdvertisableApplications(
+  getToken: () => Promise<string | null>,
+  after?: string,
+): Promise<MetaAdvertisableApplicationsLookupResponse> {
+  const token = await getToken();
+
+  if (!token) {
+    throw new Error("Unable to retrieve your authentication token.");
+  }
+
+  const url = new URL(
+    `${API_BASE_URL}/api/campaigns/lookups/meta/applications`,
+  );
+
+  if (after) {
+    url.searchParams.set("after", after);
+  }
+
+  const response = await fetch(url.toString(), {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+    },
+    cache: "no-store",
+  });
+
+  const payload =
+    (await response.json().catch(() => null)) as
+    | MetaAdvertisableApplicationsLookupResponse
+    | null;
+
+  if (!response.ok || payload?.success !== true) {
+    throw new Error(
+      payload?.message ||
+      `Meta application lookup failed (${response.status}).`,
+    );
+  }
+
+  return payload;
+}
+
+
 
 type LiveProviderResult = {
   success?: boolean;
@@ -386,13 +521,13 @@ async function requestMetaInstantForms(
 
   const payload =
     (await response.json().catch(() => null)) as
-      | MetaInstantFormLookupResponse
-      | null;
+    | MetaInstantFormLookupResponse
+    | null;
 
   if (!response.ok || payload?.success !== true) {
     throw new Error(
       payload?.message ||
-        `Meta Instant Form lookup failed (${response.status}).`,
+      `Meta Instant Form lookup failed (${response.status}).`,
     );
   }
 
@@ -767,6 +902,8 @@ type GoogleAdsLookupOption = {
   primaryForGoal?: boolean;
   currencyCode?: string;
   attachedCampaignCount?: number;
+  merchantCenterId?: string | number;
+  productLinkId?: string | number;
 };
 
 type MetaCampaignLookupOption = {
@@ -1105,6 +1242,24 @@ function getGoogleLookupLabel(option: GoogleAdsLookupOption): string {
   );
 }
 
+function getGoogleMerchantCenterId(option: GoogleAdsLookupOption): string {
+  const id = String(option.merchantCenterId ?? option.id ?? "").trim();
+  return /^\d+$/.test(id) ? id : "";
+}
+
+function hasSelectedGoogleMerchantCenter(
+  options: GoogleAdsLookupOption[],
+  selectedId: string,
+): boolean {
+  const normalizedSelectedId = selectedId.trim();
+  return Boolean(
+    normalizedSelectedId &&
+    options.some(
+      (option) => getGoogleMerchantCenterId(option) === normalizedSelectedId,
+    ),
+  );
+}
+
 function toggleGoogleResourceName(
   current: string,
   resourceName: string,
@@ -1185,6 +1340,103 @@ async function fetchGoogleLookupOptions(
     Boolean(getGoogleLookupResourceName(item, resourcePrefix)),
   );
 }
+
+type GoogleMerchantCenterLink = {
+  id?: string;
+  name?: string;
+  merchantCenterId?: string;
+  productLinkId?: string;
+  resourceName?: string;
+  type?: string;
+};
+
+type GoogleMerchantCenterDataSource = {
+  dataSourceId?: string;
+  name?: string;
+  resourceName?: string;
+  displayName?: string;
+  type?: string;
+  feedLabel?: string | null;
+  contentLanguage?: string | null;
+  countries?: string[];
+  primaryProductDataSource?: {
+    feedLabel?: string | null;
+    contentLanguage?: string | null;
+    countries?: string[];
+  };
+};
+
+type GoogleMerchantCenterFeedLabelOption = {
+  feedLabel: string;
+  contentLanguage: string;
+  countries?: string[];
+};
+
+type GoogleMerchantCenterProduct = {
+  id?: string;
+  offerId?: string;
+  title?: string;
+  brand?: string;
+  availability?: string;
+  thumbnailLink?: string;
+};
+
+async function fetchGoogleMerchantCenterLookup<T>(
+  apiBaseUrl: string,
+  token: string,
+  endpoint: string,
+  params: Record<string, string> = {},
+): Promise<T> {
+  const url = new URL(
+    `${apiBaseUrl.replace(/\/+$/, "")}/api/campaigns/lookups/google/${endpoint}`,
+  );
+
+  Object.entries(params).forEach(([key, value]) => {
+    if (value) url.searchParams.set(key, value);
+  });
+
+  const response = await fetch(url.toString(), {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/json",
+    },
+    cache: "no-store",
+  });
+
+  const payload = await response.json().catch(() => null);
+  const root = asObject(payload);
+  const apiError = asObject(root.error);
+
+  const message =
+    typeof root.error === "string"
+      ? root.error
+      : apiError.message ?? root.message;
+
+  if (!response.ok || root.success !== true) {
+    throw new Error(
+      String(
+        message ||
+          `Merchant Center ${endpoint} lookup failed (${response.status}).`,
+      ),
+    );
+  }
+
+  if (!root.data || typeof root.data !== "object") {
+    throw new Error(
+      `Merchant Center ${endpoint} returned an invalid response.`,
+    );
+  }
+
+  return root.data as T;
+}
+
+function getMerchantCenterLinkId(
+  link: GoogleMerchantCenterLink,
+): string {
+  return String(link.merchantCenterId ?? link.id ?? "").trim();
+}
+
 export default function CreateCampaignPage() {
   const { getToken, isLoaded, isSignedIn } = useAuth();
   const [googleLocationOptionsOpen, setGoogleLocationOptionsOpen] =
@@ -1193,6 +1445,33 @@ export default function CreateCampaignPage() {
     googleAds: initialConnection,
     metaAds: initialConnection,
   });
+
+  const [googleMerchantCenterId, setGoogleMerchantCenterId] =
+  useState("");
+
+const [googleShoppingPriority, setGoogleShoppingPriority] =
+  useState("0");
+
+const [googleShoppingFeedLabel, setGoogleShoppingFeedLabel] =
+  useState("");
+
+const [googleShoppingContentLanguage, setGoogleShoppingContentLanguage] =
+  useState("");
+
+const [googleShoppingProductGroupType, setGoogleShoppingProductGroupType] =
+  useState("ALL_PRODUCTS");
+
+const [googleShoppingProductGroupValue, setGoogleShoppingProductGroupValue] =
+  useState("");
+  // inside your Locations <Box sx={{ flex: 1 }}>
+  const locationAnchorRef = useRef(null);
+  const [locationOpen, setLocationOpen] = useState(false);
+
+  // open the panel whenever options exist and the user is interacting
+  const showLocationPanel =
+    locationOpen &&
+    googleLocationOptionsOpen;
+
   const [loadingConnections, setLoadingConnections] = useState(true);
   const [connectionError, setConnectionError] = useState("");
   const [error, setError] = useState("");
@@ -1239,8 +1518,8 @@ export default function CreateCampaignPage() {
     googlePortfolioStrategyResourceName,
     setGooglePortfolioStrategyResourceName,
   ] = useState("");
-  const [googleStartDate, setGoogleStartDate] = useState("2026-11-12");
-  const [googleEndDate, setGoogleEndDate] = useState("2026-12-12");
+  const [googleStartDate, setGoogleStartDate] = useState(getTodayString());
+  const [googleEndDate, setGoogleEndDate] = useState(getNextMonthString());
   const [googleGeoTargetResources, setGoogleGeoTargetResources] = useState("");
   const [
     metaCustomConversionOptions,
@@ -1291,15 +1570,7 @@ export default function CreateCampaignPage() {
   >("ALL_HOTELS");
   const [googleHotelPropertyIds, setGoogleHotelPropertyIds] =
     useState("DEMO_HOTEL_001");
-  const [googleMerchantCenterId, setGoogleMerchantCenterId] =
-    useState("123456789");
-  const [googleShoppingPriority, setGoogleShoppingPriority] = useState("0");
-  const [googleShoppingFeedLabel, setGoogleShoppingFeedLabel] =
-    useState("DEMO_FEED");
-  const [googleShoppingProductGroupType, setGoogleShoppingProductGroupType] =
-    useState("ALL_PRODUCTS");
-  const [googleShoppingProductGroupValue, setGoogleShoppingProductGroupValue] =
-    useState("DEMO_CATEGORY");
+
   const [demandGenChannels, setDemandGenChannels] = useState({
     youtube_in_feed: true,
     youtube_in_stream: true,
@@ -1352,8 +1623,8 @@ export default function CreateCampaignPage() {
   );
   const [metaDailyBudget, setMetaDailyBudget] = useState("1200");
   const [metaLifetimeBudget, setMetaLifetimeBudget] = useState("25000");
-  const [metaStartTime, setMetaStartTime] = useState("2026-11-12T09:00");
-  const [metaEndTime, setMetaEndTime] = useState("2026-12-12T18:00");
+  const [metaStartTime, setMetaStartTime] = useState(getTodayString() + "T09:00");
+  const [metaEndTime, setMetaEndTime] = useState(getNextMonthString() + "T18:00");
   const [metaOptimizationGoal, setMetaOptimizationGoal] = useState(
     "OFFSITE_CONVERSIONS",
   );
@@ -1487,26 +1758,57 @@ export default function CreateCampaignPage() {
   const [metaDestinationType, setMetaDestinationType] = useState<
     "WEBSITE" | "INSTANT_FORM" | "MESSAGING" | "APP"
   >("WEBSITE");
-const [metaInstantFormId, setMetaInstantFormId] =
-  useState("");
+  const [metaInstantFormId, setMetaInstantFormId] =
+    useState("");
 
-const [metaInstantFormOptions, setMetaInstantFormOptions] =
-  useState<MetaInstantFormResource[]>([]);
+  const [metaInstantFormOptions, setMetaInstantFormOptions] =
+    useState<MetaInstantFormResource[]>([]);
+  const [metaMessagingDestinationId, setMetaMessagingDestinationId] =
+    useState("");
 
-const [metaInstantFormsLoading, setMetaInstantFormsLoading] =
-  useState(false);
+  const [
+    metaMessagingDestinationOptions,
+    setMetaMessagingDestinationOptions,
+  ] = useState<MetaMessagingDestinationResource[]>([]);
 
-const [metaInstantFormsError, setMetaInstantFormsError] =
-  useState("");
+  const [
+    metaMessagingDestinationsLoading,
+    setMetaMessagingDestinationsLoading,
+  ] = useState(false);
 
-const [metaInstantFormsNextCursor, setMetaInstantFormsNextCursor] =
-  useState<string | null>(null);
-    const [metaMessagingDestinationId, setMetaMessagingDestinationId] =
-    useState("123456789012345");
-  const [metaAppId, setMetaAppId] = useState("com.example.demostore");
-  const [metaAppStoreUrl, setMetaAppStoreUrl] = useState(
-    "https://example.com/app",
-  );
+  const [
+    metaMessagingDestinationsError,
+    setMetaMessagingDestinationsError,
+  ] = useState("");
+
+  const [metaAppId, setMetaAppId] = useState("");
+
+  const [metaAppStoreUrl, setMetaAppStoreUrl] = useState("");
+
+  const [
+    metaAdvertisableApps,
+    setMetaAdvertisableApps,
+  ] = useState<MetaAdvertisableApplicationResource[]>([]);
+
+  const [metaAdvertisableAppsLoading, setMetaAdvertisableAppsLoading] =
+    useState(false);
+
+  const [metaAdvertisableAppsError, setMetaAdvertisableAppsError] =
+    useState("");
+
+  const [metaAdvertisableAppsNextCursor, setMetaAdvertisableAppsNextCursor] =
+    useState<string | null>(null);
+
+
+  const [metaInstantFormsLoading, setMetaInstantFormsLoading] =
+    useState(false);
+
+  const [metaInstantFormsError, setMetaInstantFormsError] =
+    useState("");
+
+  const [metaInstantFormsNextCursor, setMetaInstantFormsNextCursor] =
+    useState<string | null>(null);
+
   const [metaMessagingType, setMetaMessagingType] = useState<
     "MESSENGER" | "INSTAGRAM_DIRECT" | "WHATSAPP"
   >("MESSENGER");
@@ -1615,6 +1917,38 @@ const [metaInstantFormsNextCursor, setMetaInstantFormsNextCursor] =
   const [googlePortfolioStrategyOptions, setGooglePortfolioStrategyOptions] = useState<GoogleAdsLookupOption[]>([]);
   const [googlePortfolioStrategyLoading, setGooglePortfolioStrategyLoading] = useState(false);
   const [googlePortfolioStrategyError, setGooglePortfolioStrategyError] = useState("");
+  const [googleMerchantCenterOptions, setGoogleMerchantCenterOptions] = useState<GoogleAdsLookupOption[]>([]);
+  const [googleMerchantCenterLoading, setGoogleMerchantCenterLoading] = useState(false);
+  const [googleMerchantCenterError, setGoogleMerchantCenterError] = useState("");
+
+const [googleMerchantCenterLinks, setGoogleMerchantCenterLinks] =
+  useState<GoogleMerchantCenterLink[]>([]);
+const [googleMerchantCenterLinksLoading, setGoogleMerchantCenterLinksLoading] =
+  useState(false);
+const [googleMerchantCenterLinksError, setGoogleMerchantCenterLinksError] =
+  useState("");
+
+const [googleMerchantCenterDataSources, setGoogleMerchantCenterDataSources] =
+  useState<GoogleMerchantCenterDataSource[]>([]);
+const [googleMerchantCenterDataSourcesLoading, setGoogleMerchantCenterDataSourcesLoading] =
+  useState(false);
+const [googleMerchantCenterDataSourcesError, setGoogleMerchantCenterDataSourcesError] =
+  useState("");
+
+const [googleMerchantCenterFeedLabels, setGoogleMerchantCenterFeedLabels] =
+  useState<GoogleMerchantCenterFeedLabelOption[]>([]);
+const [googleMerchantCenterFeedLabelsLoading, setGoogleMerchantCenterFeedLabelsLoading] =
+  useState(false);
+const [googleMerchantCenterFeedLabelsError, setGoogleMerchantCenterFeedLabelsError] =
+  useState("");
+
+const [googleMerchantCenterProducts, setGoogleMerchantCenterProducts] =
+  useState<GoogleMerchantCenterProduct[]>([]);
+const [googleMerchantCenterProductsLoading, setGoogleMerchantCenterProductsLoading] =
+  useState(false);
+const [googleMerchantCenterProductsError, setGoogleMerchantCenterProductsError] =
+  useState("");
+
 
   // Meta audience and location resource discovery is scoped to the selected
   // Meta account wherever the provider API exposes account-owned resources.
@@ -1634,6 +1968,138 @@ const [metaInstantFormsNextCursor, setMetaInstantFormsNextCursor] =
   const [metaLocationLoading, setMetaLocationLoading] = useState(false);
   const [metaLocationError, setMetaLocationError] = useState("");
   const [metaSelectedLocationOptions, setMetaSelectedLocationOptions] = useState<MetaCampaignLookupOption[]>([]);
+
+  const [campaignSearch, setCampaignSearch] = useState("");
+  const [campaignPlatformFilter, setCampaignPlatformFilter] =
+    useState<CampaignPlatformFilter>("ALL");
+  const [campaignStatusFilter, setCampaignStatusFilter] = useState<
+    CampaignLifecycleStatus | "ALL"
+  >("ALL");
+  const [selectedCampaignId, setSelectedCampaignId] = useState("DEMO-CMP-001");
+  const [campaignNotice, setCampaignNotice] = useState("");
+  // Shared, authenticated Asset Library data; no seeded demo assets.
+  const [assetLibrary, setAssetLibrary] = useState<CampaignLibraryAsset[]>([]);
+  const [assetLibraryLoading, setAssetLibraryLoading] = useState(false);
+  const [assetLibraryError, setAssetLibraryError] = useState("");
+  const [assetLibraryPreviewUrls, setAssetLibraryPreviewUrls] = useState<Record<string, string>>({});
+  const [assetLibraryPreviewFailures, setAssetLibraryPreviewFailures] = useState<Record<string, boolean>>({});
+  const [assetLibraryOpen, setAssetLibraryOpen] = useState(false);
+  const [assetNotice, setAssetNotice] = useState("");
+  const [reviewingAssetIds, setReviewingAssetIds] = useState<string[]>([]);
+  const [assetLibraryFilter, setAssetLibraryFilter] = useState<
+    "ALL" | "IMAGE" | "VIDEO" | "LOGO" | "TEXT"
+  >("ALL");
+  const [assetLibrarySearch, setAssetLibrarySearch] = useState("");
+
+  const [googleCreativeAspectRatio, setGoogleCreativeAspectRatio] =
+    useState<CreativeAspectRatio>("1.91:1");
+  const [aiCreativePrompt, setAiCreativePrompt] = useState(description);
+  const [aiCreativeStyle, setAiCreativeStyle] = useState("Premium lifestyle");
+  const [aiCreativeAspectRatio, setAiCreativeAspectRatio] =
+    useState<CreativeAspectRatio>("1:1");
+  const [aiCreativeTextOnly, setAiCreativeTextOnly] = useState(false);
+  const [aiCreativeGeneratePmaxLogoConcepts, setAiCreativeGeneratePmaxLogoConcepts] = useState(false);
+  const [aiCreativeVariationCount, setAiCreativeVariationCount] = useState<
+    1 | 2 | 3
+  >(2);
+  const [aiCreativeGenerating, setAiCreativeGenerating] = useState(false);
+  const [aiCreativeSaving, setAiCreativeSaving] = useState(false);
+  const [aiCreativeError, setAiCreativeError] = useState("");
+  const [aiCreativeNotice, setAiCreativeNotice] = useState("");
+  const [aiCreativeMeta, setAiCreativeMeta] = useState<{
+    model?: string;
+    imageProvider?: string;
+    generatedCount?: number;
+    failedCount?: number;
+    requestedAssetCount?: number;
+    generatedAssetCount?: number;
+    failedAssetCount?: number;
+    generationId?: string;
+  } | null>(null);
+  const [creativeVariations, setCreativeVariations] = useState<
+    CreativeVariation[]
+  >([]);
+  const [campaignGeneratedAssets, setCampaignGeneratedAssets] = useState<
+    GeneratedCreativeAsset[]
+  >([]);
+  const [campaignAssetErrors, setCampaignAssetErrors] = useState<
+    CreativeAssetGenerationError[]
+  >([]);
+  const [generatedCapabilityCopies, setGeneratedCapabilityCopies] = useState<
+    NonNullable<GenerateCreativeResponse["generatedCapabilityCopies"]>
+  >([]);
+  const [creativeBrandIdentity, setCreativeBrandIdentity] = useState<
+    GenerateCreativeResponse["brandIdentity"] | null
+  >(null);
+  const [selectedCreativeId, setSelectedCreativeId] = useState<string | null>(
+    null,
+  );
+  const [attachedCreativeAssetIds, setAttachedCreativeAssetIds] = useState<
+    string[]
+  >([]);
+  const [savingCampaignAssetIds, setSavingCampaignAssetIds] = useState<
+    string[]
+  >([]);
+  // Keys are generated-asset IDs; values point to the permanent Asset Library ID.
+  const [savedCampaignAssetIds, setSavedCampaignAssetIds] = useState<
+    Record<string, string>
+  >({});
+  // Keys are permanent Asset Library IDs so campaign requests can retain the
+  // exact campaign capability/requirement that each generated image fulfils.
+  const [campaignAssetAssignments, setCampaignAssetAssignments] = useState<
+    Record<string, CampaignCreativeTargetReference>
+  >({});
+  const [creativeStudioNotice, setCreativeStudioNotice] = useState("");
+  const [managedStatuses, setManagedStatuses] = useState<
+    Record<string, ManagedStatus>
+  >({});
+  const [duplicatedDrafts, setDuplicatedDrafts] = useState<string[]>([]);
+  const [savedDraft, setSavedDraft] = useState<{
+    name: string;
+    savedAt: string;
+    step: number;
+  } | null>(null);
+
+  const [preparedPayload, setPreparedPayload] = useState("");
+  const [copyNotice, setCopyNotice] = useState("");
+  const [demoJob, setDemoJob] = useState<DemoCreationJob | null>(null);
+  const [executionMode, setExecutionMode] =
+    useState<CampaignExecutionMode>("VALIDATE_ONLY");
+  const [campaignSubmitting, setCampaignSubmitting] = useState(false);
+
+  const [campaignApiResponse, setCampaignApiResponse] = useState<unknown>(null);
+
+  const [campaignApiError, setCampaignApiError] = useState("");
+  const [retryingMetaAction, setRetryingMetaAction] = useState<"ad-set" | "creative" | null>(null);
+  const [metaRetryResult, setMetaRetryResult] = useState<{
+    action: "ad-set" | "creative";
+    message: string;
+    resourceId?: string;
+  } | null>(null);
+  const [metaRetryNeedsAttention, setMetaRetryNeedsAttention] = useState(false);
+
+  const [apiPayloadPreview, setApiPayloadPreview] = useState("");
+  const [googleDisplayLandscapeFile, setGoogleDisplayLandscapeFile] =
+    useState<File | null>(null);
+
+  const [googleDisplaySquareFile, setGoogleDisplaySquareFile] =
+    useState<File | null>(null);
+
+  const [
+    googleDisplayLandscapeAssetResourceName,
+    setGoogleDisplayLandscapeAssetResourceName,
+  ] = useState("");
+
+  const [
+    googleDisplaySquareAssetResourceName,
+    setGoogleDisplaySquareAssetResourceName,
+  ] = useState("");
+
+  const [googleDisplayAssetUploading, setGoogleDisplayAssetUploading] =
+    useState<"LANDSCAPE" | "SQUARE" | null>(null);
+
+  const [googleDisplayAssetUploadError, setGoogleDisplayAssetUploadError] =
+    useState("");
 
   useEffect(() => {
     if (!isLoaded) return;
@@ -1837,6 +2303,7 @@ const [metaInstantFormsNextCursor, setMetaInstantFormsNextCursor] =
         ...(nextDrafts as ManagedCampaignRecord[]),
       ]);
     };
+
     window.addEventListener("storage", handleStorage);
     return () => window.removeEventListener("storage", handleStorage);
   }, []);
@@ -1859,201 +2326,309 @@ const [metaInstantFormsNextCursor, setMetaInstantFormsNextCursor] =
     );
     writeManagedCampaigns(localDrafts);
   }, [campaignRecords, campaignRecordsLoaded]);
+
   useEffect(() => {
-  let cancelled = false;
+    let cancelled = false;
 
-  // A form belongs to a specific Page. Clear the previous
-  // selection whenever the Page or destination changes.
-  setMetaInstantFormId("");
-  setMetaInstantFormOptions([]);
-  setMetaInstantFormsNextCursor(null);
-  setMetaInstantFormsError("");
+    // A form belongs to a specific Page. Clear the previous
+    // selection whenever the Page or destination changes.
+    setMetaInstantFormId("");
+    setMetaInstantFormOptions([]);
+    setMetaInstantFormsNextCursor(null);
+    setMetaInstantFormsError("");
 
-  if (
-    !isLoaded ||
-    !isSignedIn ||
-    metaDestinationType !== "INSTANT_FORM" ||
-    !metaPageId.trim()
-  ) {
-    setMetaInstantFormsLoading(false);
-    return;
-  }
-
-  const loadInstantForms = async () => {
-    setMetaInstantFormsLoading(true);
-
-    try {
-      const result = await requestMetaInstantForms(
-        getToken,
-        metaPageId.trim(),
-      );
-
-      if (cancelled) return;
-
-      setMetaInstantFormOptions(result.forms ?? []);
-      setMetaInstantFormsNextCursor(
-        result.pagination?.nextCursor ?? null,
-      );
-    } catch (error) {
-      if (cancelled) return;
-
-      setMetaInstantFormOptions([]);
-      setMetaInstantFormsError(
-        error instanceof Error
-          ? error.message
-          : "Unable to load Meta Instant Forms.",
-      );
-    } finally {
-      if (!cancelled) {
-        setMetaInstantFormsLoading(false);
-      }
+    if (
+      !isLoaded ||
+      !isSignedIn ||
+      metaDestinationType !== "INSTANT_FORM" ||
+      !metaPageId.trim()
+    ) {
+      setMetaInstantFormsLoading(false);
+      return;
     }
-  };
 
-  void loadInstantForms();
+    const loadInstantForms = async () => {
+      setMetaInstantFormsLoading(true);
 
-  return () => {
-    cancelled = true;
-  };
-}, [
-  getToken,
-  isLoaded,
-  isSignedIn,
-  metaDestinationType,
-  metaPageId,
-]);
+      try {
+        const result = await requestMetaInstantForms(
+          getToken,
+          metaPageId.trim(),
+        );
 
-  const [campaignSearch, setCampaignSearch] = useState("");
-  const [campaignPlatformFilter, setCampaignPlatformFilter] =
-    useState<CampaignPlatformFilter>("ALL");
-  const [campaignStatusFilter, setCampaignStatusFilter] = useState<
-    CampaignLifecycleStatus | "ALL"
-  >("ALL");
-  const [selectedCampaignId, setSelectedCampaignId] = useState("DEMO-CMP-001");
-  const [campaignNotice, setCampaignNotice] = useState("");
-  // Shared, authenticated Asset Library data; no seeded demo assets.
-  const [assetLibrary, setAssetLibrary] = useState<CampaignLibraryAsset[]>([]);
-  const [assetLibraryLoading, setAssetLibraryLoading] = useState(false);
-  const [assetLibraryError, setAssetLibraryError] = useState("");
-  const [assetLibraryPreviewUrls, setAssetLibraryPreviewUrls] = useState<Record<string, string>>({});
-  const [assetLibraryPreviewFailures, setAssetLibraryPreviewFailures] = useState<Record<string, boolean>>({});
-  const [assetLibraryOpen, setAssetLibraryOpen] = useState(false);
-  const [assetNotice, setAssetNotice] = useState("");
-  const [reviewingAssetIds, setReviewingAssetIds] = useState<string[]>([]);
-  const [assetLibraryFilter, setAssetLibraryFilter] = useState<
-    "ALL" | "IMAGE" | "VIDEO" | "LOGO" | "TEXT"
-  >("ALL");
-  const [assetLibrarySearch, setAssetLibrarySearch] = useState("");
+        if (cancelled) return;
 
-  const [googleCreativeAspectRatio, setGoogleCreativeAspectRatio] =
-    useState<CreativeAspectRatio>("1.91:1");
-  const [aiCreativePrompt, setAiCreativePrompt] = useState(description);
-  const [aiCreativeStyle, setAiCreativeStyle] = useState("Premium lifestyle");
-  const [aiCreativeAspectRatio, setAiCreativeAspectRatio] =
-    useState<CreativeAspectRatio>("1:1");
-  const [aiCreativeTextOnly, setAiCreativeTextOnly] = useState(false);
-  const [aiCreativeGeneratePmaxLogoConcepts, setAiCreativeGeneratePmaxLogoConcepts] = useState(false);
-  const [aiCreativeVariationCount, setAiCreativeVariationCount] = useState<
-    1 | 2 | 3
-  >(2);
-  const [aiCreativeGenerating, setAiCreativeGenerating] = useState(false);
-  const [aiCreativeSaving, setAiCreativeSaving] = useState(false);
-  const [aiCreativeError, setAiCreativeError] = useState("");
-  const [aiCreativeNotice, setAiCreativeNotice] = useState("");
-  const [aiCreativeMeta, setAiCreativeMeta] = useState<{
-    model?: string;
-    imageProvider?: string;
-    generatedCount?: number;
-    failedCount?: number;
-    requestedAssetCount?: number;
-    generatedAssetCount?: number;
-    failedAssetCount?: number;
-    generationId?: string;
-  } | null>(null);
-  const [creativeVariations, setCreativeVariations] = useState<
-    CreativeVariation[]
-  >([]);
-  const [campaignGeneratedAssets, setCampaignGeneratedAssets] = useState<
-    GeneratedCreativeAsset[]
-  >([]);
-  const [campaignAssetErrors, setCampaignAssetErrors] = useState<
-    CreativeAssetGenerationError[]
-  >([]);
-  const [generatedCapabilityCopies, setGeneratedCapabilityCopies] = useState<
-    NonNullable<GenerateCreativeResponse["generatedCapabilityCopies"]>
-  >([]);
-  const [creativeBrandIdentity, setCreativeBrandIdentity] = useState<
-    GenerateCreativeResponse["brandIdentity"] | null
-  >(null);
-  const [selectedCreativeId, setSelectedCreativeId] = useState<string | null>(
-    null,
-  );
-  const [attachedCreativeAssetIds, setAttachedCreativeAssetIds] = useState<
-    string[]
-  >([]);
-  const [savingCampaignAssetIds, setSavingCampaignAssetIds] = useState<
-    string[]
-  >([]);
-  // Keys are generated-asset IDs; values point to the permanent Asset Library ID.
-  const [savedCampaignAssetIds, setSavedCampaignAssetIds] = useState<
-    Record<string, string>
-  >({});
-  // Keys are permanent Asset Library IDs so campaign requests can retain the
-  // exact campaign capability/requirement that each generated image fulfils.
-  const [campaignAssetAssignments, setCampaignAssetAssignments] = useState<
-    Record<string, CampaignCreativeTargetReference>
-  >({});
-  const [creativeStudioNotice, setCreativeStudioNotice] = useState("");
-  const [managedStatuses, setManagedStatuses] = useState<
-    Record<string, ManagedStatus>
-  >({});
-  const [duplicatedDrafts, setDuplicatedDrafts] = useState<string[]>([]);
-  const [savedDraft, setSavedDraft] = useState<{
-    name: string;
-    savedAt: string;
-    step: number;
-  } | null>(null);
+        setMetaInstantFormOptions(result.forms ?? []);
+        setMetaInstantFormsNextCursor(
+          result.pagination?.nextCursor ?? null,
+        );
+      } catch (error) {
+        if (cancelled) return;
 
-  const [preparedPayload, setPreparedPayload] = useState("");
-  const [copyNotice, setCopyNotice] = useState("");
-  const [demoJob, setDemoJob] = useState<DemoCreationJob | null>(null);
-  const [executionMode, setExecutionMode] =
-    useState<CampaignExecutionMode>("VALIDATE_ONLY");
-  const [campaignSubmitting, setCampaignSubmitting] = useState(false);
+        setMetaInstantFormOptions([]);
+        setMetaInstantFormsError(
+          error instanceof Error
+            ? error.message
+            : "Unable to load Meta Instant Forms.",
+        );
+      } finally {
+        if (!cancelled) {
+          setMetaInstantFormsLoading(false);
+        }
+      }
+    };
 
-  const [campaignApiResponse, setCampaignApiResponse] = useState<unknown>(null);
 
-  const [campaignApiError, setCampaignApiError] = useState("");
-  const [retryingMetaAction, setRetryingMetaAction] = useState<"ad-set" | "creative" | null>(null);
-  const [metaRetryResult, setMetaRetryResult] = useState<{
-    action: "ad-set" | "creative";
-    message: string;
-    resourceId?: string;
-  } | null>(null);
-  const [metaRetryNeedsAttention, setMetaRetryNeedsAttention] = useState(false);
 
-  const [apiPayloadPreview, setApiPayloadPreview] = useState("");
-  const [googleDisplayLandscapeFile, setGoogleDisplayLandscapeFile] =
-    useState<File | null>(null);
+    void loadInstantForms();
 
-  const [googleDisplaySquareFile, setGoogleDisplaySquareFile] =
-    useState<File | null>(null);
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    getToken,
+    isLoaded,
+    isSignedIn,
+    metaDestinationType,
+    metaPageId,
+  ]);
 
-  const [
-    googleDisplayLandscapeAssetResourceName,
-    setGoogleDisplayLandscapeAssetResourceName,
-  ] = useState("");
+  useEffect(() => {
+    let cancelled = false;
 
-  const [
-    googleDisplaySquareAssetResourceName,
-    setGoogleDisplaySquareAssetResourceName,
-  ] = useState("");
+    // A messaging identity belongs to the selected Page.
+    // Clear old choices whenever the Page or destination changes.
+    setMetaMessagingDestinationId("");
+    setMetaMessagingDestinationOptions([]);
+    setMetaMessagingDestinationsError("");
 
-  const [googleDisplayAssetUploading, setGoogleDisplayAssetUploading] =
-    useState<"LANDSCAPE" | "SQUARE" | null>(null);
+    if (
+      !isLoaded ||
+      !isSignedIn ||
+      !connections.metaAds.connected ||
+      !connections.metaAds.selectedAccountId ||
+      metaDestinationType !== "MESSAGING" ||
+      !metaPageId.trim()
+    ) {
+      setMetaMessagingDestinationsLoading(false);
+      return;
+    }
 
-  const [googleDisplayAssetUploadError, setGoogleDisplayAssetUploadError] =
-    useState("");
+    const loadMessagingDestinations = async () => {
+      setMetaMessagingDestinationsLoading(true);
+
+      try {
+        const result = await requestMetaMessagingDestinations(
+          getToken,
+          metaPageId.trim(),
+        );
+
+        if (cancelled) return;
+
+        setMetaMessagingDestinationOptions(
+          result.destinations ?? [],
+        );
+      } catch (error) {
+        if (cancelled) return;
+
+        setMetaMessagingDestinationOptions([]);
+        setMetaMessagingDestinationsError(
+          error instanceof Error
+            ? error.message
+            : "Unable to load Meta messaging destinations.",
+        );
+      } finally {
+        if (!cancelled) {
+          setMetaMessagingDestinationsLoading(false);
+        }
+      }
+    };
+
+    void loadMessagingDestinations();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    getToken,
+    isLoaded,
+    isSignedIn,
+    connections.metaAds.connected,
+    connections.metaAds.selectedAccountId,
+    metaDestinationType,
+    metaPageId,
+  ]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    // App identity belongs to the selected Ad Account.
+    setMetaAppId("");
+    setMetaAppStoreUrl("");
+    setMetaAdvertisableApps([]);
+    setMetaAdvertisableAppsNextCursor(null);
+    setMetaAdvertisableAppsError("");
+
+    if (
+      !isLoaded ||
+      !isSignedIn ||
+      !connections.metaAds.connected ||
+      !connections.metaAds.selectedAccountId
+    ) {
+      setMetaAdvertisableAppsLoading(false);
+      return;
+    }
+
+    const loadAdvertisableApplications = async () => {
+      setMetaAdvertisableAppsLoading(true);
+
+      try {
+        const result = await requestMetaAdvertisableApplications(
+          getToken,
+        );
+
+        if (cancelled) return;
+
+        setMetaAdvertisableApps(
+          result.applications ?? [],
+        );
+
+        setMetaAdvertisableAppsNextCursor(
+          result.pagination?.nextCursor ?? null,
+        );
+      } catch (error) {
+        if (cancelled) return;
+
+        setMetaAdvertisableApps([]);
+        setMetaAdvertisableAppsError(
+          error instanceof Error
+            ? error.message
+            : "Unable to load advertisable Meta applications.",
+        );
+      } finally {
+        if (!cancelled) {
+          setMetaAdvertisableAppsLoading(false);
+        }
+      }
+    };
+
+    void loadAdvertisableApplications();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    getToken,
+    isLoaded,
+    isSignedIn,
+    connections.metaAds.connected,
+    connections.metaAds.selectedAccountId,
+  ]);
+
+  useEffect(() => {
+    if (!isLoaded) return;
+
+    let cancelled = false;
+
+    const selectedAccountId = connections.googleAds.selectedAccountId;
+
+    const resetMerchantCenter = () => {
+      setGoogleMerchantCenterId("");
+      setGoogleMerchantCenterLinks([]);
+      setGoogleMerchantCenterLinksError("");
+      setGoogleMerchantCenterLinksLoading(false);
+
+      setGoogleMerchantCenterDataSources([]);
+      setGoogleMerchantCenterFeedLabels([]);
+      setGoogleMerchantCenterProducts([]);
+    };
+
+    if (
+      !isSignedIn ||
+      !connections.googleAds.connected ||
+      !selectedAccountId
+    ) {
+      resetMerchantCenter();
+
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const loadMerchantCenterLinks = async () => {
+      try {
+        setGoogleMerchantCenterLinksLoading(true);
+        setGoogleMerchantCenterLinksError("");
+        setGoogleMerchantCenterId("");
+
+        const token = await getToken();
+
+        if (!token) {
+          throw new Error(
+            "Unable to retrieve your Clerk authentication token.",
+          );
+        }
+
+        const data =
+          await fetchGoogleMerchantCenterLookup<{
+            count?: number;
+            merchantCenterLinks?: GoogleMerchantCenterLink[];
+          }>(
+            API_BASE_URL,
+            token,
+            "merchant-center-links",
+          );
+
+        if (cancelled) return;
+
+        const links = (data.merchantCenterLinks ?? []).filter(
+          (link) => Boolean(getMerchantCenterLinkId(link)),
+        );
+
+        setGoogleMerchantCenterLinks(links);
+
+        if (links.length === 0) {
+          setGoogleMerchantCenterLinksError(
+            "No Merchant Center account is linked to the selected Google Ads customer.",
+          );
+          return;
+        }
+
+        // Automatically select the first real linked Merchant Center.
+        setGoogleMerchantCenterId(
+          getMerchantCenterLinkId(links[0]),
+        );
+      } catch (err) {
+        if (!cancelled) {
+          setGoogleMerchantCenterLinks([]);
+          setGoogleMerchantCenterId("");
+
+          setGoogleMerchantCenterLinksError(
+            err instanceof Error
+              ? err.message
+              : "Unable to load linked Merchant Center accounts.",
+          );
+        }
+      } finally {
+        if (!cancelled) {
+          setGoogleMerchantCenterLinksLoading(false);
+        }
+      }
+    };
+
+    void loadMerchantCenterLinks();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    getToken,
+    isLoaded,
+    isSignedIn,
+    connections.googleAds.connected,
+    connections.googleAds.selectedAccountId,
+  ]);
+
   // Campaign results are derived from the real POST /api/campaigns response.
   const liveApiResponse =
     campaignApiResponse && typeof campaignApiResponse === "object"
@@ -2243,6 +2818,12 @@ const [metaInstantFormsNextCursor, setMetaInstantFormsNextCursor] =
   )
     ? metaBillingEvent
     : availableMetaBillingOptions[0]?.value || "IMPRESSIONS";
+  const geoResources = googleGeoTargetResources
+    .split(/[\n,]+/)
+    .map((v) => v.trim())
+    .filter(Boolean);
+
+  const languageResources = googleLanguageResources;
 
   useEffect(() => {
     if (!isLoaded) return;
@@ -2353,114 +2934,6 @@ const [metaInstantFormsNextCursor, setMetaInstantFormsNextCursor] =
     connections.metaAds.selectedAccountId,
   ]);
 
-  const loadMoreMetaPages = async () => {
-    if (!metaPagesNextCursor || metaPagesLoading) return;
-
-    try {
-      setMetaPagesLoading(true);
-      setMetaPagesError("");
-      const payload = await requestMetaPageLookup(getToken, metaPagesNextCursor);
-      const incomingPages = Array.isArray(payload.pages) ? payload.pages : [];
-      setMetaPageOptions((current) => {
-        const existingIds = new Set(current.map((page) => page.id));
-        return [
-          ...current,
-          ...incomingPages.filter((page) => !existingIds.has(page.id)),
-        ];
-      });
-      setMetaPagesNextCursor(payload.pagination?.nextCursor ?? null);
-    } catch (err) {
-      setMetaPagesError(
-        err instanceof Error ? err.message : "Unable to load more Facebook Pages.",
-      );
-    } finally {
-      setMetaPagesLoading(false);
-    }
-  };
-
-  const refreshMetaPages = async () => {
-    if (metaPagesLoading) return;
-
-    try {
-      setMetaPagesLoading(true);
-      setMetaPagesError("");
-      const payload = await requestMetaPageLookup(getToken);
-      const refreshedPages = Array.isArray(payload.pages) ? payload.pages : [];
-      setMetaPageOptions(refreshedPages);
-      setMetaPagesNextCursor(payload.pagination?.nextCursor ?? null);
-
-      if (metaPageId && !refreshedPages.some((page) => page.id === metaPageId)) {
-        setMetaPageId("");
-        setMetaInstagramActorId("");
-        clearPreview();
-      } else if (metaPageId) {
-        const refreshedSelection = refreshedPages.find(
-          (page) => page.id === metaPageId,
-        );
-        const linkedInstagramId =
-          refreshedSelection?.instagram_business_account?.id ?? "";
-        if (metaInstagramActorId && metaInstagramActorId !== linkedInstagramId) {
-          setMetaInstagramActorId(linkedInstagramId);
-          clearPreview();
-        }
-      }
-    } catch (err) {
-      setMetaPagesError(
-        err instanceof Error ? err.message : "Unable to refresh Facebook Pages.",
-      );
-    } finally {
-      setMetaPagesLoading(false);
-    }
-  };
-
-  const loadMoreMetaInstantForms = async () => {
-  if (
-    !metaPageId ||
-    !metaInstantFormsNextCursor ||
-    metaInstantFormsLoading
-  ) {
-    return;
-  }
-
-  try {
-    setMetaInstantFormsLoading(true);
-    setMetaInstantFormsError("");
-
-    const result = await requestMetaInstantForms(
-      getToken,
-      metaPageId,
-      metaInstantFormsNextCursor,
-    );
-
-    const incomingForms = result.forms ?? [];
-
-    setMetaInstantFormOptions((current) => {
-      const existingIds = new Set(
-        current.map((form) => form.id),
-      );
-
-      return [
-        ...current,
-        ...incomingForms.filter(
-          (form) => !existingIds.has(form.id),
-        ),
-      ];
-    });
-
-    setMetaInstantFormsNextCursor(
-      result.pagination?.nextCursor ?? null,
-    );
-  } catch (error) {
-    setMetaInstantFormsError(
-      error instanceof Error
-        ? error.message
-        : "Unable to load more Meta Instant Forms.",
-    );
-  } finally {
-    setMetaInstantFormsLoading(false);
-  }
-};
-  // Load the current user's saved assets from the same API used by the Asset Library page.
   useEffect(() => {
     if (!isLoaded) return;
     if (!isSignedIn) {
@@ -2567,9 +3040,6 @@ const [metaInstantFormsNextCursor, setMetaInstantFormsNextCursor] =
     };
   }, [getToken, isLoaded, isSignedIn]);
 
-  // Private Asset Library media endpoints require the user's bearer token.
-  // Fetch protected content into temporary object URLs so the dialog's <img>
-  // elements can render it; public/external media URLs remain direct URLs.
   useEffect(() => {
     let cancelled = false;
     const objectUrls: string[] = [];
@@ -2654,7 +3124,322 @@ const [metaInstantFormsNextCursor, setMetaInstantFormsNextCursor] =
     };
   }, [assetLibrary, getToken, isLoaded, isSignedIn]);
 
-  // Load live campaigns from the backend after provider connections are known.
+  useEffect(() => {
+    const selectedAccountId = connections.googleAds.selectedAccountId;
+
+    if (!isLoaded || !isSignedIn || !selectedAccountId) {
+      setGoogleLanguageOptions([]);
+      setGoogleUserListOptions([]);
+      setGoogleConversionGoalOptions([]);
+      setGoogleAudienceOptions([]);
+      setGoogleConversionActionOptions([]);
+      setGooglePortfolioStrategyOptions([]);
+      setGoogleMerchantCenterOptions([]);
+      setGoogleMerchantCenterId("");
+      setGoogleAdGroupUserLists("");
+      setGoogleCustomConversionGoalResourceName("");
+      setGooglePortfolioStrategyResourceName("");
+      setGoogleAppEngagementAudienceResource("");
+      setGoogleAppSelectiveConversionActions("");
+      setGoogleDemandGenAudienceResources("");
+      setPmaxAudienceResourceNames("");
+      setGoogleLanguageLoading(false);
+      setGoogleUserListLoading(false);
+      setGoogleConversionGoalLoading(false);
+      setGoogleAudienceLoading(false);
+      setGoogleConversionActionLoading(false);
+      setGooglePortfolioStrategyLoading(false);
+      setGoogleMerchantCenterLoading(false);
+      setGoogleLanguageError("");
+      setGoogleUserListError("");
+      setGoogleConversionGoalError("");
+      setGoogleAudienceError("");
+      setGoogleConversionActionError("");
+      setGooglePortfolioStrategyError("");
+      setGoogleMerchantCenterError("");
+      return;
+    }
+
+    const customerId = normalizeGoogleCustomerId(selectedAccountId);
+
+    if (!/^\d+$/.test(customerId)) {
+      const message = "Invalid selected Google Ads customer ID.";
+
+      setGoogleLanguageOptions([]);
+      setGoogleUserListOptions([]);
+      setGoogleConversionGoalOptions([]);
+      setGoogleAudienceOptions([]);
+      setGoogleConversionActionOptions([]);
+      setGooglePortfolioStrategyOptions([]);
+      setGoogleMerchantCenterOptions([]);
+      setGoogleMerchantCenterId("");
+      setGoogleAdGroupUserLists("");
+      setGoogleCustomConversionGoalResourceName("");
+      setGooglePortfolioStrategyResourceName("");
+      setGoogleAppEngagementAudienceResource("");
+      setGoogleAppSelectiveConversionActions("");
+      setGoogleDemandGenAudienceResources("");
+      setPmaxAudienceResourceNames("");
+      setGoogleLanguageLoading(false);
+      setGoogleUserListLoading(false);
+      setGoogleConversionGoalLoading(false);
+      setGoogleAudienceLoading(false);
+      setGoogleConversionActionLoading(false);
+      setGooglePortfolioStrategyLoading(false);
+      setGoogleMerchantCenterLoading(false);
+      setGoogleLanguageError(message);
+      setGoogleUserListError(message);
+      setGoogleConversionGoalError(message);
+      setGoogleAudienceError(message);
+      setGoogleConversionActionError(message);
+      setGooglePortfolioStrategyError(message);
+      setGoogleMerchantCenterError(message);
+      return;
+    }
+
+    let cancelled = false;
+
+    // Never carry account-specific selections into another Google account.
+    setGoogleMerchantCenterOptions([]);
+    setGoogleMerchantCenterId("");
+    setGoogleMerchantCenterLoading(true);
+    setGoogleMerchantCenterError("");
+    setGoogleAdGroupUserLists("");
+    setGoogleCustomConversionGoalResourceName("");
+    setGooglePortfolioStrategyResourceName("");
+    setGoogleAppEngagementAudienceResource("");
+    setGoogleAppSelectiveConversionActions("");
+    setGoogleDemandGenAudienceResources("");
+    setPmaxAudienceResourceNames("");
+    setGoogleAudienceLoading(true);
+    setGoogleConversionActionLoading(true);
+    setGooglePortfolioStrategyLoading(true);
+
+    setGoogleLanguageLoading(true);
+    setGoogleUserListLoading(true);
+    setGoogleConversionGoalLoading(true);
+
+    setGoogleLanguageError("");
+    setGoogleUserListError("");
+    setGoogleConversionGoalError("");
+    setGoogleConversionGoalError("");
+    setGoogleAudienceError("");
+    setGoogleConversionActionError("");
+    setGooglePortfolioStrategyError("");
+
+    const loadGoogleLookups = async () => {
+      try {
+        const token = await getToken();
+
+        if (!token) {
+          throw new Error(
+            "Unable to retrieve your Clerk authentication token.",
+          );
+        }
+
+        const results = await Promise.allSettled([
+          fetchGoogleLookupOptions(
+            API_BASE_URL,
+            token,
+            customerId,
+            "languages",
+            ["languages"],
+            "languageConstants",
+          ),
+          fetchGoogleLookupOptions(
+            API_BASE_URL,
+            token,
+            customerId,
+            "user-lists",
+            ["userLists", "user_lists"],
+          ),
+          fetchGoogleLookupOptions(
+            API_BASE_URL,
+            token,
+            customerId,
+            "conversion-goals",
+            ["goals", "conversionGoals", "customConversionGoals"],
+          ),
+          fetchGoogleLookupOptions(
+            API_BASE_URL,
+            token,
+            customerId,
+            "audiences",
+            ["audiences"],
+          ),
+          fetchGoogleLookupOptions(
+            API_BASE_URL,
+            token,
+            customerId,
+            "conversion-actions",
+            ["conversionActions", "conversion_actions"],
+          ),
+          fetchGoogleLookupOptions(
+            API_BASE_URL,
+            token,
+            customerId,
+            "portfolio-strategies",
+            ["biddingStrategies", "portfolioStrategies", "strategies"],
+          ),
+          fetchGoogleLookupOptions(
+            API_BASE_URL,
+            token,
+            customerId,
+            "merchant-center-links",
+            ["merchantCenterLinks"],
+          ),
+        ]);
+
+        if (cancelled) return;
+
+        const [languages, userLists, goals, audiences, actions, strategies, merchantCenters] = results;
+
+        if (languages.status === "fulfilled") {
+          setGoogleLanguageOptions(languages.value);
+        } else {
+          setGoogleLanguageOptions([]);
+          setGoogleLanguageError(
+            languages.reason instanceof Error
+              ? languages.reason.message
+              : "Unable to load Google Ads languages.",
+          );
+        }
+
+        if (audiences.status === "fulfilled") {
+          setGoogleAudienceOptions(audiences.value);
+        } else {
+          setGoogleAudienceOptions([]);
+          setGoogleAudienceError(audiences.reason instanceof Error ? audiences.reason.message : "Unable to load Google Ads Audiences.");
+        }
+        if (actions.status === "fulfilled") {
+          setGoogleConversionActionOptions(actions.value);
+        } else {
+          setGoogleConversionActionOptions([]);
+          setGoogleConversionActionError(actions.reason instanceof Error ? actions.reason.message : "Unable to load Google Ads Conversion Actions.");
+        }
+        if (strategies.status === "fulfilled") {
+          setGooglePortfolioStrategyOptions(strategies.value);
+        } else {
+          setGooglePortfolioStrategyOptions([]);
+          setGooglePortfolioStrategyError(strategies.reason instanceof Error ? strategies.reason.message : "Unable to load Google Ads portfolio strategies.");
+        }
+
+        if (merchantCenters.status === "fulfilled") {
+          setGoogleMerchantCenterOptions(merchantCenters.value);
+        } else {
+          setGoogleMerchantCenterOptions([]);
+          setGoogleMerchantCenterError(
+            merchantCenters.reason instanceof Error
+              ? merchantCenters.reason.message
+              : "Unable to load linked Merchant Center accounts.",
+          );
+        }
+
+        if (userLists.status === "fulfilled") {
+          setGoogleUserListOptions(userLists.value);
+        } else {
+          setGoogleUserListOptions([]);
+          setGoogleUserListError(
+            userLists.reason instanceof Error
+              ? userLists.reason.message
+              : "Unable to load Google Ads user lists.",
+          );
+        }
+
+        if (goals.status === "fulfilled") {
+          setGoogleConversionGoalOptions(goals.value);
+        } else {
+          setGoogleConversionGoalOptions([]);
+          setGoogleConversionGoalError(
+            goals.reason instanceof Error
+              ? goals.reason.message
+              : "Unable to load Google Ads conversion goals.",
+          );
+        }
+      } catch (err) {
+        if (!cancelled) {
+          const message =
+            err instanceof Error
+              ? err.message
+              : "Unable to load Google Ads lookup data.";
+
+          setGoogleLanguageError(message);
+          setGoogleUserListError(message);
+          setGoogleConversionGoalError(message);
+          setGoogleAudienceError(message);
+          setGoogleConversionActionError(message);
+          setGooglePortfolioStrategyError(message);
+          setGoogleMerchantCenterOptions([]);
+          setGoogleMerchantCenterError(message);
+        }
+      } finally {
+        if (!cancelled) {
+          setGoogleLanguageLoading(false);
+          setGoogleUserListLoading(false);
+          setGoogleConversionGoalLoading(false);
+          setGoogleAudienceLoading(false);
+          setGoogleConversionActionLoading(false);
+          setGooglePortfolioStrategyLoading(false);
+          setGoogleMerchantCenterLoading(false);
+        }
+      }
+    };
+
+    void loadGoogleLookups();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [getToken, isLoaded, isSignedIn, connections.googleAds.selectedAccountId]);
+
+  useEffect(() => {
+    const selectedAccountId = connections.metaAds.selectedAccountId;
+    if (!isLoaded || !isSignedIn || !selectedAccountId) {
+      setMetaCustomAudienceOptions([]);
+      setMetaSavedAudienceOptions([]);
+      setMetaSelectedSavedAudience(null);
+      setMetaIncludedCustomAudienceIds("");
+      setMetaExcludedCustomAudienceIds("");
+      setMetaSelectedInterestOptions([]);
+      setMetaAudienceLoading(false);
+      setMetaAudienceError("");
+      return;
+    }
+
+    let cancelled = false;
+    setMetaCustomAudienceOptions([]);
+    setMetaSavedAudienceOptions([]);
+    setMetaSelectedSavedAudience(null);
+    setMetaIncludedCustomAudienceIds("");
+    setMetaExcludedCustomAudienceIds("");
+    setMetaSelectedInterestOptions([]);
+    setMetaAudienceLoading(true);
+    setMetaAudienceError("");
+
+    const loadMetaAudiences = async () => {
+      try {
+        const token = await getToken();
+        if (!token) throw new Error("Unable to retrieve your Clerk authentication token.");
+        const results = await Promise.allSettled([
+          fetchMetaCampaignLookupOptions(API_BASE_URL, token, "meta/audiences/custom", { limit: "100" }),
+          fetchMetaCampaignLookupOptions(API_BASE_URL, token, "meta/audiences/saved", { limit: "100" }),
+        ]);
+        if (cancelled) return;
+        const [custom, saved] = results;
+        if (custom.status === "fulfilled") setMetaCustomAudienceOptions(custom.value);
+        else setMetaAudienceError(custom.reason instanceof Error ? custom.reason.message : "Unable to load Meta Custom Audiences.");
+        if (saved.status === "fulfilled") setMetaSavedAudienceOptions(saved.value);
+        else setMetaAudienceError((current) => current || (saved.reason instanceof Error ? saved.reason.message : "Unable to load Meta Saved Audiences."));
+      } catch (lookupError) {
+        if (!cancelled) setMetaAudienceError(lookupError instanceof Error ? lookupError.message : "Unable to load Meta audience resources.");
+      } finally {
+        if (!cancelled) setMetaAudienceLoading(false);
+      }
+    };
+    void loadMetaAudiences();
+    return () => { cancelled = true; };
+  }, [getToken, isLoaded, isSignedIn, connections.metaAds.selectedAccountId]);
+
   useEffect(() => {
     if (
       !isLoaded ||
@@ -2780,6 +3565,160 @@ const [metaInstantFormsNextCursor, setMetaInstantFormsNextCursor] =
     connections.metaAds.selectedAccountId,
   ]);
 
+  const loadMoreMetaPages = async () => {
+    if (!metaPagesNextCursor || metaPagesLoading) return;
+
+    try {
+      setMetaPagesLoading(true);
+      setMetaPagesError("");
+      const payload = await requestMetaPageLookup(getToken, metaPagesNextCursor);
+      const incomingPages = Array.isArray(payload.pages) ? payload.pages : [];
+      setMetaPageOptions((current) => {
+        const existingIds = new Set(current.map((page) => page.id));
+        return [
+          ...current,
+          ...incomingPages.filter((page) => !existingIds.has(page.id)),
+        ];
+      });
+      setMetaPagesNextCursor(payload.pagination?.nextCursor ?? null);
+    } catch (err) {
+      setMetaPagesError(
+        err instanceof Error ? err.message : "Unable to load more Facebook Pages.",
+      );
+    } finally {
+      setMetaPagesLoading(false);
+    }
+  };
+
+  const refreshMetaPages = async () => {
+    if (metaPagesLoading) return;
+
+    try {
+      setMetaPagesLoading(true);
+      setMetaPagesError("");
+      const payload = await requestMetaPageLookup(getToken);
+      const refreshedPages = Array.isArray(payload.pages) ? payload.pages : [];
+      setMetaPageOptions(refreshedPages);
+      setMetaPagesNextCursor(payload.pagination?.nextCursor ?? null);
+
+      if (metaPageId && !refreshedPages.some((page) => page.id === metaPageId)) {
+        setMetaPageId("");
+        setMetaInstagramActorId("");
+        clearPreview();
+      } else if (metaPageId) {
+        const refreshedSelection = refreshedPages.find(
+          (page) => page.id === metaPageId,
+        );
+        const linkedInstagramId =
+          refreshedSelection?.instagram_business_account?.id ?? "";
+        if (metaInstagramActorId && metaInstagramActorId !== linkedInstagramId) {
+          setMetaInstagramActorId(linkedInstagramId);
+          clearPreview();
+        }
+      }
+    } catch (err) {
+      setMetaPagesError(
+        err instanceof Error ? err.message : "Unable to refresh Facebook Pages.",
+      );
+    } finally {
+      setMetaPagesLoading(false);
+    }
+  };
+
+  const loadMoreMetaInstantForms = async () => {
+    if (
+      !metaPageId ||
+      !metaInstantFormsNextCursor ||
+      metaInstantFormsLoading
+    ) {
+      return;
+    }
+
+    try {
+      setMetaInstantFormsLoading(true);
+      setMetaInstantFormsError("");
+
+      const result = await requestMetaInstantForms(
+        getToken,
+        metaPageId,
+        metaInstantFormsNextCursor,
+      );
+
+      const incomingForms = result.forms ?? [];
+
+      setMetaInstantFormOptions((current) => {
+        const existingIds = new Set(
+          current.map((form) => form.id),
+        );
+
+        return [
+          ...current,
+          ...incomingForms.filter(
+            (form) => !existingIds.has(form.id),
+          ),
+        ];
+      });
+
+      setMetaInstantFormsNextCursor(
+        result.pagination?.nextCursor ?? null,
+      );
+    } catch (error) {
+      setMetaInstantFormsError(
+        error instanceof Error
+          ? error.message
+          : "Unable to load more Meta Instant Forms.",
+      );
+    } finally {
+      setMetaInstantFormsLoading(false);
+    }
+  };
+
+  const loadMoreMetaAdvertisableApps = async () => {
+    if (
+      !metaAdvertisableAppsNextCursor ||
+      metaAdvertisableAppsLoading
+    ) {
+      return;
+    }
+
+    try {
+      setMetaAdvertisableAppsLoading(true);
+      setMetaAdvertisableAppsError("");
+
+      const result = await requestMetaAdvertisableApplications(
+        getToken,
+        metaAdvertisableAppsNextCursor,
+      );
+
+      const incomingApps = result.applications ?? [];
+
+      setMetaAdvertisableApps((current) => {
+        const existingIds = new Set(
+          current.map((app) => app.id),
+        );
+
+        return [
+          ...current,
+          ...incomingApps.filter(
+            (app) => !existingIds.has(app.id),
+          ),
+        ];
+      });
+
+      setMetaAdvertisableAppsNextCursor(
+        result.pagination?.nextCursor ?? null,
+      );
+    } catch (error) {
+      setMetaAdvertisableAppsError(
+        error instanceof Error
+          ? error.message
+          : "Unable to load more Meta applications.",
+      );
+    } finally {
+      setMetaAdvertisableAppsLoading(false);
+    }
+  };
+
   const clearPreview = () => {
     setPreparedPayload("");
     setApiPayloadPreview("");
@@ -2790,289 +3729,6 @@ const [metaInstantFormsNextCursor, setMetaInstantFormsNextCursor] =
     setMetaRetryResult(null);
     setMetaRetryNeedsAttention(false);
   };
-
-  useEffect(() => {
-    const selectedAccountId = connections.googleAds.selectedAccountId;
-
-    if (!isLoaded || !isSignedIn || !selectedAccountId) {
-      setGoogleLanguageOptions([]);
-      setGoogleUserListOptions([]);
-      setGoogleConversionGoalOptions([]);
-      setGoogleAudienceOptions([]);
-      setGoogleConversionActionOptions([]);
-      setGooglePortfolioStrategyOptions([]);
-      setGoogleAdGroupUserLists("");
-      setGoogleCustomConversionGoalResourceName("");
-      setGooglePortfolioStrategyResourceName("");
-      setGoogleAppEngagementAudienceResource("");
-      setGoogleAppSelectiveConversionActions("");
-      setGoogleDemandGenAudienceResources("");
-      setPmaxAudienceResourceNames("");
-      setGoogleLanguageLoading(false);
-      setGoogleUserListLoading(false);
-      setGoogleConversionGoalLoading(false);
-      setGoogleAudienceLoading(false);
-      setGoogleConversionActionLoading(false);
-      setGooglePortfolioStrategyLoading(false);
-      setGoogleLanguageError("");
-      setGoogleUserListError("");
-      setGoogleConversionGoalError("");
-      setGoogleAudienceError("");
-      setGoogleConversionActionError("");
-      setGooglePortfolioStrategyError("");
-      return;
-    }
-
-    const customerId = normalizeGoogleCustomerId(selectedAccountId);
-
-    if (!/^\d+$/.test(customerId)) {
-      const message = "Invalid selected Google Ads customer ID.";
-
-      setGoogleLanguageOptions([]);
-      setGoogleUserListOptions([]);
-      setGoogleConversionGoalOptions([]);
-      setGoogleAudienceOptions([]);
-      setGoogleConversionActionOptions([]);
-      setGooglePortfolioStrategyOptions([]);
-      setGoogleAdGroupUserLists("");
-      setGoogleCustomConversionGoalResourceName("");
-      setGooglePortfolioStrategyResourceName("");
-      setGoogleAppEngagementAudienceResource("");
-      setGoogleAppSelectiveConversionActions("");
-      setGoogleDemandGenAudienceResources("");
-      setPmaxAudienceResourceNames("");
-      setGoogleLanguageLoading(false);
-      setGoogleUserListLoading(false);
-      setGoogleConversionGoalLoading(false);
-      setGoogleAudienceLoading(false);
-      setGoogleConversionActionLoading(false);
-      setGooglePortfolioStrategyLoading(false);
-      setGoogleLanguageError(message);
-      setGoogleUserListError(message);
-      setGoogleConversionGoalError(message);
-      setGoogleAudienceError(message);
-      setGoogleConversionActionError(message);
-      setGooglePortfolioStrategyError(message);
-      return;
-    }
-
-    let cancelled = false;
-
-    // Never carry account-specific selections into another Google account.
-    setGoogleAdGroupUserLists("");
-    setGoogleCustomConversionGoalResourceName("");
-    setGooglePortfolioStrategyResourceName("");
-    setGoogleAppEngagementAudienceResource("");
-    setGoogleAppSelectiveConversionActions("");
-    setGoogleDemandGenAudienceResources("");
-    setPmaxAudienceResourceNames("");
-    setGoogleAudienceLoading(true);
-    setGoogleConversionActionLoading(true);
-    setGooglePortfolioStrategyLoading(true);
-
-    setGoogleLanguageLoading(true);
-    setGoogleUserListLoading(true);
-    setGoogleConversionGoalLoading(true);
-
-    setGoogleLanguageError("");
-    setGoogleUserListError("");
-    setGoogleConversionGoalError("");
-    setGoogleConversionGoalError("");
-    setGoogleAudienceError("");
-    setGoogleConversionActionError("");
-    setGooglePortfolioStrategyError("");
-
-    const loadGoogleLookups = async () => {
-      try {
-        const token = await getToken();
-
-        if (!token) {
-          throw new Error(
-            "Unable to retrieve your Clerk authentication token.",
-          );
-        }
-
-        const results = await Promise.allSettled([
-          fetchGoogleLookupOptions(
-            API_BASE_URL,
-            token,
-            customerId,
-            "languages",
-            ["languages"],
-            "languageConstants",
-          ),
-          fetchGoogleLookupOptions(
-            API_BASE_URL,
-            token,
-            customerId,
-            "user-lists",
-            ["userLists", "user_lists"],
-          ),
-          fetchGoogleLookupOptions(
-            API_BASE_URL,
-            token,
-            customerId,
-            "conversion-goals",
-            ["goals", "conversionGoals", "customConversionGoals"],
-          ),
-          fetchGoogleLookupOptions(
-            API_BASE_URL,
-            token,
-            customerId,
-            "audiences",
-            ["audiences"],
-          ),
-          fetchGoogleLookupOptions(
-            API_BASE_URL,
-            token,
-            customerId,
-            "conversion-actions",
-            ["conversionActions", "conversion_actions"],
-          ),
-          fetchGoogleLookupOptions(
-            API_BASE_URL,
-            token,
-            customerId,
-            "portfolio-strategies",
-            ["biddingStrategies", "portfolioStrategies", "strategies"],
-          ),
-        ]);
-
-        if (cancelled) return;
-
-        const [languages, userLists, goals, audiences, actions, strategies] = results;
-
-        if (languages.status === "fulfilled") {
-          setGoogleLanguageOptions(languages.value);
-        } else {
-          setGoogleLanguageOptions([]);
-          setGoogleLanguageError(
-            languages.reason instanceof Error
-              ? languages.reason.message
-              : "Unable to load Google Ads languages.",
-          );
-        }
-
-        if (audiences.status === "fulfilled") {
-          setGoogleAudienceOptions(audiences.value);
-        } else {
-          setGoogleAudienceOptions([]);
-          setGoogleAudienceError(audiences.reason instanceof Error ? audiences.reason.message : "Unable to load Google Ads Audiences.");
-        }
-        if (actions.status === "fulfilled") {
-          setGoogleConversionActionOptions(actions.value);
-        } else {
-          setGoogleConversionActionOptions([]);
-          setGoogleConversionActionError(actions.reason instanceof Error ? actions.reason.message : "Unable to load Google Ads Conversion Actions.");
-        }
-        if (strategies.status === "fulfilled") {
-          setGooglePortfolioStrategyOptions(strategies.value);
-        } else {
-          setGooglePortfolioStrategyOptions([]);
-          setGooglePortfolioStrategyError(strategies.reason instanceof Error ? strategies.reason.message : "Unable to load Google Ads portfolio strategies.");
-        }
-
-        if (userLists.status === "fulfilled") {
-          setGoogleUserListOptions(userLists.value);
-        } else {
-          setGoogleUserListOptions([]);
-          setGoogleUserListError(
-            userLists.reason instanceof Error
-              ? userLists.reason.message
-              : "Unable to load Google Ads user lists.",
-          );
-        }
-
-        if (goals.status === "fulfilled") {
-          setGoogleConversionGoalOptions(goals.value);
-        } else {
-          setGoogleConversionGoalOptions([]);
-          setGoogleConversionGoalError(
-            goals.reason instanceof Error
-              ? goals.reason.message
-              : "Unable to load Google Ads conversion goals.",
-          );
-        }
-      } catch (err) {
-        if (!cancelled) {
-          const message =
-            err instanceof Error
-              ? err.message
-              : "Unable to load Google Ads lookup data.";
-
-          setGoogleLanguageError(message);
-          setGoogleUserListError(message);
-          setGoogleConversionGoalError(message);
-          setGoogleAudienceError(message);
-          setGoogleConversionActionError(message);
-          setGooglePortfolioStrategyError(message);
-        }
-      } finally {
-        if (!cancelled) {
-          setGoogleLanguageLoading(false);
-          setGoogleUserListLoading(false);
-          setGoogleConversionGoalLoading(false);
-          setGoogleAudienceLoading(false);
-          setGoogleConversionActionLoading(false);
-          setGooglePortfolioStrategyLoading(false);
-        }
-      }
-    };
-
-    void loadGoogleLookups();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [getToken, isLoaded, isSignedIn, connections.googleAds.selectedAccountId]);
-
-  useEffect(() => {
-    const selectedAccountId = connections.metaAds.selectedAccountId;
-    if (!isLoaded || !isSignedIn || !selectedAccountId) {
-      setMetaCustomAudienceOptions([]);
-      setMetaSavedAudienceOptions([]);
-      setMetaSelectedSavedAudience(null);
-      setMetaIncludedCustomAudienceIds("");
-      setMetaExcludedCustomAudienceIds("");
-      setMetaSelectedInterestOptions([]);
-      setMetaAudienceLoading(false);
-      setMetaAudienceError("");
-      return;
-    }
-
-    let cancelled = false;
-    setMetaCustomAudienceOptions([]);
-    setMetaSavedAudienceOptions([]);
-    setMetaSelectedSavedAudience(null);
-    setMetaIncludedCustomAudienceIds("");
-    setMetaExcludedCustomAudienceIds("");
-    setMetaSelectedInterestOptions([]);
-    setMetaAudienceLoading(true);
-    setMetaAudienceError("");
-
-    const loadMetaAudiences = async () => {
-      try {
-        const token = await getToken();
-        if (!token) throw new Error("Unable to retrieve your Clerk authentication token.");
-        const results = await Promise.allSettled([
-          fetchMetaCampaignLookupOptions(API_BASE_URL, token, "meta/audiences/custom", { limit: "100" }),
-          fetchMetaCampaignLookupOptions(API_BASE_URL, token, "meta/audiences/saved", { limit: "100" }),
-        ]);
-        if (cancelled) return;
-        const [custom, saved] = results;
-        if (custom.status === "fulfilled") setMetaCustomAudienceOptions(custom.value);
-        else setMetaAudienceError(custom.reason instanceof Error ? custom.reason.message : "Unable to load Meta Custom Audiences.");
-        if (saved.status === "fulfilled") setMetaSavedAudienceOptions(saved.value);
-        else setMetaAudienceError((current) => current || (saved.reason instanceof Error ? saved.reason.message : "Unable to load Meta Saved Audiences."));
-      } catch (lookupError) {
-        if (!cancelled) setMetaAudienceError(lookupError instanceof Error ? lookupError.message : "Unable to load Meta audience resources.");
-      } finally {
-        if (!cancelled) setMetaAudienceLoading(false);
-      }
-    };
-    void loadMetaAudiences();
-    return () => { cancelled = true; };
-  }, [getToken, isLoaded, isSignedIn, connections.metaAds.selectedAccountId]);
 
   const searchMetaDetailedTargetingOptions = async () => {
     const query = metaTargetingQuery.trim();
@@ -3242,6 +3898,7 @@ const [metaInstantFormsNextCursor, setMetaInstantFormsNextCursor] =
       setGoogleLocationLoading(false);
     }
   };
+
   const choosePlatformMode = (mode: PlatformMode) => {
     setError("");
     clearPreview();
@@ -3348,6 +4005,7 @@ const [metaInstantFormsNextCursor, setMetaInstantFormsNextCursor] =
       setGoogleDisplayAssetUploading(null);
     }
   };
+
   const validateBasics = () => {
     if (!selectedPlatforms.length) {
       setError("Select Google Ads, Meta Ads, or both connected platforms.");
@@ -3387,15 +4045,7 @@ const [metaInstantFormsNextCursor, setMetaInstantFormsNextCursor] =
     setError("");
     return true;
   };
-  console.log("googleLanguageResources", googleLanguageResources);
 
-  const geoResources = googleGeoTargetResources
-    .split(/[\n,]+/)
-    .map((v) => v.trim())
-    .filter(Boolean);
-
-  // googleLanguageResources is already an array
-  const languageResources = googleLanguageResources;
   const validateMetaPageIdentityStep = (): boolean => {
     if (!selectedPlatforms.includes("metaAds")) {
       return true;
@@ -3429,6 +4079,7 @@ const [metaInstantFormsNextCursor, setMetaInstantFormsNextCursor] =
     setError("");
     return true;
   };
+
   const validatePlatformSettings = () => {
     if (
       selectedPlatforms.includes("googleAds") &&
@@ -3566,9 +4217,14 @@ const [metaInstantFormsNextCursor, setMetaInstantFormsNextCursor] =
       selectedPlatforms.includes("googleAds") &&
       googleCampaignType === "SHOPPING"
     ) {
-      if (!/^\d+$/.test(googleMerchantCenterId.trim())) {
+      if (
+        !hasSelectedGoogleMerchantCenter(
+          googleMerchantCenterOptions,
+          googleMerchantCenterId,
+        )
+      ) {
         setError(
-          "Enter the numeric Merchant Center account ID linked to Google Ads.",
+          "Select a Merchant Center account linked to the selected Google Ads customer.",
         );
         return false;
       }
@@ -4085,17 +4741,7 @@ const [metaInstantFormsNextCursor, setMetaInstantFormsNextCursor] =
         assignment.capabilityId === "google-display-responsive-display" &&
         assignment.requirementId === requirementId
       );
-    });
-
-  const GOOGLE_PMAX_CAPABILITY_ID = "google-performance-max-asset-group";
-  const GOOGLE_PMAX_REQUIREMENTS = {
-    LOGO: "google-pmax-logo-images",
-    LANDSCAPE: "google-pmax-landscape-images",
-    SQUARE: "google-pmax-square-images",
-    PORTRAIT: "google-pmax-portrait-images",
-    LANDSCAPE_LOGO: "google-pmax-landscape-logo-images",
-  } as const;
-
+  });
 
   const isAiStudioLogo = (asset: LibraryAsset) =>
     asset.kind === "LOGO" && asset.origin === "AI_STUDIO";
@@ -4103,7 +4749,6 @@ const [metaInstantFormsNextCursor, setMetaInstantFormsNextCursor] =
   const isAiGeneratedLogoDraft = (asset: CampaignLibraryAsset) => {
     return isAiStudioLogo(asset) && asset.reviewStatus !== "APPROVED";
   }
-
 
   const getAttachedGooglePmaxAssets = (requirementId: string) =>
     assetLibrary.filter((asset) => {
@@ -4120,7 +4765,6 @@ const [metaInstantFormsNextCursor, setMetaInstantFormsNextCursor] =
         !(requiresApprovedLogo && isAiGeneratedLogoDraft(asset))
       );
     });
-
 
   const validateAdCreation = () => {
     if (selectedPlatforms.includes("googleAds")) {
@@ -4392,7 +5036,10 @@ const [metaInstantFormsNextCursor, setMetaInstantFormsNextCursor] =
           }
         } else if (googleDemandGenFormat === "PRODUCT_FEED") {
           if (
-            !/^\d+$/.test(googleMerchantCenterId.trim()) ||
+            !hasSelectedGoogleMerchantCenter(
+              googleMerchantCenterOptions,
+              googleMerchantCenterId,
+            ) ||
             !googleDemandGenProductHeadline.trim() ||
             !googleDemandGenProductDescription.trim() ||
             !isValidHttpUrl(googleDemandGenProductLogoUrl)
@@ -4484,33 +5131,33 @@ const [metaInstantFormsNextCursor, setMetaInstantFormsNextCursor] =
         setError("Instant Form destination requires the Leads objective.");
         return false;
       }
-const stepCustomConversion =
-  metaCustomConversionOptions.find(
-    (conversion) =>
-      conversion.id === metaCustomConversionId,
-  );
+      const stepCustomConversion =
+        metaCustomConversionOptions.find(
+          (conversion) =>
+            conversion.id === metaCustomConversionId,
+        );
 
-const hasValidStepCustomConversion = Boolean(
-  stepCustomConversion &&
-    !stepCustomConversion.isArchived &&
-    !stepCustomConversion.isUnavailable &&
-    stepCustomConversion.sourcePixelId ===
-      metaPixelId.trim(),
-);
+      const hasValidStepCustomConversion = Boolean(
+        stepCustomConversion &&
+        !stepCustomConversion.isArchived &&
+        !stepCustomConversion.isUnavailable &&
+        stepCustomConversion.sourcePixelId ===
+        metaPixelId.trim(),
+      );
 
-if (
-  metaDestinationType === "WEBSITE" &&
-  ["OFFSITE_CONVERSIONS", "VALUE"].includes(
-    effectiveMetaOptimizationGoal,
-  ) &&
-  !hasValidStepCustomConversion &&
-  (!metaPixelId.trim() || !metaConversionEvent.trim())
-) {
-  setError(
-    "Website conversion optimization requires either a Pixel with a standard event or an available Custom Conversion.",
-  );
-  return false;
-}
+      if (
+        metaDestinationType === "WEBSITE" &&
+        ["OFFSITE_CONVERSIONS", "VALUE"].includes(
+          effectiveMetaOptimizationGoal,
+        ) &&
+        !hasValidStepCustomConversion &&
+        (!metaPixelId.trim() || !metaConversionEvent.trim())
+      ) {
+        setError(
+          "Website conversion optimization requires either a Pixel with a standard event or an available Custom Conversion.",
+        );
+        return false;
+      }
       if (!metaPrimaryText.trim() || !metaAdHeadline.trim()) {
         setError("Enter the Meta ad primary text and headline.");
         return false;
@@ -4559,42 +5206,72 @@ if (
         setError("Enter a valid Meta website destination URL.");
         return false;
       }
-const selectedMetaInstantForm =
-  metaInstantFormOptions.find(
-    (form) => form.id === metaInstantFormId,
-  );
+      const selectedMetaInstantForm =
+        metaInstantFormOptions.find(
+          (form) => form.id === metaInstantFormId,
+        );
 
-const hasValidMetaInstantForm = Boolean(
-  selectedMetaInstantForm &&
-    selectedMetaInstantForm.pageId === metaPageId &&
-    !selectedMetaInstantForm.isArchived &&
-    !selectedMetaInstantForm.isUnavailable,
-);
+      const hasValidMetaInstantForm = Boolean(
+        selectedMetaInstantForm &&
+        selectedMetaInstantForm.pageId === metaPageId &&
+        !selectedMetaInstantForm.isArchived &&
+        !selectedMetaInstantForm.isUnavailable,
+      );
 
-if (
-  metaDestinationType === "INSTANT_FORM" &&
-  !hasValidMetaInstantForm
-) {
-  setError(
-    "Select an available Instant Form belonging to the selected Facebook Page.",
-  );
-  return false;
-}
       if (
-        metaDestinationType === "MESSAGING" &&
-        !metaMessagingDestinationId.trim()
-      ) {
-        setError("Select or enter the connected messaging destination ID.");
-        return false;
-      }
-      if (
-        metaDestinationType === "APP" &&
-        (!metaAppId.trim() ||
-          !metaAppStoreUrl.trim() ||
-          !isValidHttpUrl(metaAppStoreUrl.trim()))
+        metaDestinationType === "INSTANT_FORM" &&
+        !hasValidMetaInstantForm
       ) {
         setError(
-          "Enter the promoted app ID and a valid App Store / Play Store URL for this Meta App destination.",
+          "Select an available Instant Form belonging to the selected Facebook Page.",
+        );
+        return false;
+      }
+      const selectedMetaMessagingDestination =
+        metaMessagingDestinationOptions.find(
+          (destination) =>
+            destination.type === metaMessagingType &&
+            destination.id === metaMessagingDestinationId &&
+            destination.pageId === metaPageId &&
+            destination.isAvailable,
+        );
+
+      if (
+        metaDestinationType === "MESSAGING" &&
+        !selectedMetaMessagingDestination
+      ) {
+        setError(
+          "Select an available messaging identity belonging to the selected Facebook Page.",
+        );
+        return false;
+      }
+
+      const selectedMetaApplication =
+        metaAdvertisableApps.find(
+          (app) => app.id === metaAppId,
+        );
+
+      let isValidMetaAppStoreUrl = false;
+
+      try {
+        const parsedStoreUrl = new URL(metaAppStoreUrl.trim());
+
+        isValidMetaAppStoreUrl =
+          parsedStoreUrl.protocol === "https:" &&
+          (
+            parsedStoreUrl.hostname === "apps.apple.com" ||
+            parsedStoreUrl.hostname === "play.google.com"
+          );
+      } catch {
+        isValidMetaAppStoreUrl = false;
+      }
+
+      if (
+        metaDestinationType === "APP" &&
+        (!selectedMetaApplication || !isValidMetaAppStoreUrl)
+      ) {
+        setError(
+          "Select an advertisable Meta App and enter its valid App Store or Google Play Store URL.",
         );
         return false;
       }
@@ -4625,9 +5302,6 @@ if (
     setFurthestStep((current) => Math.max(current, nextStep));
   };
 
-  // Previously reached steps can be opened directly. Backward jumps are
-  // immediate; forward jumps revalidate every step being left so required
-  // fields cannot be skipped after an earlier edit.
   const handleStepClick = (targetStep: number) => {
     if (targetStep < 1 || targetStep > furthestStep || targetStep > 5) return;
 
@@ -4740,7 +5414,6 @@ if (
     const interests = metaTargetingOptions.filter((option: any) => {
       return metaAudienceInterestIds.includes(option.id)
     })
-    console.log("interesr", interests);
 
     const payload = {
       contractVersion: "campaign-builder.v1",
@@ -5950,14 +6623,7 @@ if (
       setRetryingMetaAction(null);
     }
   };
-  const placeholderMetaIds = new Set([
-    "123456789012345",
-    "123456789",
-    "987654321",
-    "600000000000001",
-    "600000000000002",
-    "600000000000003",
-  ]);
+
   const isRealMetaId = (value: string) => {
     const id = value.trim();
     return /^\d+$/.test(id) && !placeholderMetaIds.has(id);
@@ -6751,49 +7417,49 @@ if (
       const metaConversionEventValue = metaConversionEvent.trim();
 
       const hasRealPixel = isRealMetaId(metaPixel);
-const prepareCustomConversion =
-  metaCustomConversionOptions.find(
-    (conversion) =>
-      conversion.id === metaCustomConversionId,
-  );
+      const prepareCustomConversion =
+        metaCustomConversionOptions.find(
+          (conversion) =>
+            conversion.id === metaCustomConversionId,
+        );
 
-const hasValidPrepareCustomConversion = Boolean(
-  prepareCustomConversion &&
-    !prepareCustomConversion.isArchived &&
-    !prepareCustomConversion.isUnavailable &&
-    prepareCustomConversion.sourcePixelId === metaPixel,
-);
+      const hasValidPrepareCustomConversion = Boolean(
+        prepareCustomConversion &&
+        !prepareCustomConversion.isArchived &&
+        !prepareCustomConversion.isUnavailable &&
+        prepareCustomConversion.sourcePixelId === metaPixel,
+      );
       const requiresWebsiteConversionPixel = [
         "OFFSITE_CONVERSIONS",
         "VALUE",
       ].includes(effectiveMetaOptimizationGoal);
 
       // Meta website conversion validation also runs in VALIDATE_ONLY mode.
-    if (
-  requiresWebsiteConversionPixel &&
-  !hasValidPrepareCustomConversion &&
-  (!hasRealPixel || !metaConversionEventValue)
-) {
-  throw new Error(
-    "Meta website conversion optimization requires either a valid Pixel with a standard event or an available Custom Conversion.",
-  );
-}
+      if (
+        requiresWebsiteConversionPixel &&
+        !hasValidPrepareCustomConversion &&
+        (!hasRealPixel || !metaConversionEventValue)
+      ) {
+        throw new Error(
+          "Meta website conversion optimization requires either a valid Pixel with a standard event or an available Custom Conversion.",
+        );
+      }
 
       if (executionMode === "LIVE" && pageId === "123456789012345") {
         throw new Error(
           "Replace the placeholder Meta Page ID with a Page ID available to your connected Meta account.",
         );
       }
-if (
-  executionMode === "LIVE" &&
-  requiresWebsiteConversionPixel &&
-  !hasRealPixel &&
-  !hasValidPrepareCustomConversion
-) {
-  throw new Error(
-    "A valid Meta Pixel or Custom Conversion is required for the selected website conversion optimization goal.",
-  );
-}
+      if (
+        executionMode === "LIVE" &&
+        requiresWebsiteConversionPixel &&
+        !hasRealPixel &&
+        !hasValidPrepareCustomConversion
+      ) {
+        throw new Error(
+          "A valid Meta Pixel or Custom Conversion is required for the selected website conversion optimization goal.",
+        );
+      }
 
       if (
         executionMode === "LIVE" &&
@@ -7784,7 +8450,6 @@ if (
     }
   };
 
-
   const reviewAiLogoAsset = async (
     asset: CampaignLibraryAsset,
     status: Exclude<AssetReviewStatus, "DRAFT">,
@@ -7871,7 +8536,6 @@ if (
       );
     }
   };
-
 
   const getLibraryTextParts = (asset: CampaignLibraryAsset) => {
     const raw = String(asset.textContent || "").trim();
@@ -8012,6 +8676,99 @@ if (
       setAssetNotice(`${asset.name} applied to ${appliedLabel}. Existing campaign text was preserved and duplicate lines were skipped.`);
     }
   };
+
+  const GOOGLE_PMAX_CAPABILITY_ID = "google-performance-max-asset-group";
+  const GOOGLE_PMAX_REQUIREMENTS = {
+    LOGO: "google-pmax-logo-images",
+    LANDSCAPE: "google-pmax-landscape-images",
+    SQUARE: "google-pmax-square-images",
+    PORTRAIT: "google-pmax-portrait-images",
+    LANDSCAPE_LOGO: "google-pmax-landscape-logo-images",
+  } as const;
+
+  const placeholderMetaIds = new Set([
+    "123456789012345",
+    "123456789",
+    "987654321",
+    "600000000000001",
+    "600000000000002",
+    "600000000000003",
+  ]);
+
+  const inputClass =
+    "mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
+  const labelClass = "text-sm font-semibold text-slate-700";
+  const muiFieldSx = {
+    mt: 1,
+    "& .MuiOutlinedInput-root": {
+      borderRadius: "12px",
+      backgroundColor: "#fff",
+    },
+    "& .MuiInputBase-input": { fontSize: "0.875rem" },
+    "& .MuiInputLabel-root": { fontSize: "0.875rem" },
+  };
+  const selectedObjective = objectives.find((item) => item.value === objective);
+
+  const filteredCampaignRecords = useMemo(() => {
+    const query = campaignSearch.trim().toLowerCase();
+    return campaignRecords.filter((record: any) => {
+      const matchesQuery =
+        !query ||
+        [
+          record.name,
+          record.id,
+          record.campaignType,
+          record.objective,
+          record.accountLabel,
+        ].some((value) =>
+          String(value ?? "")
+            .toLowerCase()
+            .includes(query),
+        );
+      const matchesPlatform =
+        campaignPlatformFilter === "ALL" ||
+        (campaignPlatformFilter === "GOOGLE" &&
+          record.provider === "googleAds") ||
+        (campaignPlatformFilter === "META" && record.provider === "metaAds") ||
+        (campaignPlatformFilter === "BOTH" &&
+          (record.provider === "both" ||
+            campaignRecords.some(
+              (candidate: any) =>
+                candidate.groupId === record.groupId &&
+                candidate.provider !== record.provider,
+            )));
+      const matchesStatus =
+        campaignStatusFilter === "ALL" ||
+        record.status === campaignStatusFilter;
+      return matchesQuery && matchesPlatform && matchesStatus;
+    });
+  }, [
+    campaignRecords,
+    campaignSearch,
+    campaignPlatformFilter,
+    campaignStatusFilter,
+  ]);
+
+  const selectedCampaign =
+    campaignRecords.find((record) => record.id === selectedCampaignId) ??
+    campaignRecords[0] ??
+    null;
+
+  const campaignMetrics = useMemo(
+    () => ({
+      total: campaignRecords.filter((record) => record.status !== "ARCHIVED")
+        .length,
+      active: campaignRecords.filter((record) => record.status === "ACTIVE")
+        .length,
+      paused: campaignRecords.filter((record) => record.status === "PAUSED")
+        .length,
+      drafts: campaignRecords.filter((record) => record.status === "DRAFT")
+        .length,
+      attention: campaignRecords.filter((record) => record.status === "FAILED")
+        .length,
+    }),
+    [campaignRecords],
+  );
 
   const filteredAssetLibrary = useMemo(() => {
     const query = assetLibrarySearch.trim().toLowerCase();
@@ -9142,82 +9899,7 @@ if (
       setError("Unable to copy the request. Please copy it manually.");
     }
   };
-
-  const inputClass =
-    "mt-2 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100";
-  const labelClass = "text-sm font-semibold text-slate-700";
-  const muiFieldSx = {
-    mt: 1,
-    "& .MuiOutlinedInput-root": {
-      borderRadius: "12px",
-      backgroundColor: "#fff",
-    },
-    "& .MuiInputBase-input": { fontSize: "0.875rem" },
-    "& .MuiInputLabel-root": { fontSize: "0.875rem" },
-  };
-  const selectedObjective = objectives.find((item) => item.value === objective);
-
-  const filteredCampaignRecords = useMemo(() => {
-    const query = campaignSearch.trim().toLowerCase();
-    return campaignRecords.filter((record: any) => {
-      const matchesQuery =
-        !query ||
-        [
-          record.name,
-          record.id,
-          record.campaignType,
-          record.objective,
-          record.accountLabel,
-        ].some((value) =>
-          String(value ?? "")
-            .toLowerCase()
-            .includes(query),
-        );
-      const matchesPlatform =
-        campaignPlatformFilter === "ALL" ||
-        (campaignPlatformFilter === "GOOGLE" &&
-          record.provider === "googleAds") ||
-        (campaignPlatformFilter === "META" && record.provider === "metaAds") ||
-        (campaignPlatformFilter === "BOTH" &&
-          (record.provider === "both" ||
-            campaignRecords.some(
-              (candidate: any) =>
-                candidate.groupId === record.groupId &&
-                candidate.provider !== record.provider,
-            )));
-      const matchesStatus =
-        campaignStatusFilter === "ALL" ||
-        record.status === campaignStatusFilter;
-      return matchesQuery && matchesPlatform && matchesStatus;
-    });
-  }, [
-    campaignRecords,
-    campaignSearch,
-    campaignPlatformFilter,
-    campaignStatusFilter,
-  ]);
-
-  const selectedCampaign =
-    campaignRecords.find((record) => record.id === selectedCampaignId) ??
-    campaignRecords[0] ??
-    null;
-
-  const campaignMetrics = useMemo(
-    () => ({
-      total: campaignRecords.filter((record) => record.status !== "ARCHIVED")
-        .length,
-      active: campaignRecords.filter((record) => record.status === "ACTIVE")
-        .length,
-      paused: campaignRecords.filter((record) => record.status === "PAUSED")
-        .length,
-      drafts: campaignRecords.filter((record) => record.status === "DRAFT")
-        .length,
-      attention: campaignRecords.filter((record) => record.status === "FAILED")
-        .length,
-    }),
-    [campaignRecords],
-  );
-
+  
   return (
     <div className="flex flex-col p-2">
       <Paper
@@ -9938,18 +10620,54 @@ if (
                   <>
                     <div>
                       <label className={labelClass}>
-                        Merchant Center Account ID *
+                        Linked Merchant Center Account *
                       </label>
-                      <input
-                        inputMode="numeric"
+                      <select
                         value={googleMerchantCenterId}
                         onChange={(e) => {
                           setGoogleMerchantCenterId(e.target.value);
                           clearPreview();
                         }}
-                        placeholder="Linked Merchant Center account ID"
+                        disabled={
+                          googleMerchantCenterLoading ||
+                          googleMerchantCenterOptions.length === 0
+                        }
                         className={inputClass}
-                      />
+                      >
+                        <option value="">
+                          {googleMerchantCenterLoading
+                            ? "Loading linked accounts..."
+                            : googleMerchantCenterOptions.length > 0
+                              ? "Select a linked Merchant Center account"
+                              : "No linked Merchant Center accounts"}
+                        </option>
+                        {googleMerchantCenterOptions.map((option) => {
+                          const merchantCenterId = getGoogleMerchantCenterId(option);
+                          if (!merchantCenterId) return null;
+                          return (
+                            <option key={merchantCenterId} value={merchantCenterId}>
+                              {getGoogleLookupLabel(option) || `Merchant Center ${merchantCenterId}`} ({merchantCenterId})
+                            </option>
+                          );
+                        })}
+                      </select>
+                      {googleMerchantCenterLoading && (
+                        <p className="mt-2 text-xs text-slate-500">
+                          Loading Merchant Center accounts linked to the selected Google Ads customer...
+                        </p>
+                      )}
+                      {googleMerchantCenterError && (
+                        <p className="mt-2 text-xs text-red-600">
+                          {googleMerchantCenterError}
+                        </p>
+                      )}
+                      {!googleMerchantCenterLoading &&
+                        !googleMerchantCenterError &&
+                        googleMerchantCenterOptions.length === 0 && (
+                          <p className="mt-2 text-xs text-slate-500">
+                            No Merchant Center account is linked to this Google Ads customer. Link a Merchant Center account before creating this campaign type.
+                          </p>
+                        )}
                     </div>
                     <div>
                       <label className={labelClass}>
@@ -10288,61 +11006,101 @@ if (
                       />
                     </div>
 
-                    <Stack spacing={3} className="col-span-2" sx={{ display: "flex", flexDirection: "row", alignItems: "center" }}>
-                      {/* LOCATIONS */}
-                      <Box sx={{ flex: 1 }}>
-                        <Typography
-                          variant="subtitle2"
-                          fontWeight={600}
-                          sx={{ mb: 1 }}
-                        >
+                    <Stack
+                      spacing={3}
+                      className="col-span-2"
+                      direction={{ xs: "column", md: "row" }}
+                      alignItems={{ xs: "stretch", md: "flex-start" }}
+                      sx={{ width: "100%" }}
+                    >
+                      {/* ================= LOCATIONS ================= */}
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 1 }}>
                           Locations
                         </Typography>
-
-                        <Stack
-                          direction={{ xs: "column", sm: "row" }}
-                          spacing={1}
-                          alignItems={{ xs: "stretch", sm: "flex-start" }}
-                        ><TextField
-                            fullWidth
-                            size="small"
-                            value={googleLocationQuery}
-                            onChange={(e) => setGoogleLocationQuery(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") {
-                                e.preventDefault();
-                                void handleGoogleLocationSearch();
-                              }
-                            }}
-                            placeholder="Search city, state or country"
-                            InputProps={{
-                              endAdornment: (
-                                <InputAdornment position="end">
-                                  <IconButton
-                                    onClick={() => void handleGoogleLocationSearch()}
-                                    disabled={googleLocationLoading}
-                                    edge="end"
-                                    aria-label="Search locations"
-                                    size="small"
-                                  >
-                                    {googleLocationLoading ? (
-                                      <CircularProgress size={19} />
-                                    ) : (
-                                      <SearchIcon />
-                                    )}
-                                  </IconButton>
-                                </InputAdornment>
-                              ),
-                            }}
-                            sx={{
-                              "& .MuiOutlinedInput-root": {
-                                borderRadius: 2,
-                                backgroundColor: "background.paper",
-                              },
-                            }}
-                          />
-                        </Stack>
-
+<Box ref={locationAnchorRef}>
+  <TextField
+    fullWidth
+    size="small"
+    value={googleLocationQuery}
+    onChange={(e) => {
+      setGoogleLocationQuery(e.target.value);
+      setLocationOpen(true);
+      setGoogleLocationOptionsOpen(true);
+    }}
+    onFocus={() => {
+      setLocationOpen(true);
+      setGoogleLocationOptionsOpen(true);
+    }}
+    onKeyDown={(e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        void handleGoogleLocationSearch();
+      }
+    }}
+    placeholder={geoResources.length === 0 ? "Search city, state or country" : ""}
+    InputProps={{
+      startAdornment: geoResources.length > 0 ? (
+        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
+          {geoResources.map((resourceName) => {
+            const matchingOption = googleLocationOptions.find(
+              (opt) => getGoogleLookupResourceName(opt, "geoTargetConstants") === resourceName
+            );
+            const label = matchingOption ? getGoogleLookupLabel(matchingOption) : resourceName;
+            
+            return (
+              <Chip
+                key={resourceName}
+                label={label}
+                size="small"
+                onDelete={() => {
+                  setGoogleGeoTargetResources((current) =>
+                    toggleGoogleResourceName(current, resourceName, false)
+                  );
+                  clearPreview();
+                }}
+              />
+            );
+          })}
+        </Box>
+      ) : null,
+      endAdornment: (
+        <InputAdornment position="end">
+          <IconButton
+            onClick={() => {
+              setLocationOpen(true);
+              setGoogleLocationOptionsOpen(true);
+              void handleGoogleLocationSearch();
+            }}
+            disabled={googleLocationLoading}
+            edge="end"
+            aria-label="Search locations"
+            size="small"
+          >
+            {googleLocationLoading ? (
+              <CircularProgress size={19} />
+            ) : (
+              <SearchIcon />
+            )}
+          </IconButton>
+        </InputAdornment>
+      ),
+    }}
+    sx={{
+      "& .MuiOutlinedInput-root": {
+        borderRadius: 2,
+        backgroundColor: "background.paper",
+        flexWrap: "wrap", // Allows the box to grow downwards
+        paddingY: geoResources.length > 0 ? "6px" : undefined,
+      },
+      "& .MuiOutlinedInput-input": {
+        flex: 1, // Input takes remaining space on the line
+        minWidth: "100px", // Prevents input from being squished
+        padding: geoResources.length > 0 ? "4px 0" : undefined,
+      },
+    }}
+  />
+</Box>
                         {googleLocationError && (
                           <Typography
                             color="error"
@@ -10353,163 +11111,175 @@ if (
                           </Typography>
                         )}
 
-
-                        <ClickAwayListener
-                          onClickAway={() =>
-                            setGoogleLocationOptionsOpen(false)
-                          }
+                        {/* Anchored popover — no layout shift */}
+                        <Popper
+                          open={showLocationPanel}
+                          anchorEl={locationAnchorRef.current}
+                          placement="bottom-start"
+                          transition
+                          style={{
+                            zIndex: 1300,
+                            width: locationAnchorRef.current?.clientWidth,
+                          }}
+                          modifiers={[{ name: "offset", options: { offset: [0, 8] } }]}
                         >
-                          <Box>
-                            <Collapse
-                              in={
-                                googleLocationOptionsOpen &&
-                                googleLocationOptions.length > 0
-                              }
-                            >
+                          {({ TransitionProps }) => (
+                            <Fade {...TransitionProps} timeout={150}>
                               <Paper
                                 variant="outlined"
                                 sx={{
-                                  mt: 1.5,
                                   p: 1,
-                                  maxHeight: 220,
+                                  maxHeight: 260,
                                   overflowY: "auto",
                                   borderRadius: 2,
                                   borderColor: "divider",
+                                  boxShadow: 4,
+                                  width: "100%",
                                 }}
                               >
-                                <Stack spacing={0.5}>
-                                  {googleLocationOptions.map((option) => {
-                                    const resourceName =
-                                      getGoogleLookupResourceName(
-                                        option,
-                                        "geoTargetConstants",
-                                      );
-
-                                    if (!resourceName) return null;
-
-                                    const selected =
-                                      geoResources.includes(resourceName);
-
-                                    return (
-                                      <Box
-                                        component="label"
-                                        key={resourceName}
-                                        sx={{
-                                          display: "flex",
-                                          alignItems: "flex-start",
-                                          gap: 1,
-                                          p: 1,
-                                          width: "100%",
-                                          minWidth: 0,
-                                          borderRadius: 1.5,
-                                          cursor: "pointer",
-                                          bgcolor: selected
-                                            ? "action.selected"
-                                            : "transparent",
-                                          "&:hover": {
-                                            bgcolor: "action.hover",
-                                          },
-                                        }}
-                                      >
-                                        <Checkbox
-                                          size="small"
-                                          checked={selected}
-                                          onChange={(e) => {
-                                            setGoogleGeoTargetResources(
-                                              (current) =>
-                                                toggleGoogleResourceName(
-                                                  current,
-                                                  resourceName,
-                                                  e.target.checked,
-                                                ),
-                                            );
-                                            clearPreview();
-                                          }}
-                                          sx={{ p: 0.5, mt: 0.1 }}
-                                        />
-
-                                        <Box sx={{ minWidth: 0, flex: 1 }}>
-                                          <Typography
-                                            variant="body2"
-                                            fontWeight={500}
-                                          >
-                                            {getGoogleLookupLabel(option)}
-                                          </Typography>
-
-                                          <Typography
-                                            variant="caption"
-                                            color="text.secondary"
-                                            sx={{
-                                              display: "block",
-                                              overflowWrap: "anywhere",
-                                            }}
-                                          >
-                                            {resourceName}
-                                          </Typography>
-                                        </Box>
-                                      </Box>
-                                    );
-                                  })}
-                                </Stack>
-
-                                <Box
-                                  sx={{
-                                    display: "flex",
-                                    justifyContent: "flex-end",
-                                    mt: 1,
-                                    pt: 1,
-                                    borderTop: 1,
-                                    borderColor: "divider",
+                                <ClickAwayListener
+                                  onClickAway={() => {
+                                    setLocationOpen(false);
+                                    setGoogleLocationOptionsOpen(false);
                                   }}
                                 >
-                                  <Button
-                                    size="small"
-                                    variant="contained"
-                                    onClick={() =>
-                                      setGoogleLocationOptionsOpen(false)
-                                    }
-                                    sx={{
-                                      textTransform: "none",
-                                      borderRadius: 1.5,
-                                    }}
-                                  >
-                                    Done
-                                  </Button>
-                                </Box>
+                                  <Box>
+                                    {googleLocationLoading && (
+                                      <Box sx={{ display: "flex", justifyContent: "center", py: 2 }}>
+                                        <CircularProgress size={22} />
+                                      </Box>
+                                    )}
+
+                                    {!googleLocationLoading &&
+                                      googleLocationOptions.length === 0 && (
+                                        <Typography
+                                          variant="body2"
+                                          color="text.secondary"
+                                          sx={{ p: 2, textAlign: "center" }}
+                                        >
+                                          No locations found
+                                        </Typography>
+                                      )}
+
+                                    <Stack spacing={0.5}>
+                                      {googleLocationOptions.map((option) => {
+                                        const resourceName = getGoogleLookupResourceName(
+                                          option,
+                                          "geoTargetConstants"
+                                        );
+                                        if (!resourceName) return null;
+
+                                        const selected = geoResources.includes(resourceName);
+
+                                        return (
+                                          <Box
+                                            component="label"
+                                            key={resourceName}
+                                            sx={{
+                                              display: "flex",
+                                              alignItems: "flex-start",
+                                              gap: 1,
+                                              p: 1,
+                                              width: "100%",
+                                              minWidth: 0,
+                                              borderRadius: 1.5,
+                                              cursor: "pointer",
+                                              bgcolor: selected
+                                                ? "action.selected"
+                                                : "transparent",
+                                              "&:hover": { bgcolor: "action.hover" },
+                                            }}
+                                          >
+                                            <Checkbox
+                                              size="small"
+                                              checked={selected}
+                                              onChange={(e) => {
+                                                setGoogleGeoTargetResources((current) =>
+                                                  toggleGoogleResourceName(
+                                                    current,
+                                                    resourceName,
+                                                    e.target.checked
+                                                  )
+                                                );
+                                                clearPreview();
+                                              }}
+                                              sx={{ p: 0.5, mt: 0.1 }}
+                                            />
+
+                                            <Box sx={{ minWidth: 0, flex: 1 }}>
+                                              <Typography variant="body2" fontWeight={500}>
+                                                {getGoogleLookupLabel(option)}
+                                              </Typography>
+                                              <Typography
+                                                variant="caption"
+                                                color="text.secondary"
+                                                sx={{
+                                                  display: "block",
+                                                  overflowWrap: "anywhere",
+                                                }}
+                                              >
+                                                {resourceName}
+                                              </Typography>
+                                            </Box>
+                                          </Box>
+                                        );
+                                      })}
+                                    </Stack>
+
+                                    {googleLocationOptions.length > 0 && (
+                                      <Box
+                                        sx={{
+                                          display: "flex",
+                                          justifyContent: "flex-end",
+                                          mt: 1,
+                                          pt: 1,
+                                          borderTop: 1,
+                                          borderColor: "divider",
+                                        }}
+                                      >
+                                        <Button
+                                          size="small"
+                                          variant="contained"
+                                          onClick={() => {
+                                            setLocationOpen(false);
+                                            setGoogleLocationOptionsOpen(false);
+                                          }}
+                                          sx={{ textTransform: "none", borderRadius: 1.5 }}
+                                        >
+                                          Done
+                                        </Button>
+                                      </Box>
+                                    )}
+                                  </Box>
+                                </ClickAwayListener>
                               </Paper>
-                            </Collapse>
+                            </Fade>
+                          )}
+                        </Popper>
 
-                            <Stack
-                              direction="row"
-                              alignItems="center"
-                              justifyContent="space-between"
-                              sx={{ mt: 1.5 }}
-                            >
-                              <Typography
-                                variant="caption"
-                                color="text.secondary"
-                              >
-                                Select the locations where your ads should
-                                appear.
-                              </Typography>
-
-                              <Chip
-                                size="small"
-                                variant="outlined"
-                                color="primary"
-                                label={`${geoResources.length} selected`}
-                              />
-                            </Stack>
-                          </Box>
-                        </ClickAwayListener>
+                        <Stack
+                          direction="row"
+                          alignItems="center"
+                          justifyContent="space-between"
+                          spacing={1}
+                          sx={{ mt: 1.5 }}
+                        >
+                          <Typography variant="caption" color="text.secondary" sx={{ minWidth: 0 }}>
+                            Select the locations where your ads should appear.
+                          </Typography>
+                          <Chip
+                            size="small"
+                            variant="outlined"
+                            color="primary"
+                            label={`${geoResources.length} selected`}
+                            sx={{ flexShrink: 0 }}
+                          />
+                        </Stack>
                       </Box>
 
-                      <Box sx={{ flex: 1 }}>
-                        <Typography
-                          variant="subtitle2"
-                          fontWeight={600}
-                          sx={{ mb: 1 }}
-                        >
+                      {/* ================= LANGUAGES ================= */}
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 1 }}>
                           Languages
                         </Typography>
 
@@ -10522,49 +11292,31 @@ if (
                           value={googleLanguageOptions.filter((option) => {
                             const resourceName = getGoogleLookupResourceName(
                               option,
-                              "languageConstants",
+                              "languageConstants"
                             );
-
-                            return (
-                              !!resourceName &&
-                              languageResources.includes(resourceName)
-                            );
+                            return !!resourceName && languageResources.includes(resourceName);
                           })}
                           inputValue={googleLanguageSearch}
-                          onInputChange={(_, value) => {
-                            setGoogleLanguageSearch(value);
-                          }}
+                          onInputChange={(_, value) => setGoogleLanguageSearch(value)}
                           onChange={(_, selectedOptions) => {
                             const selectedResources = selectedOptions
                               .map((option) =>
-                                getGoogleLookupResourceName(
-                                  option,
-                                  "languageConstants",
-                                ),
+                                getGoogleLookupResourceName(option, "languageConstants")
                               )
                               .filter((resourceName): resourceName is string =>
-                                Boolean(resourceName),
+                                Boolean(resourceName)
                               );
 
                             setGoogleLanguageResources(selectedResources);
                             clearPreview();
                           }}
-                          getOptionLabel={(option) =>
-                            getGoogleLookupLabel(option)
-                          }
+                          getOptionLabel={(option) => getGoogleLookupLabel(option)}
                           isOptionEqualToValue={(option, value) =>
-                            getGoogleLookupResourceName(
-                              option,
-                              "languageConstants",
-                            ) ===
-                            getGoogleLookupResourceName(
-                              value,
-                              "languageConstants",
-                            )
+                            getGoogleLookupResourceName(option, "languageConstants") ===
+                            getGoogleLookupResourceName(value, "languageConstants")
                           }
                           filterOptions={(options, { inputValue }) => {
                             const search = inputValue.trim().toLowerCase();
-
                             return options.filter((option) => {
                               const searchText = [
                                 getGoogleLookupLabel(option),
@@ -10574,30 +11326,22 @@ if (
                               ]
                                 .join(" ")
                                 .toLowerCase();
-
                               return searchText.includes(search);
                             });
                           }}
                           noOptionsText="No languages found"
                           loadingText="Loading Google Ads languages..."
-                          ListboxProps={{
-                            style: {
-                              maxHeight: 240,
-                            },
-                          }}
+                          ListboxProps={{ style: { maxHeight: 240 } }}
                           renderOption={(props, option, { selected }) => {
                             const resourceName = getGoogleLookupResourceName(
                               option,
-                              "languageConstants",
+                              "languageConstants"
                             );
-
                             return (
                               <Box
                                 component="li"
                                 {...props}
-                                key={
-                                  resourceName || getGoogleLookupLabel(option)
-                                }
+                                key={resourceName || getGoogleLookupLabel(option)}
                                 sx={{
                                   display: "flex",
                                   alignItems: "center",
@@ -10605,17 +11349,11 @@ if (
                                   py: 1,
                                 }}
                               >
-                                <Checkbox
-                                  size="small"
-                                  checked={selected}
-                                  sx={{ p: 0.5 }}
-                                />
-
+                                <Checkbox size="small" checked={selected} sx={{ p: 0.5 }} />
                                 <Box sx={{ minWidth: 0 }}>
                                   <Typography variant="body2" fontWeight={500}>
                                     {getGoogleLookupLabel(option)}
                                   </Typography>
-
                                   <Typography
                                     variant="caption"
                                     color="text.secondary"
@@ -10643,10 +11381,7 @@ if (
                                 endAdornment: (
                                   <>
                                     {googleLanguageLoading && (
-                                      <CircularProgress
-                                        color="inherit"
-                                        size={18}
-                                      />
+                                      <CircularProgress color="inherit" size={18} />
                                     )}
                                     {params?.InputProps?.endAdornment}
                                   </>
@@ -10655,34 +11390,29 @@ if (
                             />
                           )}
                           sx={{
-                            "& .MuiAutocomplete-tag": {
-                              maxWidth: "calc(100% - 16px)",
-                            },
-                            "& .MuiOutlinedInput-root": {
-                              borderRadius: 2,
-                            },
+                            "& .MuiAutocomplete-tag": { maxWidth: "calc(100% - 16px)" },
+                            "& .MuiOutlinedInput-root": { borderRadius: 2 },
                           }}
                         />
 
-                        <Box
-                          sx={{
-                            display: "flex",
-                            justifyContent: "space-between",
-                            alignItems: "center",
-                            mt: 1.5,
-                          }}
+                        <Stack
+                          direction="row"
+                          alignItems="center"
+                          justifyContent="space-between"
+                          spacing={1}
+                          sx={{ mt: 1.5 }}
                         >
-                          <Typography variant="caption" color="text.secondary">
+                          <Typography variant="caption" color="text.secondary" sx={{ minWidth: 0 }}>
                             Select the languages you want to target.
                           </Typography>
-
                           <Chip
                             size="small"
                             color="primary"
                             variant="outlined"
                             label={`${languageResources.length} selected`}
+                            sx={{ flexShrink: 0 }}
                           />
-                        </Box>
+                        </Stack>
                       </Box>
                     </Stack>
                     {/* Google Ads Custom Conversion Goal Lookup */}
@@ -11269,21 +11999,143 @@ if (
                         {metaAudienceError && <p className="mt-2 text-xs text-red-600">{metaAudienceError}</p>}
                         <p className="mt-1 text-xs text-slate-500">Selecting a saved audience copies supported location, age, gender and interest criteria into this draft. Review the values before publishing.</p>
                       </div>
-                      <div className="rounded-lg border border-slate-200 p-3">
-                        <p className="text-sm font-semibold text-slate-800">Search Meta locations</p>
-                        <div className="mt-2 grid gap-2 sm:grid-cols-[150px_minmax(0,1fr)_auto]">
-                          <select value={metaLocationKind} onChange={(event) => { setMetaLocationKind(event.target.value as "country" | "region" | "city" | "zip"); setMetaLocationOptions([]); setMetaSelectedLocationOptions([]); setMetaLocationError(""); }} className={inputClass}>
-                            <option value="country">Country</option><option value="region">Region</option><option value="city">City</option><option value="zip">ZIP / postal code</option>
-                          </select>
-                          <input value={metaLocationQuery} onChange={(event) => setMetaLocationQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void searchMetaLocationOptions(); } }} placeholder="Search country, region, city or postal code" className={inputClass} />
-                          <Button variant="contained" size="small" onClick={searchMetaLocationOptions} disabled={metaLocationLoading} sx={{ borderRadius: "8px", textTransform: "none", minWidth: 110 }}>{metaLocationLoading ? "Searching..." : "Search"}</Button>
-                        </div>
-                        {metaLocationOptions.length > 0 && <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-                          <Autocomplete multiple size="small" options={metaLocationOptions} value={metaSelectedLocationOptions} getOptionLabel={getMetaLookupLabel} isOptionEqualToValue={(option, value) => getMetaLookupId(option) === getMetaLookupId(value)} onChange={(_, values) => setMetaSelectedLocationOptions(values)} renderInput={(params) => <TextField {...params} label="Matching locations" placeholder="Select one or more locations" />} />
-                          <Button variant="outlined" size="small" onClick={addSelectedMetaLocations} disabled={!metaSelectedLocationOptions.length} sx={{ borderRadius: "8px", textTransform: "none" }}>Add selected</Button>
-                        </div>}
-                        {metaLocationError && <p className="mt-2 text-xs text-red-600">{metaLocationError}</p>}
-                      </div>
+
+<Box
+  sx={{
+    border: 1,
+    borderColor: "divider",
+    borderRadius: 2,
+    p: 2.5,
+    bgcolor: "background.paper",
+    boxShadow: 1,
+  }}
+>
+  <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
+    <LanguageIcon color="primary" fontSize="small" />
+    <Typography variant="subtitle2" fontWeight={600}>
+      Target Meta Locations
+    </Typography>
+  </Stack>
+
+  <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+    {/* 1. Location Type Select */}
+    <TextField
+      select
+      size="small"
+      value={metaLocationKind}
+      onChange={(event) => {
+        setMetaLocationKind(event.target.value as "country" | "region" | "city" | "zip");
+        setMetaLocationOptions([]);
+        setMetaSelectedLocationOptions([]);
+        setMetaLocationError("");
+      }}
+      sx={{ minWidth: 140 }}
+      SelectProps={{ native: true }}
+    >
+      <option value="country">Country</option>
+      <option value="region">Region</option>
+      <option value="city">City</option>
+      <option value="zip">ZIP / Postal</option>
+    </TextField>
+
+    {/* 2. Search Input */}
+    <TextField
+      fullWidth
+      size="small"
+      placeholder="Search country, region, city or postal code"
+      value={metaLocationQuery}
+      onChange={(event) => setMetaLocationQuery(event.target.value)}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          void searchMetaLocationOptions();
+        }
+      }}
+      InputProps={{
+        endAdornment: (
+          <InputAdornment position="end">
+            <IconButton
+              size="small"
+              onClick={searchMetaLocationOptions}
+              disabled={metaLocationLoading}
+              edge="end"
+            >
+              {metaLocationLoading ? (
+                <CircularProgress size={20} />
+              ) : (
+                <SearchIcon />
+              )}
+            </IconButton>
+          </InputAdornment>
+        ),
+      }}
+    />
+  </Stack>
+
+  {/* Error Message */}
+  {metaLocationError && (
+    <Typography color="error" variant="caption" sx={{ display: "block", mt: 1 }}>
+      {metaLocationError}
+    </Typography>
+  )}
+
+  {/* 3. Search Results & Selection */}
+  {metaLocationOptions.length > 0 && (
+    <Box
+      sx={{
+        mt: 2,
+        p: 2,
+        bgcolor: "action.hover",
+        borderRadius: 2,
+        border: 1,
+        borderColor: "divider",
+      }}
+    >
+      <Stack direction={{ xs: "column", sm: "row" }} spacing={2} alignItems="flex-start">
+        <Autocomplete
+          multiple
+          size="small"
+          fullWidth
+          options={metaLocationOptions}
+          value={metaSelectedLocationOptions}
+          getOptionLabel={getMetaLookupLabel}
+          isOptionEqualToValue={(option, value) =>
+            getMetaLookupId(option) === getMetaLookupId(value)
+          }
+          onChange={(_, values) => setMetaSelectedLocationOptions(values)}
+          renderInput={(params) => (
+            <TextField
+              {...params}
+              placeholder="Select matching locations..."
+              sx={{
+                "& .MuiOutlinedInput-root": {
+                  backgroundColor: "background.paper",
+                  borderRadius: 2,
+                },
+              }}
+            />
+          )}
+        />
+        <Button
+          variant="contained"
+          size="small"
+          startIcon={<AddIcon />}
+          onClick={addSelectedMetaLocations}
+          disabled={!metaSelectedLocationOptions.length || metaLocationLoading}
+          sx={{
+            textTransform: "none",
+            borderRadius: 2,
+            whiteSpace: "nowrap",
+            height: 40, // Matches standard small TextField height
+            minWidth: 130,
+          }}
+        >
+          Add Selected
+        </Button>
+      </Stack>
+    </Box>
+  )}
+</Box>
                     </div>
                     <div className="mt-4 grid gap-4 sm:grid-cols-2">
                       <div>
@@ -11800,122 +12652,126 @@ if (
                     />
                   </div>
 
-                  {["SEARCH", "DISPLAY", "SHOPPING"].includes(
-                    googleCampaignType,
-                  ) && (
-                      <div className="sm:col-span-2">
-                        <label className={labelClass}>
-                          Audience User Lists (optional)
-                        </label>
+        {["SEARCH", "DISPLAY", "SHOPPING"].includes(googleCampaignType) && (
+  <Box sx={{ gridColumn: "1 / -1", width: "100%" }}>
+    <Typography
+      variant="subtitle2"
+      fontWeight={600}
+      sx={{ mb: 1, display: "flex", alignItems: "center", gap: 1 }}
+    >
+      Audience User Lists
+      <Typography component="span" variant="caption" color="text.secondary" fontWeight={400}>
+        (Optional)
+      </Typography>
+    </Typography>
 
-                        <input
-                          value={googleUserListSearch}
-                          onChange={(e) =>
-                            setGoogleUserListSearch(e.target.value)
-                          }
-                          placeholder="Search your Google Ads audience lists"
-                          className={inputClass}
-                        />
+    <Autocomplete
+      multiple
+      openOnFocus
+      disableCloseOnSelect
+      options={googleUserListOptions}
+      loading={googleUserListLoading}
+      // Parse the string state into selected option objects for the Autocomplete
+      value={googleUserListOptions.filter((option) => {
+        const resourceName = getGoogleLookupResourceName(option);
+        const selectedResources = googleAdGroupUserLists
+          .split(/[\n,]+/)
+          .map((v) => v.trim())
+          .filter(Boolean);
+        return !!resourceName && selectedResources.includes(resourceName);
+      })}
+      // Convert the selected options back into the newline-separated string
+      onChange={(_, selectedOptions) => {
+        const selectedResources = selectedOptions
+          .map((option) => getGoogleLookupResourceName(option))
+          .filter((resourceName): resourceName is string => Boolean(resourceName));
 
-                        {googleUserListLoading && (
-                          <p className="mt-2 text-xs text-slate-500">
-                            Loading audience user lists...
-                          </p>
-                        )}
+        setGoogleAdGroupUserLists(selectedResources.join("\n"));
+        clearPreview();
+      }}
+      getOptionLabel={(option) => getGoogleLookupLabel(option) || "Unknown List"}
+      isOptionEqualToValue={(option, value) =>
+        getGoogleLookupResourceName(option) === getGoogleLookupResourceName(value)
+      }
+      noOptionsText="No accessible user lists found"
+      loadingText="Loading audience user lists..."
+      ListboxProps={{ style: { maxHeight: 240 } }}
+      renderOption={(props, option, { selected }) => {
+        const resourceName = getGoogleLookupResourceName(option);
+        return (
+          <Box
+            component="li"
+            {...props}
+            key={resourceName || getGoogleLookupLabel(option)}
+            sx={{ display: "flex", alignItems: "center", gap: 1, py: 1 }}
+          >
+            <Checkbox size="small" checked={selected} sx={{ p: 0.5 }} />
+            <Box sx={{ minWidth: 0 }}>
+              <Typography variant="body2" fontWeight={500}>
+                {getGoogleLookupLabel(option)}
+              </Typography>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: "block", overflowWrap: "anywhere" }}
+              >
+                {resourceName}
+              </Typography>
+            </Box>
+          </Box>
+        );
+      }}
+      renderInput={(params) => (
+        <TextField
+          {...params}
+          size="small"
+          placeholder={
+            googleAdGroupUserLists.length > 0
+              ? "Search or add user lists"
+              : "Click to select audience user lists"
+          }
+          error={Boolean(googleUserListError)}
+          helperText={googleUserListError || undefined}
+          InputProps={{
+            ...params.InputProps,
+            endAdornment: (
+              <>
+                {googleUserListLoading && <CircularProgress color="inherit" size={18} />}
+                {params?.InputProps?.endAdornment}
+              </>
+            ),
+          }}
+          sx={{
+            "& .MuiOutlinedInput-root": { borderRadius: 2 },
+          }}
+        />
+      )}
+    />
 
-                        {googleUserListError && (
-                          <p className="mt-2 text-xs text-red-600">
-                            {googleUserListError}
-                          </p>
-                        )}
-
-                        {!googleUserListLoading &&
-                          googleUserListOptions.length > 0 && (
-                            <div className="mt-3 max-h-52 space-y-2 overflow-y-auto rounded-lg border border-slate-200 p-3">
-                              {googleUserListOptions
-                                .filter((option) => {
-                                  const searchText = [
-                                    getGoogleLookupLabel(option),
-                                    option.resourceName,
-                                    option.resource_name,
-                                    option.type,
-                                  ]
-                                    .join(" ")
-                                    .toLowerCase();
-
-                                  return searchText.includes(
-                                    googleUserListSearch.toLowerCase(),
-                                  );
-                                })
-                                .map((option) => {
-                                  const resourceName =
-                                    getGoogleLookupResourceName(option);
-
-                                  if (!resourceName) return null;
-
-                                  const selected = googleAdGroupUserLists
-                                    .split(/[\n,]+/)
-                                    .map((value) => value.trim())
-                                    .filter(Boolean)
-                                    .includes(resourceName);
-
-                                  return (
-                                    <label
-                                      key={resourceName}
-                                      className="flex cursor-pointer items-start gap-2 text-sm text-slate-700"
-                                    >
-                                      <input
-                                        type="checkbox"
-                                        checked={selected}
-                                        onChange={(e) => {
-                                          setGoogleAdGroupUserLists((current) =>
-                                            toggleGoogleResourceName(
-                                              current,
-                                              resourceName,
-                                              e.target.checked,
-                                            ),
-                                          );
-                                          clearPreview();
-                                        }}
-                                        className="mt-1"
-                                      />
-
-                                      <span>
-                                        <span className="block font-medium">
-                                          {getGoogleLookupLabel(option)}
-                                        </span>
-                                        <span className="block text-xs text-slate-500">
-                                          {resourceName}
-                                        </span>
-                                      </span>
-                                    </label>
-                                  );
-                                })}
-                            </div>
-                          )}
-
-                        {!googleUserListLoading &&
-                          !googleUserListError &&
-                          googleUserListOptions.length === 0 && (
-                            <p className="mt-2 text-xs text-slate-500">
-                              No accessible user lists were returned for this
-                              Google Ads account.
-                            </p>
-                          )}
-
-                        <p className="mt-2 text-xs text-slate-500">
-                          Selected user lists:{" "}
-                          {
-                            googleAdGroupUserLists
-                              .split(/[\n,]+/)
-                              .map((value) => value.trim())
-                              .filter(Boolean).length
-                          }
-                          . Only lists returned by the account lookup can be
-                          selected here.
-                        </p>
-                      </div>
-                    )}
+    <Box
+      sx={{
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "center",
+        mt: 1.5,
+        gap: 1,
+      }}
+    >
+      <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>
+        Only lists returned by the account lookup can be selected here.
+      </Typography>
+      <Chip
+        size="small"
+        color="primary"
+        variant="outlined"
+        label={`${
+          googleAdGroupUserLists.split(/[\n,]+/).map((v) => v.trim()).filter(Boolean).length
+        } selected`}
+        sx={{ flexShrink: 0 }}
+      />
+    </Box>
+  </Box>
+)}
                   {googleCampaignType === "DEMAND_GEN" && (
                     <div className="sm:col-span-2">
                       <label className={labelClass}>
@@ -13376,7 +14232,7 @@ if (
                   </div>
                   <Button
                     variant="outlined"
-                  
+
                     type="button"
                     onClick={() => {
                       setAssetLibraryOpen(true);
@@ -13403,7 +14259,7 @@ if (
                           websiteUrl || "https://www.example.com/landing-page"
                         }
                         className={inputClass}
-                    />
+                      />
                     </div>
                     <div className="grid gap-4 sm:grid-cols-2">
                       <div>
@@ -14137,18 +14993,54 @@ if (
                       <>
                         <div>
                           <label className={labelClass}>
-                            Merchant Center Account ID *
+                            Linked Merchant Center Account *
                           </label>
-                          <input
-                            inputMode="numeric"
+                          <select
                             value={googleMerchantCenterId}
                             onChange={(e) => {
                               setGoogleMerchantCenterId(e.target.value);
                               clearPreview();
                             }}
+                            disabled={
+                              googleMerchantCenterLoading ||
+                              googleMerchantCenterOptions.length === 0
+                            }
                             className={inputClass}
-                            placeholder="Linked Merchant Center ID"
-                          />
+                          >
+                            <option value="">
+                              {googleMerchantCenterLoading
+                                ? "Loading linked accounts..."
+                                : googleMerchantCenterOptions.length > 0
+                                  ? "Select a linked Merchant Center account"
+                                  : "No linked Merchant Center accounts"}
+                            </option>
+                            {googleMerchantCenterOptions.map((option) => {
+                              const merchantCenterId = getGoogleMerchantCenterId(option);
+                              if (!merchantCenterId) return null;
+                              return (
+                                <option key={merchantCenterId} value={merchantCenterId}>
+                                  {getGoogleLookupLabel(option) || `Merchant Center ${merchantCenterId}`} ({merchantCenterId})
+                                </option>
+                              );
+                            })}
+                          </select>
+                          {googleMerchantCenterLoading && (
+                            <p className="mt-2 text-xs text-slate-500">
+                              Loading Merchant Center accounts linked to the selected Google Ads customer...
+                            </p>
+                          )}
+                          {googleMerchantCenterError && (
+                            <p className="mt-2 text-xs text-red-600">
+                              {googleMerchantCenterError}
+                            </p>
+                          )}
+                          {!googleMerchantCenterLoading &&
+                            !googleMerchantCenterError &&
+                            googleMerchantCenterOptions.length === 0 && (
+                              <p className="mt-2 text-xs text-slate-500">
+                                No Merchant Center account is linked to this Google Ads customer. Link a Merchant Center account before creating this campaign type.
+                              </p>
+                            )}
                         </div>
                         <div>
                           <label className={labelClass}>
@@ -14704,103 +15596,105 @@ if (
                       />
                     </div>
                   )}
-{metaDestinationType === "INSTANT_FORM" && (
-  <div>
-    <label className={labelClass}>
-      Facebook Instant Form *
-    </label>
+                  {metaDestinationType === "INSTANT_FORM" && (
+                    <div>
+                      <label className={labelClass}>
+                        Facebook Instant Form *
+                      </label>
 
-    <select
-      value={metaInstantFormId}
-      disabled={
-        !metaPageId ||
-        metaInstantFormsLoading ||
-        metaInstantFormOptions.length === 0
-      }
-      onChange={(e) => {
-        setMetaInstantFormId(e.target.value);
-        clearPreview();
-      }}
-      className={inputClass}
-    >
-      <option value="">
-        {metaInstantFormsLoading
-          ? "Loading Instant Forms..."
-          : metaInstantFormOptions.length > 0
-            ? "Select an existing Instant Form"
-            : "No Instant Forms available"}
-      </option>
+                      <select
+                        value={metaInstantFormId}
+                        disabled={
+                          !metaPageId ||
+                          metaInstantFormsLoading ||
+                          metaInstantFormOptions.length === 0
+                        }
+                        onChange={(e) => {
+                          setMetaInstantFormId(e.target.value);
+                          clearPreview();
+                        }}
+                        className={inputClass}
+                      >
+                        <option value="">
+                          {metaInstantFormsLoading
+                            ? "Loading Instant Forms..."
+                            : metaInstantFormOptions.length > 0
+                              ? "Select an existing Instant Form"
+                              : "No Instant Forms available"}
+                        </option>
 
-      {metaInstantFormOptions.map((form) => (
-        <option
-          key={form.id}
-          value={form.id}
-          disabled={form.isArchived || form.isUnavailable}
-        >
-          {form.name} · {form.id}
-          {form.isArchived
-            ? " (Archived)"
-            : form.isUnavailable
-              ? ` (${form.status ?? "Unavailable"})`
-              : ""}
-        </option>
-      ))}
-    </select>
+                        {metaInstantFormOptions.map((form) => (
+                          <option
+                            key={form.id}
+                            value={form.id}
+                            disabled={form.isArchived || form.isUnavailable}
+                          >
+                            {form.name} · {form.id}
+                            {form.isArchived
+                              ? " (Archived)"
+                              : form.isUnavailable
+                                ? ` (${form.status ?? "Unavailable"})`
+                                : ""}
+                          </option>
+                        ))}
+                      </select>
 
-    {metaInstantFormsLoading && (
-      <p className="mt-1 text-xs text-slate-500">
-        Loading forms belonging to the selected Facebook Page...
-      </p>
-    )}
+                      {metaInstantFormsLoading && (
+                        <p className="mt-1 text-xs text-slate-500">
+                          Loading forms belonging to the selected Facebook Page...
+                        </p>
+                      )}
 
-    {metaInstantFormsError && (
-      <p className="mt-1 text-xs text-red-600">
-        {metaInstantFormsError}
-      </p>
-    )}
+                      {metaInstantFormsError && (
+                        <p className="mt-1 text-xs text-red-600">
+                          {metaInstantFormsError}
+                        </p>
+                      )}
 
-    {!metaInstantFormsLoading &&
-      !metaInstantFormsError &&
-      metaPageId &&
-      metaInstantFormOptions.length === 0 && (
-        <p className="mt-1 text-xs text-slate-500">
-          No Instant Forms were returned for this Facebook Page.
-          Check your Page permissions and Meta app access.
-        </p>
-      )}
+                      {!metaInstantFormsLoading &&
+                        !metaInstantFormsError &&
+                        metaPageId &&
+                        metaInstantFormOptions.length === 0 && (
+                          <p className="mt-1 text-xs text-slate-500">
+                            No Instant Forms were returned for this Facebook Page.
+                            Check your Page permissions and Meta app access.
+                          </p>
+                        )}
 
-    {metaInstantFormsNextCursor && (
-      <Button
-        type="button"
-        size="small"
-        disabled={metaInstantFormsLoading}
-        onClick={loadMoreMetaInstantForms}
-        sx={{ mt: 1, textTransform: "none" }}
-      >
-        {metaInstantFormsLoading
-          ? "Loading..."
-          : "Load more forms"}
-      </Button>
-    )}
+                      {metaInstantFormsNextCursor && (
+                        <Button
+                          type="button"
+                          size="small"
+                          disabled={metaInstantFormsLoading}
+                          onClick={loadMoreMetaInstantForms}
+                          sx={{ mt: 1, textTransform: "none" }}
+                        >
+                          {metaInstantFormsLoading
+                            ? "Loading..."
+                            : "Load more forms"}
+                        </Button>
+                      )}
 
-    <p className="mt-1 text-xs text-slate-500">
-      Forms are loaded from the selected Facebook Page.
-      Archived or unavailable forms cannot be selected.
-    </p>
-  </div>
-)}
+                      <p className="mt-1 text-xs text-slate-500">
+                        Forms are loaded from the selected Facebook Page.
+                        Archived or unavailable forms cannot be selected.
+                      </p>
+                    </div>
+                  )}
                   {metaDestinationType === "MESSAGING" && (
                     <>
                       <div>
                         <label className={labelClass}>
                           Messaging Destination *
                         </label>
+
                         <select
                           value={metaMessagingType}
                           onChange={(e) => {
                             setMetaMessagingType(
-                              e.target.value as typeof metaMessagingType,
+                              e.target.value as MetaMessagingDestinationType,
                             );
+                            setMetaMessagingDestinationId("");
                             clearPreview();
                           }}
                           className={inputClass}
@@ -14812,38 +15706,166 @@ if (
                           <option value="WHATSAPP">WhatsApp</option>
                         </select>
                       </div>
+
                       <div>
                         <label className={labelClass}>
-                          Connected Messaging Asset ID *
+                          Connected Messaging Identity *
                         </label>
-                        <input
+
+                        <select
                           value={metaMessagingDestinationId}
+                          disabled={
+                            !metaPageId ||
+                            metaMessagingDestinationsLoading ||
+                            !metaMessagingDestinationOptions.some(
+                              (destination) =>
+                                destination.type === metaMessagingType &&
+                                destination.isAvailable,
+                            )
+                          }
                           onChange={(e) => {
                             setMetaMessagingDestinationId(e.target.value);
                             clearPreview();
                           }}
                           className={inputClass}
-                        />
+                        >
+                          <option value="">
+                            {metaMessagingDestinationsLoading
+                              ? "Loading messaging identities..."
+                              : "Select a connected messaging identity"}
+                          </option>
+
+                          {metaMessagingDestinationOptions
+                            .filter(
+                              (destination) =>
+                                destination.type === metaMessagingType,
+                            )
+                            .map((destination) => (
+                              <option
+                                key={`${destination.type}-${destination.id || "unavailable"}`}
+                                value={destination.id}
+                                disabled={!destination.isAvailable}
+                              >
+                                {destination.isAvailable
+                                  ? `${destination.name} (${destination.id})`
+                                  : `${destination.name} — unavailable`}
+                              </option>
+                            ))}
+                        </select>
+
+                        {metaMessagingDestinationsLoading && (
+                          <p className="mt-1 text-xs text-slate-500">
+                            Discovering identities connected to the selected Facebook Page...
+                          </p>
+                        )}
+
+                        {metaMessagingDestinationsError && (
+                          <p className="mt-1 text-xs text-red-600">
+                            {metaMessagingDestinationsError}
+                          </p>
+                        )}
+
+                        {!metaMessagingDestinationsLoading &&
+                          !metaMessagingDestinationsError &&
+                          !metaMessagingDestinationOptions.some(
+                            (destination) =>
+                              destination.type === metaMessagingType &&
+                              destination.isAvailable,
+                          ) && (
+                            <p className="mt-1 text-xs text-amber-700">
+                              {metaMessagingDestinationOptions.find(
+                                (destination) =>
+                                  destination.type === metaMessagingType,
+                              )?.unavailableReason ||
+                                "No eligible identity was returned for this messaging destination."}
+                            </p>
+                          )}
+
+                        <p className="mt-1 text-xs text-slate-500">
+                          Available identities are discovered from the selected Facebook Page.
+                          Changing the Page requires selecting its messaging identity again.
+                        </p>
                       </div>
                     </>
                   )}
+
                   {metaDestinationType === "APP" && (
                     <>
                       <div>
-                        <label className={labelClass}>Promoted App ID *</label>
-                        <input
+                        <label className={labelClass}>
+                          Promoted Meta App *
+                        </label>
+
+                        <select
                           value={metaAppId}
+                          disabled={
+                            metaAdvertisableAppsLoading ||
+                            metaAdvertisableApps.length === 0
+                          }
                           onChange={(e) => {
                             setMetaAppId(e.target.value);
+                            setMetaAppStoreUrl("");
                             clearPreview();
                           }}
                           className={inputClass}
-                        />
+                        >
+                          <option value="">
+                            {metaAdvertisableAppsLoading
+                              ? "Loading advertisable applications..."
+                              : metaAdvertisableApps.length
+                                ? "Select an advertisable Meta App"
+                                : "No advertisable applications found"}
+                          </option>
+
+                          {metaAdvertisableApps.map((app) => (
+                            <option key={app.id} value={app.id}>
+                              {app.name} (App ID: {app.id})
+                            </option>
+                          ))}
+                        </select>
+
+                        {metaAdvertisableAppsLoading && (
+                          <p className="mt-1 text-xs text-slate-500">
+                            Loading applications for the selected Meta Ad Account...
+                          </p>
+                        )}
+
+                        {metaAdvertisableAppsError && (
+                          <p className="mt-1 text-xs text-red-600">
+                            {metaAdvertisableAppsError}
+                          </p>
+                        )}
+
+                        {!metaAdvertisableAppsLoading &&
+                          !metaAdvertisableAppsError &&
+                          metaAdvertisableApps.length === 0 && (
+                            <p className="mt-1 text-xs text-amber-700">
+                              No advertisable Apps were returned for this Ad Account.
+                              Check your App and Ad Account permissions. Developer-mode
+                              Apps require the connected identity to be an App admin.
+                            </p>
+                          )}
+
+                        {metaAdvertisableAppsNextCursor && (
+                          <Button
+                            type="button"
+                            size="small"
+                            disabled={metaAdvertisableAppsLoading}
+                            onClick={loadMoreMetaAdvertisableApps}
+                            sx={{ mt: 1, textTransform: "none" }}
+                          >
+                            {metaAdvertisableAppsLoading
+                              ? "Loading..."
+                              : "Load more apps"}
+                          </Button>
+                        )}
                       </div>
+
                       <div>
                         <label className={labelClass}>
                           App Store / Play Store URL *
                         </label>
+
                         <input
                           type="url"
                           value={metaAppStoreUrl}
@@ -14851,10 +15873,30 @@ if (
                             setMetaAppStoreUrl(e.target.value);
                             clearPreview();
                           }}
-                          placeholder="https://apps.apple.com/... or https://play.google.com/..."
+                          placeholder="https://apps.apple.com/... or https://play.google.com/store/apps/details?id=..."
                           className={inputClass}
                         />
+
+                        <p className="mt-1 text-xs text-slate-500">
+                          Enter the store listing URL for the selected application.
+                        </p>
                       </div>
+
+                      {metaAdvertisableApps.find(
+                        (app) => app.id === metaAppId,
+                      )?.advertisableAppEvents.length ? (
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                          <p className="text-xs font-semibold text-slate-700">
+                            Available advertising events
+                          </p>
+
+                          <p className="mt-1 text-xs leading-5 text-slate-600">
+                            {metaAdvertisableApps
+                              .find((app) => app.id === metaAppId)
+                              ?.advertisableAppEvents.join(", ")}
+                          </p>
+                        </div>
+                      ) : null}
                     </>
                   )}
                 </div>

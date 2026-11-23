@@ -65,7 +65,15 @@ import {
     updateGoogleAdsStatus,
     removeGoogleAdsCampaign
 } from "../googleadsAPI/services/campaign.js";
+import {
+    listMetaAdvertisableApplications,
+    MetaAdvertisableApplicationLookupError,
+} from "../metaadsAPI/services/meta-advertisable-application-lookups.service.js";
 
+import {
+    listMetaMessagingDestinationsForPage,
+    MetaMessagingDestinationLookupError,
+} from "../metaadsAPI/services/meta-messaging-destination-lookups.service.js";
 import {
     getCampaigns as getMetaCampaigns,
     renameCampaign as renameMetaCampaign,
@@ -79,9 +87,13 @@ import sharp from "sharp";
 import { resolveStoredAssetPath } from "../services/asset-storage.service.js";
 import { uploadMetaAdsImageAsset } from "../metaadsAPI/services/meta-ads-image-upload.service.js";
 import {
-    getGoogleAdsAudiences,
+ getGoogleAdsAudiences,
     getGoogleAdsConversionActions,
     getGoogleAdsPortfolioStrategies,
+    getGoogleAdsMerchantCenterLinks,
+    getGoogleMerchantCenterDataSources,
+    getGoogleMerchantCenterFeedLabels,
+    getGoogleMerchantCenterProducts,
 } from "../googleadsAPI/services/google-ads-resource-lookups.service.js";
 import {
     listMetaFacebookPages,
@@ -92,6 +104,7 @@ import {
     getMetaPixelEventOptions,
     MetaPixelLookupError,
 } from "../metaadsAPI/services/meta-pixel-resource-lookups.service.js";
+
 const router = Router();
 
 const googleDisplayImageUpload = multer({
@@ -5861,6 +5874,15 @@ router.get("/lookups/google/portfolio-strategies", async (req, res) =>
         getGoogleAdsPortfolioStrategies(context),
     ),
 );
+// ==========================================
+// GOOGLE ADS MERCHANT CENTER LINK LOOKUP
+// ==========================================
+
+router.get("/lookups/google/merchant-center-links", async (req, res) =>
+    withGoogleAdsLookup(req, res, (context) =>
+        getGoogleAdsMerchantCenterLinks(context),
+    ),
+);
 
 
 async function getSelectedMetaPixelLookupAccount(
@@ -6315,5 +6337,241 @@ router.get(
       });
     }
   },
+);
+
+// ==========================================
+// META MESSAGING DESTINATION LOOKUP
+// GET /lookups/meta/pages/:pageId/messaging-destinations
+// ==========================================
+
+router.get(
+    "/lookups/meta/pages/:pageId/messaging-destinations",
+    async (req: Request, res: Response) => {
+        try {
+            const { userId } = getAuth(req);
+
+            if (!userId) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Authentication required.",
+                });
+            }
+
+            const pageId = String(req.params.pageId ?? "").trim();
+
+            if (!/^\d+$/.test(pageId)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "A valid numeric Facebook Page ID is required.",
+                });
+            }
+
+            const selectedAccount = await AdAccountModel.findOne({
+                userId,
+                provider: "metaAds",
+                status: "active",
+                isSelected: true,
+            })
+                .select("externalAccountId")
+                .lean();
+
+            if (!selectedAccount?.externalAccountId) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "No active Meta Ads account is selected. Select a Meta Ad Account first.",
+                });
+            }
+
+            const result =
+                await listMetaMessagingDestinationsForPage(
+                    userId,
+                    pageId,
+                );
+
+            return res.status(200).json({
+                success: true,
+                provider: "metaAds",
+                ...result,
+            });
+        } catch (error) {
+            console.error(
+                "Meta messaging destination lookup failed:",
+                error,
+            );
+
+            const statusCode =
+                error instanceof MetaMessagingDestinationLookupError
+                    ? error.statusCode
+                    : 500;
+
+            return res.status(statusCode).json({
+                success: false,
+                message:
+                    error instanceof Error
+                        ? error.message
+                        : "Failed to retrieve Meta messaging destinations.",
+                ...(error instanceof MetaMessagingDestinationLookupError &&
+                    error.details !== undefined && {
+                        details: error.details,
+                    }),
+            });
+        }
+    },
+);
+
+// ==========================================
+// META ADVERTISABLE APPLICATION LOOKUP
+// GET /lookups/meta/applications
+// ==========================================
+
+router.get(
+    "/lookups/meta/applications",
+    async (req: Request, res: Response) => {
+        try {
+            const { userId } = getAuth(req);
+
+            if (!userId) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Authentication required.",
+                });
+            }
+
+            const afterValue = req.query.after;
+
+            if (
+                afterValue !== undefined &&
+                typeof afterValue !== "string"
+            ) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Invalid application pagination cursor.",
+                });
+            }
+
+            const after =
+                typeof afterValue === "string"
+                    ? afterValue.trim()
+                    : undefined;
+
+            if (after && after.length > 2048) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Application pagination cursor is too long.",
+                });
+            }
+
+            const selectedAccount = await AdAccountModel.findOne({
+                userId,
+                provider: "metaAds",
+                status: "active",
+                isSelected: true,
+            })
+                .select("externalAccountId")
+                .lean();
+
+            if (!selectedAccount?.externalAccountId) {
+                return res.status(409).json({
+                    success: false,
+                    message:
+                        "No active Meta Ads account is selected. Select a Meta Ad Account first.",
+                });
+            }
+
+            const result = await listMetaAdvertisableApplications(
+                userId,
+                String(selectedAccount.externalAccountId),
+                after,
+            );
+
+            return res.status(200).json({
+                success: true,
+                provider: "metaAds",
+                ...result,
+            });
+        } catch (error) {
+            console.error(
+                "Meta advertisable application lookup failed:",
+                error,
+            );
+
+            const statusCode =
+                error instanceof MetaAdvertisableApplicationLookupError
+                    ? error.statusCode
+                    : 500;
+
+            return res.status(statusCode).json({
+                success: false,
+                message:
+                    error instanceof Error
+                        ? error.message
+                        : "Failed to retrieve advertisable Meta applications.",
+                ...(error instanceof MetaAdvertisableApplicationLookupError &&
+                    error.details !== undefined && {
+                        details: error.details,
+                    }),
+            });
+        }
+    },
+);
+
+
+function readMerchantCenterQuery(
+    req: Request,
+    key: string,
+): string {
+    const value = req.query[key];
+    return typeof value === "string" ? value.trim() : "";
+}
+
+// Merchant Center product data sources
+router.get(
+    "/lookups/google/merchant-center-data-sources",
+    async (req, res) =>
+        withGoogleAdsLookup(req, res, (context) =>
+            getGoogleMerchantCenterDataSources(
+                context,
+                readMerchantCenterQuery(req, "merchantCenterId"),
+            ),
+        ),
+);
+
+// Merchant Center feed labels and content languages
+router.get(
+    "/lookups/google/merchant-center-feed-labels",
+    async (req, res) =>
+        withGoogleAdsLookup(req, res, (context) =>
+            getGoogleMerchantCenterFeedLabels(
+                context,
+                readMerchantCenterQuery(req, "merchantCenterId"),
+                readMerchantCenterQuery(req, "pageToken") || undefined,
+            ),
+        ),
+);
+
+// Products filtered by the selected feed label and language
+router.get(
+    "/lookups/google/merchant-center-products",
+    async (req, res) =>
+        withGoogleAdsLookup(req, res, (context) =>
+            getGoogleMerchantCenterProducts(context, {
+                merchantCenterId: readMerchantCenterQuery(
+                    req,
+                    "merchantCenterId",
+                ),
+                feedLabel: readMerchantCenterQuery(req, "feedLabel"),
+                contentLanguage: readMerchantCenterQuery(
+                    req,
+                    "contentLanguage",
+                ),
+                pageToken:
+                    readMerchantCenterQuery(req, "pageToken") ||
+                    undefined,
+                pageSize: Number(
+                    readMerchantCenterQuery(req, "pageSize") || "100",
+                ),
+            }),
+        ),
 );
 export default router;

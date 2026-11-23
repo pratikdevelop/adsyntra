@@ -5,7 +5,7 @@ const API_URL =
 
 const googleAdsLookupApi = axios.create({
   baseURL: API_URL,
-  withCredentials: true,
+  // withCredentials: true,
 });
 
 export interface GoogleAdsLocation {
@@ -41,6 +41,7 @@ export interface GoogleAdsConversionGoal {
 }
 
 export const googleAdsLookups = {
+
   async locations(query: string, countryCode = "IN") {
     const { data } = await googleAdsLookupApi.get(
       "/api/campaigns/lookups/google/locations",
@@ -75,4 +76,18 @@ export const googleAdsLookups = {
 
     return data.data.goals as GoogleAdsConversionGoal[];
   },
+
+  async getMerchantLinks(token: string) { 
+   
+     const { data } = await googleAdsLookupApi.get(
+      "/api/campaigns/lookups/google/merchant-center-links",
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+
+    return data.data.links as unknown[];
+  }
 };

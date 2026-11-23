@@ -284,7 +284,7 @@ router.get("/google", (req, res) => {
 
     const authUrl = oauthClient.generateAuthUrl({
       access_type: "offline",
-      scope: [GOOGLE_ADS_SCOPE],
+      scope: [GOOGLE_ADS_SCOPE,  "https://www.googleapis.com/auth/content"],
       include_granted_scopes: true,
       prompt: "consent",
       state,

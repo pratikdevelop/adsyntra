@@ -137,7 +137,7 @@ async function graphGet<T>(
  * We search the authenticated user's accessible Pages and only
  * return the token when that exact Page is found.
  */
-async function getAccessiblePageAccessToken(
+export async function getAccessiblePageAccessToken(
   userId: string,
   pageId: string,
 ): Promise<string> {

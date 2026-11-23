@@ -1227,7 +1227,7 @@ export default function CampaignsPage({
               whiteSpace: "nowrap", // Prevents text from wrapping
             }}
           >
-            Create campaign
+            Create
           </Button>
         </Stack>
       </Box>
@@ -1608,7 +1608,6 @@ export default function CampaignsPage({
                                 <Tooltip title="Save campaign name" arrow placement="top" enterDelay={250}>
                                 <Button
                                   size="small"
-                                  title="Save campaign name"
                                   variant="contained"
                                   disableElevation
                                   disabled={
@@ -1634,7 +1633,6 @@ export default function CampaignsPage({
                                 <Tooltip title="Cancel rename" arrow placement="top" enterDelay={250}>
                                 <Button
                                   size="small"
-                                  title="Cancel rename"
                                   disabled={renamingCampaignKey === rowKey}
                                   onClick={cancelRename}
                                   sx={{ textTransform: "none" }}
@@ -1647,9 +1645,7 @@ export default function CampaignsPage({
                           ) : (
                             <Stack
                               direction="row"
-                              alignItems="center"
-                              spacing={0.5}
-                            >
+                              spacing={0.5} sx={{ alignItems: "center" }}>
                               <Typography variant="body2" fontWeight={600}>
                                 {campaign.name || "Untitled campaign"}
                               </Typography>
@@ -1657,7 +1653,6 @@ export default function CampaignsPage({
                               <Tooltip title="Rename campaign" arrow placement="top" enterDelay={250} enterNextDelay={100}>
                                 <IconButton
                                   size="small"
-                                  title="Rename campaign"
                                   onClick={() => startRename(campaign, rowKey)}
                                   aria-label="Rename campaign"
                                 >
@@ -1825,7 +1820,6 @@ export default function CampaignsPage({
                           <Tooltip title={isExpanded ? "Hide campaign hierarchy" : "View ad groups / ad sets, ads and creative assets"} arrow placement="top" enterDelay={250}>
                           <Button
                             size="small"
-                            title={isExpanded ? "Hide campaign hierarchy" : "View campaign hierarchy"}
                             variant="text"
                             onClick={() => toggleCampaignChildren(campaign, rowKey)}
                             endIcon={
@@ -1846,7 +1840,6 @@ export default function CampaignsPage({
                               href={`/dashboard/campaigns/${campaign.provider === "metaAds" ? "metaAds" : "googleAds"}/${encodeURIComponent(campaign.id)}`}
                               size="small"
                               variant="outlined"
-                              title="Open full campaign details"
                               sx={{ textTransform: "none", ml: 0.5, minWidth: 0, whiteSpace: "nowrap" }}
                             >
                               Full view
@@ -1997,9 +1990,8 @@ export default function CampaignsPage({
                                 display="flex"
                                 direction={{ xs: "column", sm: "row" }}
                                 justifyContent="space-between"
-                                alignItems={{ xs: "flex-start", sm: "center" }}
                                 spacing={1}
-                                sx={{ mb: 1.5 }}
+                                sx={{alignItems: { xs: "flex-start", sm: "center" }, mb: 1.5}}
                               >
                                 <Box flex={1} sx={{ minWidth: 0 }}>
                                   <Typography variant="subtitle1" fontWeight={700}>
@@ -2023,7 +2015,7 @@ export default function CampaignsPage({
                               </Stack>
 
                               {groupLoadingKey === rowKey && !adGroupsByCampaign[rowKey] ? (
-                                <Stack direction="row" spacing={1} alignItems="center" sx={{ py: 2 }}>
+                                <Stack direction="row" spacing={1} sx={{alignItems: "center", py: 2}}>
                                   <CircularProgress size={18} />
                                   <Typography variant="body2" color="text.secondary">
                                     Loading {campaign.provider === "googleAds" ? "ad groups" : "ad sets"}…
@@ -2060,13 +2052,10 @@ export default function CampaignsPage({
                                     : group.cpcBidMicros;
                                   return (
                                     <Paper key={groupKey} variant="outlined" sx={{ p: { xs: 1.5, sm: 2 }, borderRadius: 2, display: "flex", flexDirection: "column" }} >
-                                      <h1>test</h1>
                                       <Stack
                                         direction={{ xs: "column", sm: "row" }}
-                                        alignItems={{ xs: "stretch", sm: "center" }}
                                         justifyContent="space-between"
-                                        spacing={1.5}
-                                      >
+                                        spacing={1.5} sx={{ alignItems: { xs: "stretch", sm: "center" } }}>
                                         <Box sx={{ minWidth: 0 }}>
                                           <Typography fontWeight={700} variant="body2">
                                             {group.name || `Untitled ${campaign.provider === "googleAds" ? "ad group" : "ad set"}`}
@@ -2091,7 +2080,6 @@ export default function CampaignsPage({
                                         <Tooltip title={groupAdsOpen ? "Hide ads and creative details" : "View ads and creative details"} arrow placement="top" enterDelay={250}>
                                         <Button
                                           size="small"
-                                          title={groupAdsOpen ? "Hide ads" : "View ads"}
                                           variant={groupAdsOpen ? "outlined" : "contained"}
                                           disableElevation
                                           onClick={() => toggleGroupAds(campaign, group)}
@@ -2106,7 +2094,7 @@ export default function CampaignsPage({
                                       <Collapse in={groupAdsOpen} timeout="auto" unmountOnExit>
                                         <Divider sx={{ my: 1.5 }} />
                                         {adsLoadingKey === groupKey && !adsByGroup[groupKey] ? (
-                                          <Stack direction="row" spacing={1} alignItems="center" sx={{ py: 2 }}>
+                                          <Stack direction="row" spacing={1} sx={{alignItems: "center", py: 2}}>
                                             <CircularProgress size={16} />
                                             <Typography variant="body2" color="text.secondary">Loading ads and creative details…</Typography>
                                           </Stack>
@@ -2125,7 +2113,7 @@ export default function CampaignsPage({
                                             const adStatus = String(ad.status ?? ad.effective_status ?? "—").replace(/_/g, " ");
                                             return (
                                               <Paper key={String(ad.id)} variant="outlined" sx={{ p: 1.5, bgcolor: "background.default" }}>
-                                                <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} alignItems={{ xs: "stretch", sm: "flex-start" }}>
+                                                <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ alignItems: { xs: "stretch", sm: "flex-start" } }}>
                                                   {creative.mediaUrl && (
                                                     <Box
                                                       component="img"
@@ -2136,7 +2124,7 @@ export default function CampaignsPage({
                                                     />
                                                   )}
                                                   <Box sx={{ flex: 1, minWidth: 0 }}>
-                                                    <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                                                    <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ alignItems: "center" }}>
                                                       <Typography variant="body2" fontWeight={700}>{ad.name || `Ad ${ad.id}`}</Typography>
                                                       <Chip size="small" label={adStatus} color={/ACTIVE|ENABLED/.test(adStatus) ? "success" : /PAUSED/.test(adStatus) ? "warning" : "default"} />
                                                       {ad.type && <Chip size="small" variant="outlined" label={String(ad.type).replace(/_/g, " ")} />}

@@ -880,6 +880,150 @@ function isPositiveAmount(value: string): boolean {
   return Number.isFinite(amount) && amount > 0;
 }
 
+type GoogleAppStore = "GOOGLE_APP_STORE" | "APPLE_APP_STORE";
+
+type GoogleAppIdentityResolution =
+  | {
+      valid: true;
+      normalizedAppId: string;
+      source: "NATIVE_ID" | "STORE_URL";
+    }
+  | {
+      valid: false;
+      message: string;
+    };
+
+/**
+ * Google Ads AppCampaignSetting.app_id accepts the native store identifier:
+ * - Google Play: the Android application/package ID (for example com.example.app)
+ * - Apple App Store: the numeric App Store ID
+ *
+ * Users may enter either the native ID or the canonical store listing URL.
+ * This validates format and extracts the ID; it does not prove that the app
+ * is published, available in the target country, or eligible for App campaigns.
+ */
+function resolveGoogleAppIdentity(
+  value: string,
+  appStore: string,
+): GoogleAppIdentityResolution {
+  const rawValue = value.trim();
+
+  if (!rawValue) {
+    return {
+      valid: false,
+      message: "Enter the app's Google Play package name or Apple App Store numeric ID.",
+    };
+  }
+
+  if (appStore !== "GOOGLE_APP_STORE" && appStore !== "APPLE_APP_STORE") {
+    return {
+      valid: false,
+      message: "Select Google Play or Apple App Store.",
+    };
+  }
+
+  let normalizedAppId = rawValue;
+  let source: "NATIVE_ID" | "STORE_URL" = "NATIVE_ID";
+  const looksLikeUrl = /^[a-z][a-z0-9+.-]*:\/\//i.test(rawValue);
+
+  if (looksLikeUrl) {
+    let url: URL;
+
+    try {
+      url = new URL(rawValue);
+    } catch {
+      return {
+        valid: false,
+        message: "Enter a valid Google Play or Apple App Store listing URL.",
+      };
+    }
+
+    if (url.protocol !== "https:") {
+      return {
+        valid: false,
+        message: "Use the HTTPS URL from the official app store listing.",
+      };
+    }
+
+    const hostname = url.hostname.toLowerCase();
+
+    if (appStore === "GOOGLE_APP_STORE") {
+      if (
+        hostname !== "play.google.com" &&
+        hostname !== "www.play.google.com"
+      ) {
+        return {
+          valid: false,
+          message: "The selected store is Google Play. Paste a play.google.com listing URL or enter the Android package name.",
+        };
+      }
+
+      if (!/^\/store\/apps\/details\/?$/.test(url.pathname)) {
+        return {
+          valid: false,
+          message: "Use a Google Play app details URL, not a search or category URL.",
+        };
+      }
+
+      normalizedAppId = url.searchParams.get("id")?.trim() ?? "";
+      if (!normalizedAppId) {
+        return {
+          valid: false,
+          message: "The Google Play URL is missing its app package ID (the id query parameter).",
+        };
+      }
+    } else {
+      if (
+        hostname !== "apps.apple.com" &&
+        hostname !== "www.apps.apple.com" &&
+        hostname !== "itunes.apple.com"
+      ) {
+        return {
+          valid: false,
+          message: "The selected store is Apple App Store. Paste an apps.apple.com listing URL or enter its numeric App Store ID.",
+        };
+      }
+
+      const appStoreIdMatch = url.pathname.match(/(?:^|\/)id(\d+)(?:\/|$)/i);
+      if (!appStoreIdMatch?.[1]) {
+        return {
+          valid: false,
+          message: "The Apple App Store URL must contain its numeric ID segment, such as /id1234567890.",
+        };
+      }
+
+      normalizedAppId = appStoreIdMatch[1];
+    }
+
+    source = "STORE_URL";
+  }
+
+  if (appStore === "GOOGLE_APP_STORE") {
+    // Android application IDs have at least two dot-separated segments.
+    // Each segment starts with a letter and contains letters, digits or _.
+    const packageNamePattern =
+      /^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$/;
+
+    if (!packageNamePattern.test(normalizedAppId)) {
+      return {
+        valid: false,
+        message: "Enter a valid Android application ID (for example com.example.app) or a Google Play details URL.",
+      };
+    }
+  } else if (!/^\d+$/.test(normalizedAppId)) {
+    return {
+      valid: false,
+      message: "Enter the numeric Apple App Store ID (for example 1234567890) or an Apple App Store listing URL.",
+    };
+  }
+
+  return {
+    valid: true,
+    normalizedAppId,
+    source,
+  };
+}
+
 type GoogleAdsLookupOption = {
   id?: string | number;
   name?: string;
@@ -1607,8 +1751,13 @@ const [googleShoppingProductGroupValue, setGoogleShoppingProductGroupValue] =
   const [googleAppGoalType, setGoogleAppGoalType] = useState<GoogleAppGoalType>(
     "OPTIMIZE_INSTALLS_WITHOUT_TARGET_INSTALL_COST",
   );
-  const [googleAppId, setGoogleAppId] = useState("com.example.demostore");
-  const [googleAppStore, setGoogleAppStore] = useState("GOOGLE_APP_STORE");
+  const [googleAppId, setGoogleAppId] = useState("");
+  const [googleAppStore, setGoogleAppStore] =
+    useState<GoogleAppStore>("GOOGLE_APP_STORE");
+  const googleAppIdentityValidation = resolveGoogleAppIdentity(
+    googleAppId,
+    googleAppStore,
+  );
   const [googleAppTargetCost, setGoogleAppTargetCost] = useState("75");
   const [googleAppTargetRoas, setGoogleAppTargetRoas] = useState("2.5");
   const [googleAppHeadlines, setGoogleAppHeadlines] = useState(
@@ -4717,8 +4866,13 @@ useEffect(() => {
       selectedPlatforms.includes("googleAds") &&
       googleCampaignType === "APP"
     ) {
-      if (!googleAppId.trim()) {
-        setError("Enter the Google Play package name or App Store app ID.");
+      const appIdentity = resolveGoogleAppIdentity(
+        googleAppId,
+        googleAppStore,
+      );
+
+      if (!appIdentity.valid) {
+        setError(appIdentity.message);
         return false;
       }
       if (
@@ -5942,7 +6096,9 @@ useEffect(() => {
               ...(googleCampaignType === "APP" && {
                 advertising_channel_sub_type: googleAppSubtype,
                 app_campaign_setting: {
-                  app_id: googleAppId.trim(),
+                  app_id: googleAppIdentityValidation.valid
+                    ? googleAppIdentityValidation.normalizedAppId
+                    : "",
                   app_store: googleAppStore,
                   bidding_strategy_goal_type: effectiveGoogleAppGoal,
                 },
@@ -11625,6 +11781,13 @@ googleMerchantCenterProducts.length > 0 ? (
                           setGoogleAppSubtype(next);
                           const first = googleAppGoalOptionsBySubtype[next][0];
                           setGoogleAppGoalType(first.value);
+                          if (
+                            next === "APP_CAMPAIGN_FOR_PRE_REGISTRATION" &&
+                            googleAppStore !== "GOOGLE_APP_STORE"
+                          ) {
+                            setGoogleAppStore("GOOGLE_APP_STORE");
+                            setGoogleAppId("");
+                          }
                           clearPreview();
                         }}
                         className={inputClass}
@@ -11641,13 +11804,22 @@ googleMerchantCenterProducts.length > 0 ? (
                       <select
                         value={googleAppStore}
                         onChange={(e) => {
-                          setGoogleAppStore(e.target.value);
+                          const nextStore = e.target.value as GoogleAppStore;
+                          setGoogleAppStore(nextStore);
+                          setGoogleAppId("");
                           clearPreview();
                         }}
                         className={inputClass}
                       >
                         <option value="GOOGLE_APP_STORE">Google Play</option>
-                        <option value="APPLE_APP_STORE">Apple App Store</option>
+                        <option
+                          value="APPLE_APP_STORE"
+                          disabled={
+                            googleAppSubtype === "APP_CAMPAIGN_FOR_PRE_REGISTRATION"
+                          }
+                        >
+                          Apple App Store
+                        </option>
                       </select>
                     </div>
                     <div>
@@ -11660,9 +11832,30 @@ googleMerchantCenterProducts.length > 0 ? (
                           setGoogleAppId(e.target.value);
                           clearPreview();
                         }}
-                        placeholder="com.example.app or App Store ID"
+                        placeholder={
+                          googleAppStore === "GOOGLE_APP_STORE"
+                            ? "com.example.app or Google Play URL"
+                            : "1234567890 or Apple App Store URL"
+                        }
+                        autoComplete="off"
                         className={inputClass}
                       />
+                      {googleAppId.trim() && (
+                        <p
+                          className={`mt-2 text-xs ${
+                            googleAppIdentityValidation.valid
+                              ? "text-emerald-700"
+                              : "text-red-600"
+                          }`}
+                        >
+                          {googleAppIdentityValidation.valid
+                            ? `Identifier format is valid. Google Ads app ID: ${googleAppIdentityValidation.normalizedAppId}`
+                            : googleAppIdentityValidation.message}
+                        </p>
+                      )}
+                      <p className="mt-1 text-xs text-slate-500">
+                        Enter the native store ID or paste the official store listing URL. AdSyntra extracts the ID Google Ads expects. This checks format only; it does not confirm that the listing is live or eligible for App campaigns.
+                      </p>
                     </div>
                     <div>
                       <label className={labelClass}>
@@ -11726,8 +11919,10 @@ googleMerchantCenterProducts.length > 0 ? (
                       MULTI_CHANNEL plus a subtype. App engagement requires an
                       eligible Audience criterion containing an app-user
                       segment. The API maps each subtype to its own App Ad
-                      resource; verify app-store/subtype availability before
-                      creation.
+                      resource. This step validates the app identifier only;
+                      the current global execution route does not yet create
+                      Google APP campaigns. Live App campaign execution will
+                      need its own complete backend workflow.
                     </p>
                   </>
                 )}
@@ -16855,7 +17050,10 @@ googleMerchantCenterProducts.length > 0 ? (
                       <strong>App goal:</strong> {effectiveGoogleAppGoal}
                     </p>
                     <p>
-                      <strong>App ID:</strong> {googleAppId}
+                      <strong>App ID:</strong>{" "}
+                      {googleAppIdentityValidation.valid
+                        ? googleAppIdentityValidation.normalizedAppId
+                        : googleAppId}
                     </p>
                   </>
                 ) : googleCampaignType === "HOTEL" ? (

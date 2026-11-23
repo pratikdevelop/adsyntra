@@ -15,6 +15,8 @@ import type {
 /* Validation contracts                                                       */
 /* -------------------------------------------------------------------------- */
 
+
+
 export type CreativeValidationSeverity = "ERROR" | "WARNING";
 
 export interface CreativeValidationIssue {

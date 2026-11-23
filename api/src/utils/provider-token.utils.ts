@@ -122,11 +122,14 @@ export async function getProviderAccessToken(
             const newExpiryDate =
                 oauthClient.credentials.expiry_date ?? null;
 
-            await saveProviderTokens(userId, "googleAds", {
-                accessToken: newAccessToken,
-                refreshToken: newRefreshToken,
-                expiryDate: newExpiryDate,
-            });
+           await saveProviderTokens(userId, "googleAds", {
+  accessToken: tokens.access_token,
+  refreshToken: tokens.refresh_token ?? null,
+  expiryDate:
+    typeof tokens.expiry_date === "number"
+      ? tokens.expiry_date
+      : null,
+});
 
             return newAccessToken;
         } catch (error) {

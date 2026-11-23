@@ -284,7 +284,7 @@ router.get("/google", (req, res) => {
 
     const authUrl = oauthClient.generateAuthUrl({
       access_type: "offline",
-      scope: [GOOGLE_ADS_SCOPE,  "https://www.googleapis.com/auth/content"],
+      scope: [GOOGLE_ADS_SCOPE, "https://www.googleapis.com/auth/content"],
       include_granted_scopes: true,
       prompt: "consent",
       state,
@@ -353,10 +353,10 @@ router.get("/google/callback", async (req: Request, res: Response) => {
 
       return res.redirect(getFrontendProviderUrl("google", "error"));
     }
-
+  
     await saveProviderTokens(userId, "googleAds", {
       accessToken: tokens.access_token,
-      refreshToken: tokens.refresh_token ?? null,
+      refreshToken,
       expiryDate:
         typeof tokens.expiry_date === "number"
           ? tokens.expiry_date

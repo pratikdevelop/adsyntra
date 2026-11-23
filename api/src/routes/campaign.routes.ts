@@ -94,6 +94,8 @@ import {
     getGoogleMerchantCenterDataSources,
     getGoogleMerchantCenterFeedLabels,
     getGoogleMerchantCenterProducts,
+    registerGoogleMerchantCenterGcp,
+    getGoogleAdsHotelCenterLinks
 } from "../googleadsAPI/services/google-ads-resource-lookups.service.js";
 import {
     listMetaFacebookPages,
@@ -5884,6 +5886,16 @@ router.get("/lookups/google/merchant-center-links", async (req, res) =>
     ),
 );
 
+// ==========================================
+// GOOGLE ADS HOTEL CENTER LINK / INVITATION LOOKUP
+// ==========================================
+
+router.get("/lookups/google/hotel-center-links", async (req, res) =>
+    withGoogleAdsLookup(req, res, (context) =>
+        getGoogleAdsHotelCenterLinks(context),
+    ),
+);
+
 
 async function getSelectedMetaPixelLookupAccount(
     userId: string,
@@ -6153,6 +6165,16 @@ router.get(
             ),
         );
     },
+);
+
+// ==========================================
+// GOOGLE ADS HOTEL CENTER LINK / INVITATION LOOKUP
+// ==========================================
+
+router.get("/lookups/google/hotel-center-links", async (req, res) =>
+    withGoogleAdsLookup(req, res, (context) =>
+        getGoogleAdsHotelCenterLinks(context),
+    ),
 );
 // ==========================================
 // META CUSTOM CONVERSION LOOKUP
@@ -6574,4 +6596,34 @@ router.get(
             }),
         ),
 );
+
+router.post(
+  "/lookups/google/merchant-center/register-gcp",
+  async (req, res) => {
+    const merchantCenterId =
+      typeof req.body?.merchantCenterId === "string"
+        ? req.body.merchantCenterId.trim()
+        : "";
+
+    const developerEmail =
+      typeof req.body?.developerEmail === "string"
+        ? req.body.developerEmail.trim()
+        : "";
+
+    if (!merchantCenterId) {
+      return res.status(400).json({
+        success: false,
+        message: "Merchant Center account ID is required.",
+      });
+    }
+
+    return withGoogleAdsLookup(req, res, (context) =>
+      registerGoogleMerchantCenterGcp(context, {
+        merchantCenterId,
+        developerEmail: developerEmail || undefined,
+      }),
+    );
+  },
+);
+
 export default router;

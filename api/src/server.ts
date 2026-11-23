@@ -16,6 +16,7 @@ import audiencesRouter from "./routes/audiences.routes.js";
 import overviewRouter from './routes/overview.routes.js';
 import conversionsRouter from './routes/conversions.routes.js';
 
+import userSettingsRouter from "./routes/user-settings.routes.js";
 
 
 const app = express();
@@ -85,7 +86,7 @@ app.use("/api/ai-creative", aiCreativeRouter);
 app.use("/api/audiences", audiencesRouter);
 app.use("/api/overview", overviewRouter);
 app.use("/api/conversions", conversionsRouter);
-
+app.use("/api/user-settings", userSettingsRouter);
 
 // --------------------------------------------------
 // 404 handler
@@ -96,6 +97,7 @@ app.use((_req, res) => {
     message: "Route not found",
   });
 });
+
 
 // --------------------------------------------------
 // Global error handler

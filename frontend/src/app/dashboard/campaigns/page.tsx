@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState, type SyntheticEvent } from "react";
 import axios from "axios";
 import {
   Divider,
@@ -28,6 +28,7 @@ import {
   Tooltip,
   Typography,
   Select,
+  Snackbar,
 } from "@mui/material";
 
 import { getCampaigns } from "@/lib/campaign-api";
@@ -589,31 +590,34 @@ function MetricCard({
 }) {
   return (
     <Card
+      className="group relative h-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-lg"
       variant="outlined"
       sx={{
         height: "100%",
-        transition: "all 0.15s ease",
-        "&:hover": { boxShadow: 2, borderColor: "divider" },
+        borderRadius: 3,
+        transition: "all 0.2s ease",
+        "&:hover": { boxShadow: 4, borderColor: "#cbd5e1" },
       }}
     >
-      <CardContent sx={{ p: 2.5 }}>
-        <Stack direction="row" spacing={1.5}>
+      <CardContent className="!p-4 sm:!p-5">
+        <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
           <Box
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white shadow-sm"
             sx={{
-              width: 36,
-              height: 36,
-              borderRadius: 1.5,
+              width: 40,
+              height: 40,
+              borderRadius: 2.5,
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              bgcolor: accent,
+              background: `linear-gradient(135deg, ${accent}, ${accent}cc)`,
               color: "white",
               flexShrink: 0,
             }}
           >
             {icon}
           </Box>
-          <Typography variant="body2" color="text.secondary" fontWeight={500}>
+          <Typography className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500" variant="body2" color="text.secondary" fontWeight={600}>
             {label}
           </Typography>
         </Stack>
@@ -621,13 +625,15 @@ function MetricCard({
           variant="h4"
           component="p"
           fontWeight={700}
-          sx={{ mt: 1.5, letterSpacing: "-0.02em" }}
+          className="!mt-3 text-[1.8rem] font-bold tracking-tight text-slate-900 sm:text-[2rem]"
+          sx={{ mt: 1.5, letterSpacing: "-0.035em", lineHeight: 1.1 }}
         >
           {value}
         </Typography>
         <Typography
           variant="caption"
           color="text.secondary"
+          className="!mt-2 block text-xs text-slate-500"
           sx={{ mt: 0.5, display: "block" }}
         >
           {detail}
@@ -649,14 +655,27 @@ function DetailItem({ label, value }: { label: string; value: unknown }) {
         : String(value);
 
   return (
-    <Box sx={{ minWidth: 0 }}>
-      <Typography variant="caption" color="text.secondary" display="block">
+    <Box
+      className="min-w-0 rounded-xl border border-slate-200 bg-slate-50/80 p-3 transition-colors hover:border-indigo-200 hover:bg-white"
+      sx={{
+        minWidth: 0,
+        p: 1.5,
+        border: 1,
+        borderColor: "#e2e8f0",
+        borderRadius: 2.5,
+        bgcolor: "#f8fafc",
+        transition: "all 150ms ease",
+        "&:hover": { borderColor: "#c7d2fe", bgcolor: "#fff" },
+      }}
+    >
+      <Typography className="!text-[10px] !font-bold !uppercase !tracking-[0.09em] !text-slate-500" variant="caption" color="text.secondary" display="block">
         {label}
       </Typography>
       <Typography
         variant="body2"
         fontWeight={600}
-        sx={{ overflowWrap: "anywhere", mt: 0.25 }}
+        className="!mt-1 text-sm font-semibold leading-5 text-slate-800"
+        sx={{ overflowWrap: "anywhere", mt: 0.35 }}
       >
         {display}
       </Typography>
@@ -675,6 +694,23 @@ export default function CampaignsPage({
   >({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [toast, setToast] = useState<{
+    open: boolean;
+    severity: "success" | "error" | "warning" | "info";
+    message: string;
+  }>({ open: false, severity: "info", message: "" });
+  const showToast = useCallback(
+    (severity: "success" | "error" | "warning" | "info", message: string) =>
+      setToast({ open: true, severity, message }),
+    [],
+  );
+  const closeToast = useCallback(
+    (_event?: SyntheticEvent | Event, reason?: string) => {
+      if (reason === "clickaway") return;
+      setToast((current) => ({ ...current, open: false }));
+    },
+    [],
+  );
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
   const [adGroupsByCampaign, setAdGroupsByCampaign] = useState<Record<string, ChildRecord[]>>({});
   const [groupsLoadedByCampaign, setGroupsLoadedByCampaign] = useState<Record<string, boolean>>({});
@@ -694,12 +730,15 @@ export default function CampaignsPage({
     "all",
   );
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [campaignTypeFilter, setCampaignTypeFilter] = useState<string>("all");
+  const [objectiveFilter, setObjectiveFilter] = useState<string>("all");
+  const [accountFilter, setAccountFilter] = useState<string>("all");
   const [updatingStatusKey, setUpdatingStatusKey] = useState<string | null>(
     null,
   );
   const backendUrl = process.env.NEXT_PUBLIC_API_URL || process.env.BACKEND_API_URL || "http://localhost:5000";
 
-  const loadCampaigns = useCallback(async () => {
+  const loadCampaigns = useCallback(async (options?: { notify?: boolean }) => {
     setLoading(true);
 
     try {
@@ -707,8 +746,6 @@ export default function CampaignsPage({
       // Pagination is intentionally not requested until the GET route forwards
       // googlePageToken / metaPageToken to the provider services.
       const response: any = await getCampaigns();
-      console.log();
-
       const payload = response.data;
 
       if (!payload?.success) {
@@ -769,12 +806,31 @@ export default function CampaignsPage({
       };
       setProviders(newProviders);
       setError(null);
+      if (options?.notify) {
+        const failedProviders = Number(
+          payload.stats?.providersFailed ??
+            [googleResult, metaResult].filter(
+              (providerResult: ProviderResult | undefined) =>
+                providerResult?.success === false,
+            ).length,
+        );
+        if (failedProviders > 0) {
+          showToast(
+            "warning",
+            `Campaigns refreshed, but ${failedProviders} provider${failedProviders === 1 ? "" : "s"} could not be loaded.`,
+          );
+        } else {
+          showToast("success", `Campaigns refreshed successfully (${combinedCampaigns.length} found).`);
+        }
+      }
     } catch (requestError) {
-      setError(getErrorMessage(requestError));
+      const message = getErrorMessage(requestError);
+      setError(message);
+      showToast("error", message);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [showToast]);
 
   const getBackendToken = async (): Promise<string> => {
     const response = await axios.get("/api/token");
@@ -825,8 +881,13 @@ export default function CampaignsPage({
           ? response.data.pagination?.nextCursor ?? null
           : response.data.nextPageToken ?? null,
       }));
+      if (!pageToken) {
+        showToast("success", `${rows.length} ${isMeta ? "ad sets" : "ad groups"} loaded.`);
+      }
     } catch (requestError) {
-      setGroupErrors((current) => ({ ...current, [rowKey]: getErrorMessage(requestError) }));
+      const message = getErrorMessage(requestError);
+      setGroupErrors((current) => ({ ...current, [rowKey]: message }));
+      showToast("error", message);
     } finally {
       setGroupLoadingKey(null);
     }
@@ -875,8 +936,13 @@ export default function CampaignsPage({
           ? response.data.pagination?.nextCursor ?? null
           : response.data.nextPageToken ?? null,
       }));
+      if (!pageToken) {
+        showToast("success", `${rows.length} ads loaded.`);
+      }
     } catch (requestError) {
-      setAdsErrors((current) => ({ ...current, [groupKey]: getErrorMessage(requestError) }));
+      const message = getErrorMessage(requestError);
+      setAdsErrors((current) => ({ ...current, [groupKey]: message }));
+      showToast("error", message);
     } finally {
       setAdsLoadingKey(null);
     }
@@ -971,14 +1037,9 @@ export default function CampaignsPage({
     try {
       setRenamingCampaignKey(rowKey);
       setRenameError(null);
-      const response = await axios.get("/api/token");
-      if (!response.data) {
-        console.log("eer");
-      }
+      const token = await getBackendToken();
 
-      const { token } = response.data;
-
-      await axios.post(
+      const renameResponse = await axios.post(
         `${backendUrl}/api/campaigns/rename`,
         {
           provider: campaign.provider,
@@ -993,6 +1054,9 @@ export default function CampaignsPage({
           },
         },
       );
+      if (renameResponse.data?.success === false) {
+        throw new Error(renameResponse.data?.message || "Campaign rename failed.");
+      }
 
       setCampaigns((current) =>
         current.map((item) =>
@@ -1010,8 +1074,11 @@ export default function CampaignsPage({
       );
 
       cancelRename();
+      showToast("success", "Campaign name updated successfully.");
     } catch (error) {
-      setRenameError(getErrorMessage(error));
+      const message = getErrorMessage(error);
+      setRenameError(message);
+      showToast("error", message);
     } finally {
       setRenamingCampaignKey(null);
     }
@@ -1024,44 +1091,116 @@ export default function CampaignsPage({
     (provider) => providers[provider as ProviderKey]?.connected,
   ).length;
 
-  // Available statuses for filter
+  // Available filter options are derived from the campaigns returned by both providers.
   const availableStatuses = useMemo(() => {
-    const set = new Set<string>();
-    campaigns.forEach((c) => {
-      const s = (c.effectiveStatus || c.status || "").toUpperCase();
-      if (s) set.add(s);
+    const values = new Set<string>();
+    campaigns.forEach((campaign) => {
+      const value = (campaign.effectiveStatus || campaign.status || "").toUpperCase();
+      if (value) values.add(value);
     });
-    return [...set].sort();
+    return [...values].sort();
   }, [campaigns]);
 
-  // Filtered campaigns
+  const availableCampaignTypes = useMemo(() => {
+    const values = new Set<string>();
+    campaigns.forEach((campaign) => {
+      const value = getCampaignType(campaign).trim();
+      if (value && value !== "—") values.add(value);
+    });
+    return [...values].sort((a, b) => a.localeCompare(b));
+  }, [campaigns]);
+
+  const availableObjectives = useMemo(() => {
+    const values = new Set<string>();
+    campaigns.forEach((campaign) => {
+      const value = String(campaign.objective ?? "").trim();
+      if (value) values.add(value);
+    });
+    return [...values].sort((a, b) => a.localeCompare(b));
+  }, [campaigns]);
+
+  const availableAccounts = useMemo(() => {
+    const values = new Set<string>();
+    campaigns.forEach((campaign) => {
+      const value = String(campaign.accountId ?? "").trim();
+      if (value) values.add(value);
+    });
+    return [...values].sort((a, b) => a.localeCompare(b));
+  }, [campaigns]);
+
+  // All filters are applied together so users can narrow campaigns across providers.
   const filteredCampaigns = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return campaigns.filter((c) => {
-      if (platformFilter !== "all" && c.provider !== platformFilter)
+    return campaigns.filter((campaign) => {
+      if (platformFilter !== "all" && campaign.provider !== platformFilter) {
         return false;
-      if (statusFilter !== "all") {
-        const s = (c.effectiveStatus || c.status || "").toUpperCase();
-        if (s !== statusFilter) return false;
       }
+
+      if (statusFilter !== "all") {
+        const status = (campaign.effectiveStatus || campaign.status || "").toUpperCase();
+        if (status !== statusFilter) return false;
+      }
+
+      if (
+        campaignTypeFilter !== "all" &&
+        getCampaignType(campaign).toLowerCase() !== campaignTypeFilter.toLowerCase()
+      ) {
+        return false;
+      }
+
+      if (
+        objectiveFilter !== "all" &&
+        String(campaign.objective ?? "").toLowerCase() !== objectiveFilter.toLowerCase()
+      ) {
+        return false;
+      }
+
+      if (accountFilter !== "all" && String(campaign.accountId ?? "") !== accountFilter) {
+        return false;
+      }
+
       if (q) {
-        const haystack =
-          `${c.name} ${c.id} ${c.accountId ?? ""} ${c.objective ?? ""}`.toLowerCase();
+        const haystack = [
+          campaign.name,
+          campaign.id,
+          campaign.accountId ?? "",
+          campaign.objective ?? "",
+          getCampaignType(campaign),
+          getCampaignBidStrategy(campaign),
+          getProviderLabel(campaign.provider),
+          campaign.status ?? "",
+          campaign.effectiveStatus ?? "",
+        ].join(" ").toLowerCase();
         if (!haystack.includes(q)) return false;
       }
+
       return true;
     });
-  }, [campaigns, search, platformFilter, statusFilter]);
+  }, [
+    campaigns,
+    search,
+    platformFilter,
+    statusFilter,
+    campaignTypeFilter,
+    objectiveFilter,
+    accountFilter,
+  ]);
 
   const activeFiltersCount =
-    (search ? 1 : 0) +
+    (search.trim() ? 1 : 0) +
     (platformFilter !== "all" ? 1 : 0) +
-    (statusFilter !== "all" ? 1 : 0);
+    (statusFilter !== "all" ? 1 : 0) +
+    (campaignTypeFilter !== "all" ? 1 : 0) +
+    (objectiveFilter !== "all" ? 1 : 0) +
+    (accountFilter !== "all" ? 1 : 0);
 
   const clearFilters = () => {
     setSearch("");
     setPlatformFilter("all");
     setStatusFilter("all");
+    setCampaignTypeFilter("all");
+    setObjectiveFilter("all");
+    setAccountFilter("all");
   };
 
   const handleStatusChange = async (
@@ -1074,12 +1213,7 @@ export default function CampaignsPage({
 
     try {
       setUpdatingStatusKey(rowKey);
-      const tokenData = await axios.get("/api/token");
-      if (!tokenData.data) {
-        console.log("eer");
-      }
-
-      const { token } = tokenData.data;
+      const token = await getBackendToken();
       const response = await axios.post(
         `${backendUrl}/api/campaigns/status`,
         {
@@ -1112,6 +1246,7 @@ export default function CampaignsPage({
             : item,
         ),
       );
+      showToast("success", `Campaign status changed to ${newStatus.replace(/_/g, " ")}.`);
     } catch (error: unknown) {
       console.error("Campaign status update failed:", error);
 
@@ -1121,7 +1256,7 @@ export default function CampaignsPage({
           ? error.message
           : "Failed to update campaign status.";
 
-      setError(message);
+      showToast("error", message);
     } finally {
       setUpdatingStatusKey(null);
     }
@@ -1149,17 +1284,18 @@ export default function CampaignsPage({
         throw new Error(response.data?.message || "Campaign deletion failed.");
       }
       setCampaigns((current) => current.filter((item) => `${item.provider}:${item.id}` !== rowKey));
-      setError(null);
+      showToast("success", "Campaign deleted successfully.");
     } catch (deleteError) {
-      setError(getErrorMessage(deleteError));
+      const message = getErrorMessage(deleteError);
+      showToast("error", message);
     }
   };
 
   return (
-    <Box sx={{ width: "100%", maxWidth: 1700, mx: "auto" }}>
-      {/* Header */}
-      {/* Header */}
+    <Box className="min-h-full w-full bg-slate-50/70 px-3 py-5 sm:px-5 lg:px-7" sx={{ width: "100%", maxWidth: 1800, mx: "auto", boxSizing: "border-box" }}>
+      {/* Page header */}
       <Box
+        className="mb-6 flex flex-col items-start justify-between gap-4 border-b border-slate-200/80 pb-5 sm:flex-row sm:items-center"
         sx={{
           display: "flex",
           flexDirection: { xs: "column", sm: "row" },
@@ -1173,37 +1309,42 @@ export default function CampaignsPage({
           <Typography
             variant="caption"
             sx={{
-              fontWeight: 600,
-              letterSpacing: "0.08em",
+              fontWeight: 700,
+              letterSpacing: "0.12em",
               textTransform: "uppercase",
-              color: "primary.main",
+              color: "#4f46e5",
             }}
           >
             AdSyntra · Campaigns
           </Typography>
           <Typography
+            className="!mt-1 text-2xl font-bold tracking-tight text-slate-950 sm:text-3xl"
             variant="h4"
             component="h1"
-            fontWeight={700}
-            sx={{ mt: 0.5, letterSpacing: "-0.02em" }}
+            fontWeight={800}
+            sx={{ mt: 0.5, letterSpacing: "-0.035em", lineHeight: 1.15 }}
           >
             {pageTitle}
           </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+          <Typography className="!mt-2 max-w-2xl text-sm leading-6 text-slate-500" variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
             {pageDescription}
           </Typography>
         </Box>
 
-        <Stack direction="row" spacing={1.5}>
-          <Tooltip title="Refresh campaigns">
-            <span>
+        <Stack className="items-center gap-2" direction="row" spacing={1.5}>
+          <Tooltip title="Refresh campaigns" arrow placement="top">
+            <span style={{ display: "inline-flex" }}>
               <IconButton
-                onClick={() => void loadCampaigns()}
+                className="h-10 w-10 rounded-xl border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
+                onClick={() => void loadCampaigns({ notify: true })}
                 disabled={loading}
                 sx={{
+                  width: 42,
+                  height: 42,
                   border: 1,
-                  borderColor: "divider",
-                  bgcolor: "background.paper",
+                  borderColor: "#e2e8f0",
+                  borderRadius: 3,
+                  bgcolor: "#fff",
                 }}
               >
                 <Icon.Refresh />
@@ -1211,33 +1352,35 @@ export default function CampaignsPage({
             </span>
           </Tooltip>
           <Button
+            className="!h-10 !rounded-xl !bg-indigo-600 !px-4 !font-semibold !normal-case !shadow-sm transition hover:!bg-indigo-700 hover:!shadow-md"
             component={Link}
             href="/dashboard/campaigns/new"
             variant="contained"
-            size="medium" // Changed from large to medium for better proportion
+            size="medium"
             disableElevation
             startIcon={<Icon.Plus />}
             sx={{
-              borderRadius: 2,
+              borderRadius: 3,
               textTransform: "none",
-              fontWeight: 600,
-              px: 3,
+              fontWeight: 700,
+              px: 2.5,
               py: 1,
               height: "fit-content", // Prevents it from stretching
               whiteSpace: "nowrap", // Prevents text from wrapping
             }}
           >
-            Create
+            Create campaign
           </Button>
         </Stack>
       </Box>
       {/* Metric Cards */}
       <Box
+        className="mb-6 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4"
         sx={{
           display: "grid",
           gridTemplateColumns: {
             xs: "1fr",
-            sm: "repeat(4, minmax(0, 1fr))",
+            sm: "repeat(2, minmax(0, 1fr))",
             xl: "repeat(4, minmax(0, 1fr))",
           },
           gap: 2,
@@ -1282,8 +1425,9 @@ export default function CampaignsPage({
 
       {error && (
         <Alert
+          className="mb-4 rounded-xl border border-rose-200 bg-rose-50 text-rose-800"
           severity="error"
-          sx={{ mb: 2, borderRadius: 2 }}
+          sx={{ mb: 2, borderRadius: 3 }}
           action={
             <Button
               color="inherit"
@@ -1299,32 +1443,35 @@ export default function CampaignsPage({
       )}
 
       <Paper
+        className="w-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
         variant="outlined"
-        sx={{ width: "100%", overflow: "hidden", borderRadius: 2 }}
+        sx={{ width: "100%", overflow: "hidden", borderRadius: 3, borderColor: "#e2e8f0", boxShadow: "0 1px 3px rgba(15,23,42,0.04)" }}
       >
         {/* Toolbar */}
         <Stack
+          className="border-b border-slate-200 bg-white px-4 py-4 sm:px-5"
           direction={{ xs: "column", md: "row" }}
           spacing={2}
-          sx={{ px: 2.5, py: 2, borderBottom: 1, borderColor: "divider" }}
+          sx={{ px: { xs: 2, sm: 2.5 }, py: 2, borderBottom: 1, borderColor: "#e2e8f0", alignItems: { xs: "stretch", md: "center" } }}
         >
           <Box>
             <Stack direction="row" spacing={1}>
               <Typography
+                className="text-base font-bold tracking-tight text-slate-900"
                 variant="h6"
-                sx={{
-                  fontWeight: "700",
-                }}
+                sx={{ fontWeight: 800, letterSpacing: "-0.02em" }}
               >
                 All campaigns
               </Typography>
               <Chip
                 label={filteredCampaigns.length}
                 size="small"
-                sx={{ fontWeight: 700, height: 22 }}
+                className="!h-6 !rounded-full !bg-indigo-50 !px-1 !text-indigo-700"
+                sx={{ fontWeight: 800, height: 24, minWidth: 24 }}
               />
             </Stack>
             <Typography
+              className="!mt-1 text-xs font-medium text-slate-500"
               variant="body2"
               color="text.secondary"
               sx={{ mt: 0.25 }}
@@ -1333,7 +1480,13 @@ export default function CampaignsPage({
             </Typography>
           </Box>
 
-          <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5}>
+          <Stack
+            direction="row"
+            spacing={1.25}
+            useFlexGap
+            flexWrap="wrap"
+            sx={{ flex: 1, minWidth: 0, alignItems: "center" }}
+          >
             <TextField
               size="small"
               placeholder="Search campaigns…"
@@ -1350,7 +1503,8 @@ export default function CampaignsPage({
                   ),
                 },
               }}
-              sx={{ minWidth: { sm: 240 } }}
+              className="w-full sm:min-w-[220px] sm:flex-[1_1_220px] [&_.MuiOutlinedInput-root]:h-10 [&_.MuiOutlinedInput-root]:rounded-xl [&_.MuiOutlinedInput-root]:bg-slate-50 [&_.MuiOutlinedInput-notchedOutline]:border-slate-200 [&_.MuiOutlinedInput-root:hover_.MuiOutlinedInput-notchedOutline]:border-slate-300 [&_.MuiInputBase-input]:text-sm"
+              sx={{ minWidth: { xs: "100%", sm: 220 }, flex: "1 1 220px", "& .MuiOutlinedInput-root": { borderRadius: 3 } }}
             />
             <TextField
               select
@@ -1359,7 +1513,8 @@ export default function CampaignsPage({
               onChange={(e) =>
                 setPlatformFilter(e.target.value as "all" | ProviderKey)
               }
-              sx={{ minWidth: 140 }}
+              className="min-w-[140px] flex-[0_1_150px] [&_.MuiOutlinedInput-root]:h-10 [&_.MuiOutlinedInput-root]:rounded-xl [&_.MuiOutlinedInput-root]:bg-slate-50 [&_.MuiOutlinedInput-notchedOutline]:border-slate-200 [&_.MuiSelect-select]:text-sm"
+              sx={{ minWidth: 140, flex: "0 1 150px", "& .MuiOutlinedInput-root": { borderRadius: 3 } }}
             >
               <MenuItem value="all">All platforms</MenuItem>
               <MenuItem value="googleAds">Google Ads</MenuItem>
@@ -1368,22 +1523,69 @@ export default function CampaignsPage({
             <TextField
               select
               size="small"
+              value={accountFilter}
+              onChange={(e) => setAccountFilter(e.target.value)}
+              className="min-w-[140px] flex-[0_1_150px] [&_.MuiOutlinedInput-root]:h-10 [&_.MuiOutlinedInput-root]:rounded-xl [&_.MuiOutlinedInput-root]:bg-slate-50 [&_.MuiOutlinedInput-notchedOutline]:border-slate-200 [&_.MuiSelect-select]:text-sm"
+              sx={{ minWidth: 140, flex: "0 1 150px", "& .MuiOutlinedInput-root": { borderRadius: 3 } }}
+            >
+              <MenuItem value="all">All accounts</MenuItem>
+              {availableAccounts.map((accountId) => (
+                <MenuItem key={accountId} value={accountId}>
+                  {accountId}
+                </MenuItem>
+              ))}
+            </TextField>
+            <TextField
+              select
+              size="small"
+              value={campaignTypeFilter}
+              onChange={(e) => setCampaignTypeFilter(e.target.value)}
+              className="min-w-[140px] flex-[0_1_150px] [&_.MuiOutlinedInput-root]:h-10 [&_.MuiOutlinedInput-root]:rounded-xl [&_.MuiOutlinedInput-root]:bg-slate-50 [&_.MuiOutlinedInput-notchedOutline]:border-slate-200 [&_.MuiSelect-select]:text-sm"
+              sx={{ minWidth: 140, flex: "0 1 150px", "& .MuiOutlinedInput-root": { borderRadius: 3 } }}
+            >
+              <MenuItem value="all">All campaign types</MenuItem>
+              {availableCampaignTypes.map((type) => (
+                <MenuItem key={type} value={type}>
+                  {type.replace(/_/g, " ")}
+                </MenuItem>
+              ))}
+            </TextField>
+            <TextField
+              select
+              size="small"
+              value={objectiveFilter}
+              onChange={(e) => setObjectiveFilter(e.target.value)}
+              className="min-w-[140px] flex-[0_1_150px] [&_.MuiOutlinedInput-root]:h-10 [&_.MuiOutlinedInput-root]:rounded-xl [&_.MuiOutlinedInput-root]:bg-slate-50 [&_.MuiOutlinedInput-notchedOutline]:border-slate-200 [&_.MuiSelect-select]:text-sm"
+              sx={{ minWidth: 140, flex: "0 1 150px", "& .MuiOutlinedInput-root": { borderRadius: 3 } }}
+            >
+              <MenuItem value="all">All objectives</MenuItem>
+              {availableObjectives.map((objective) => (
+                <MenuItem key={objective} value={objective}>
+                  {objective.replace(/_/g, " ")}
+                </MenuItem>
+              ))}
+            </TextField>
+            <TextField
+              select
+              size="small"
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              sx={{ minWidth: 140 }}
+              className="min-w-[140px] flex-[0_1_150px] [&_.MuiOutlinedInput-root]:h-10 [&_.MuiOutlinedInput-root]:rounded-xl [&_.MuiOutlinedInput-root]:bg-slate-50 [&_.MuiOutlinedInput-notchedOutline]:border-slate-200 [&_.MuiSelect-select]:text-sm"
+              sx={{ minWidth: 140, flex: "0 1 150px", "& .MuiOutlinedInput-root": { borderRadius: 3 } }}
             >
               <MenuItem value="all">All statuses</MenuItem>
-              {availableStatuses.map((s) => (
-                <MenuItem key={s} value={s}>
-                  {s}
+              {availableStatuses.map((status) => (
+                <MenuItem key={status} value={status}>
+                  {status.replace(/_/g, " ")}
                 </MenuItem>
               ))}
             </TextField>
             {activeFiltersCount > 0 && (
               <Button
+                className="!rounded-lg !px-3 !font-semibold !normal-case !text-indigo-700 hover:!bg-indigo-50"
                 size="small"
                 onClick={clearFilters}
-                sx={{ textTransform: "none" }}
+                sx={{ textTransform: "none", borderRadius: 2 }}
               >
                 Clear ({activeFiltersCount})
               </Button>
@@ -1395,6 +1597,7 @@ export default function CampaignsPage({
         {loading ? (
           <Stack
             spacing={2}
+            className="min-h-[280px] items-center justify-center rounded-b-2xl bg-white py-16"
             sx={{
               py: 10,
               display: "flex",
@@ -1402,71 +1605,78 @@ export default function CampaignsPage({
               justifyContent: "center",
             }}
           >
-            <CircularProgress />
-            <Typography variant="body2" color="text.secondary">
+            <CircularProgress size={30} thickness={4} />
+            <Typography className="font-medium text-slate-500" variant="body2" color="text.secondary">
               Loading campaigns from Google Ads and Meta Ads…
             </Typography>
           </Stack>
         ) : campaigns.length === 0 ? (
-          <Box sx={{ p: 6, textAlign: "center" }}>
+          <Box className="flex min-h-[300px] flex-col items-center justify-center px-6 py-14 text-center" sx={{ p: 6, textAlign: "center" }}>
+            <Box className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600">
+              <Icon.Layers />
+            </Box>
             <Typography
+              className="font-bold tracking-tight text-slate-900"
               variant="h6"
-              sx={{
-                fontWeight: "700",
-              }}
+              sx={{ fontWeight: 800 }}
             >
               No campaigns yet
             </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+            <Typography className="max-w-md text-sm leading-6 text-slate-500" variant="body2" color="text.secondary" sx={{ mb: 3 }}>
               No campaigns were returned by the connected advertising accounts.
             </Typography>
             <Button
               component={Link}
               href="/dashboard/campaigns/new"
+              className="!rounded-xl !bg-indigo-600 !px-4 !py-2 !font-semibold !normal-case !shadow-sm hover:!bg-indigo-700"
               variant="contained"
               disableElevation
               startIcon={<Icon.Plus />}
-              sx={{ textTransform: "none" }}
+              sx={{ textTransform: "none", borderRadius: 3 }}
             >
               Create your first campaign
             </Button>
           </Box>
         ) : filteredCampaigns.length === 0 ? (
-          <Box sx={{ p: 6, textAlign: "center" }}>
+          <Box className="flex min-h-[260px] flex-col items-center justify-center px-6 py-14 text-center" sx={{ p: 6, textAlign: "center" }}>
+            <Box className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 text-slate-500">
+              <Icon.Search />
+            </Box>
             <Typography
+              className="font-bold tracking-tight text-slate-900"
               variant="h6"
-              sx={{
-                fontWeight: "700",
-              }}
+              sx={{ fontWeight: 800 }}
             >
               No matching campaigns
             </Typography>
-            <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+            <Typography className="max-w-md text-sm leading-6 text-slate-500" variant="body2" color="text.secondary" sx={{ mb: 3 }}>
               Try adjusting your filters or search.
             </Typography>
-            <Button onClick={clearFilters} sx={{ textTransform: "none" }}>
+            <Button className="!rounded-xl !px-4 !font-semibold !normal-case !text-indigo-700 hover:!bg-indigo-50" onClick={clearFilters} sx={{ textTransform: "none" }}>
               Clear filters
             </Button>
           </Box>
         ) : (
-          <TableContainer sx={{ width: "100%", maxHeight: "70vh" }}>
+          <TableContainer className="w-full overflow-x-auto bg-white" sx={{ width: "100%", overflowX: "auto" }}>
             <Table
+              className="min-w-[1680px] [&_.MuiTableCell-root]:border-b [&_.MuiTableCell-root]:border-slate-100 [&_.MuiTableCell-root]:px-3 [&_.MuiTableCell-root]:py-3 [&_.MuiTableCell-head]:bg-slate-50 [&_.MuiTableCell-head]:text-[10px] [&_.MuiTableCell-head]:font-extrabold [&_.MuiTableCell-head]:uppercase [&_.MuiTableCell-head]:tracking-[0.08em] [&_.MuiTableCell-head]:text-slate-500"
               size="medium"
-              sx={{ minWidth: 1900 }}
+              sx={{ minWidth: 1680, "& .MuiTableCell-root": { borderColor: "#f1f5f9" }, "& .MuiTableCell-head": { bgcolor: "#f8fafc" } }}
               aria-label="Global advertising campaigns"
               stickyHeader
             >
               <TableHead>
-                <TableRow>
+                <TableRow className="border-b border-slate-200">
                   <TableCell
+                    className="!bg-slate-50 !text-slate-600"
                     sx={{
                       fontWeight: 700,
                       position: "sticky",
                       left: 0,
                       zIndex: 3,
-                      bgcolor: "background.paper",
+                      bgcolor: "#f8fafc",
                       borderRight: 1,
-                      borderColor: "divider",
+                      borderColor: "#e2e8f0",
                       minWidth: 230,
                     }}
                   >
@@ -1568,15 +1778,16 @@ export default function CampaignsPage({
 
                   return (
                     <Fragment key={rowKey}>
-                      <TableRow hover sx={{ "& td": { verticalAlign: "top" } }}>
+                      <TableRow className="group transition-colors duration-150 hover:bg-indigo-50/30" hover sx={{ "& td": { verticalAlign: "top" } }}>
                         <TableCell
+                          className="!bg-white group-hover:!bg-indigo-50/30"
                           sx={{
                             position: "sticky",
                             left: 0,
                             zIndex: 1,
-                            bgcolor: "background.paper",
+                            bgcolor: "#fff",
                             borderRight: 1,
-                            borderColor: "divider",
+                            borderColor: "#e2e8f0",
                           }}
                         >
                           {editingCampaignKey === rowKey ? (
@@ -1606,6 +1817,7 @@ export default function CampaignsPage({
 
                               <Stack direction="row" spacing={1}>
                                 <Tooltip title="Save campaign name" arrow placement="top" enterDelay={250}>
+                                  <span style={{ display: "inline-flex" }}>
                                 <Button
                                   size="small"
                                   variant="contained"
@@ -1628,9 +1840,11 @@ export default function CampaignsPage({
                                     "Save"
                                   )}
                                 </Button>
+                                  </span>
                                 </Tooltip>
 
                                 <Tooltip title="Cancel rename" arrow placement="top" enterDelay={250}>
+                                  <span style={{ display: "inline-flex" }}>
                                 <Button
                                   size="small"
                                   disabled={renamingCampaignKey === rowKey}
@@ -1639,6 +1853,7 @@ export default function CampaignsPage({
                                 >
                                   Cancel
                                 </Button>
+                                  </span>
                                 </Tooltip>
                               </Stack>
                             </Stack>
@@ -1646,24 +1861,28 @@ export default function CampaignsPage({
                             <Stack
                               direction="row"
                               spacing={0.5} sx={{ alignItems: "center" }}>
-                              <Typography variant="body2" fontWeight={600}>
+                              <Typography className="max-w-[245px] truncate text-sm font-bold text-slate-900" variant="body2" fontWeight={700}>
                                 {campaign.name || "Untitled campaign"}
                               </Typography>
 
                               <Tooltip title="Rename campaign" arrow placement="top" enterDelay={250} enterNextDelay={100}>
-                                <IconButton
-                                  size="small"
-                                  onClick={() => startRename(campaign, rowKey)}
-                                  aria-label="Rename campaign"
-                                >
-                                  <Typography component="span" fontSize={15}>
-                                    ✎
-                                  </Typography>
-                                </IconButton>
+                                <span style={{ display: "inline-flex" }}>
+                                  <IconButton
+                                    className="!ml-0.5 !h-7 !w-7 !rounded-lg !text-slate-400 hover:!bg-indigo-50 hover:!text-indigo-700"
+                                    size="small"
+                                    onClick={() => startRename(campaign, rowKey)}
+                                    aria-label="Rename campaign"
+                                  >
+                                    <Typography component="span" fontSize={15}>
+                                      ✎
+                                    </Typography>
+                                  </IconButton>
+                                </span>
                               </Tooltip>
                             </Stack>
                           )}
                           <Typography
+                            className="!mt-1 block font-mono !text-[10px] !text-slate-400"
                             variant="caption"
                             color="text.secondary"
                             display="block"
@@ -1671,6 +1890,7 @@ export default function CampaignsPage({
                             ID: {campaign.id}
                           </Typography>
                           <Typography
+                            className="block !text-[10px] !text-slate-500"
                             variant="caption"
                             color="text.secondary"
                             display="block"
@@ -1680,19 +1900,21 @@ export default function CampaignsPage({
                         </TableCell>
                         <TableCell>
                           <Chip
+                            className="!rounded-lg !font-semibold"
                             label={getProviderLabel(campaign.provider)}
                             color={getProviderColor(campaign.provider)}
                             size="small"
                             variant="outlined"
+                            sx={{ borderRadius: 2, fontWeight: 700 }}
                           />
                         </TableCell>
                         <TableCell>
-                          <Typography variant="body2">
+                          <Typography className="whitespace-nowrap text-xs font-medium text-slate-700" variant="body2">
                             {campaign.objective || "—"}
                           </Typography>
                         </TableCell>
                         <TableCell>
-                          <Typography variant="body2">
+                          <Typography className="whitespace-nowrap text-xs font-medium text-slate-700" variant="body2">
                             {getCampaignType(campaign)}
                           </Typography>
                         </TableCell>
@@ -1704,12 +1926,12 @@ export default function CampaignsPage({
                                 rawCampaign?.bid_strategy,
                             )}
                           </Typography> */}
-                          <Typography variant="body2">
+                          <Typography className="whitespace-nowrap text-xs font-medium text-slate-700" variant="body2">
                             {getCampaignBidStrategy(campaign)}
                           </Typography>
                         </TableCell>
                         <TableCell align="right">
-                          <Typography variant="body2" fontWeight={500}>
+                          <Typography className="whitespace-nowrap text-xs font-bold tabular-nums text-slate-800" variant="body2" fontWeight={700}>
                             {formatCurrency(
                               getCampaignBudget(campaign),
                               currency,
@@ -1732,7 +1954,7 @@ export default function CampaignsPage({
                           </Typography>
                         </TableCell>
                         <TableCell align="right">
-                          <Typography variant="body2" fontWeight={500}>
+                          <Typography className="whitespace-nowrap text-xs font-bold tabular-nums text-slate-800" variant="body2" fontWeight={700}>
                             {formatCurrency(
                               getCampaignSpend(campaign),
                               currency,
@@ -1790,6 +2012,7 @@ export default function CampaignsPage({
                           <Tooltip title={`Change campaign status${status ? ` · Current: ${status}` : ""}`} arrow placement="top" enterDelay={250} enterNextDelay={100}>
                             <span style={{ display: "inline-flex" }}>
                               <Select
+                                className="!rounded-xl !bg-white [&_.MuiSelect-select]:!py-2 [&_.MuiSelect-select]:!text-xs [&_.MuiOutlinedInput-notchedOutline]:!border-slate-200"
                                 size="small"
                                 value={status || ""}
                                 displayEmpty
@@ -1797,7 +2020,6 @@ export default function CampaignsPage({
                                 onChange={(event) =>
                                   handleStatusChange(campaign, event.target.value)
                                 }
-                                title="Change campaign status"
                                 inputProps={{ "aria-label": `Change status for ${campaign.name}` }}
                                 sx={{
                                   minWidth: 125,
@@ -1818,32 +2040,38 @@ export default function CampaignsPage({
                         </TableCell>
                         <TableCell align="right" sx={{ whiteSpace: "nowrap" }}>
                           <Tooltip title={isExpanded ? "Hide campaign hierarchy" : "View ad groups / ad sets, ads and creative assets"} arrow placement="top" enterDelay={250}>
-                          <Button
-                            size="small"
-                            variant="text"
-                            onClick={() => toggleCampaignChildren(campaign, rowKey)}
-                            endIcon={
-                              isExpanded ? (
-                                <Icon.ChevronUp />
-                              ) : (
-                                <Icon.ChevronDown />
-                              )
-                            }
-                            sx={{ textTransform: "none", minWidth: 0 }}
-                          >
-                            {isExpanded ? "Hide" : "More"}
-                          </Button>
+                            <span style={{ display: "inline-flex" }}>
+                              <Button
+                                size="small"
+                                variant="text"
+                                onClick={() => toggleCampaignChildren(campaign, rowKey)}
+                                endIcon={
+                                  isExpanded ? (
+                                    <Icon.ChevronUp />
+                                  ) : (
+                                    <Icon.ChevronDown />
+                                  )
+                                }
+                                className="!rounded-lg !px-2 !font-semibold !normal-case !text-indigo-700 hover:!bg-indigo-50"
+                            sx={{ textTransform: "none", minWidth: 0, borderRadius: 2 }}
+                              >
+                                {isExpanded ? "Hide" : "More"}
+                              </Button>
+                            </span>
                           </Tooltip>
                           <Tooltip title="Open full campaign details" arrow placement="top" enterDelay={250}>
-                            <Button
-                              component={Link}
-                              href={`/dashboard/campaigns/${campaign.provider === "metaAds" ? "metaAds" : "googleAds"}/${encodeURIComponent(campaign.id)}`}
-                              size="small"
-                              variant="outlined"
-                              sx={{ textTransform: "none", ml: 0.5, minWidth: 0, whiteSpace: "nowrap" }}
-                            >
-                              Full view
-                            </Button>
+                            <span style={{ display: "inline-flex" }}>
+                              <Button
+                                component={Link}
+                                href={`/dashboard/campaigns/${campaign.provider === "metaAds" ? "metaAds" : "googleAds"}/${encodeURIComponent(campaign.id)}`}
+                                size="small"
+                                variant="outlined"
+                                className="!rounded-lg !border-slate-200 !px-2 !font-semibold !normal-case !text-slate-700 hover:!border-indigo-200 hover:!bg-indigo-50 hover:!text-indigo-700"
+                                sx={{ textTransform: "none", ml: 0.5, minWidth: 0, whiteSpace: "nowrap", borderRadius: 2 }}
+                              >
+                                Full view
+                              </Button>
+                            </span>
                           </Tooltip>
 
                           <Tooltip title="Delete campaign" arrow placement="top" enterDelay={250} enterNextDelay={100}>
@@ -1852,11 +2080,11 @@ export default function CampaignsPage({
                                 size="small"
                                 variant="outlined"
                                 color="error"
-                                title="Delete campaign"
                                 sx={{
                                   textTransform: "none",
                                   ml: 1,
                                   minWidth: 0,
+                                  borderRadius: 2,
                                 }}
                                 onClick={() => void deleteCampaign(campaign)}
                               >
@@ -1872,7 +2100,9 @@ export default function CampaignsPage({
                           sx={{
                             py: 0,
                             borderBottom: isExpanded ? undefined : 0,
-                            bgcolor: "action.hover",
+                            bgcolor: "#f8fafc",
+                            verticalAlign: "top",
+                            borderBottom: "1px solid #e2e8f0",
                           }}
                         >
                           <Collapse
@@ -1880,24 +2110,56 @@ export default function CampaignsPage({
                             timeout="auto"
                             unmountOnExit
                           >
-                            <Box sx={{ py: 2.5, px: 2 }}>
-                              <Typography
-                                variant="subtitle2"
-                                fontWeight={700}
-                                sx={{ mb: 1.5 }}
-                              >
-                                Campaign details
-                              </Typography>
-                              <Box
+                            <Box
+                              className="w-full min-w-0 py-3"
+                              sx={{
+                                py: 2,
+                                px: { xs: 0.5, sm: 1.5 },
+                                width: "min(100%, calc(100vw - 48px))",
+                                maxWidth: "calc(100vw - 48px)",
+                                boxSizing: "border-box",
+                              }}
+                            >
+                              <Paper
+                                className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
+                                variant="outlined"
                                 sx={{
-                                  display: "grid",
-                                  gridTemplateColumns: {
-                                    xs: "1fr",
-                                    sm: "repeat(2, minmax(0, 1fr))",
-                                    lg: "repeat(4, minmax(0, 1fr))",
-                                  },
-                                  gap: 2,
+                                  p: { xs: 1.5, sm: 2.25 },
+                                  borderRadius: 3,
+                                  bgcolor: "#fff",
+                                  borderColor: "#e2e8f0",
+                                  boxShadow: "0 1px 2px rgba(15,23,42,0.03)",
                                 }}
+                              >
+                                <Stack
+                                  direction={{ xs: "column", sm: "row" }}
+                                  justifyContent="space-between"
+                                  spacing={0.75}
+                                  sx={{ mb: 1.5, alignItems: { xs: "flex-start", sm: "center" } }}
+                                >
+                                  <Box>
+                                    <Typography className="text-sm font-bold tracking-tight text-slate-900" variant="subtitle1" fontWeight={800}>
+                                      Campaign overview
+                                    </Typography>
+                                    <Typography className="text-xs text-slate-500" variant="caption" color="text.secondary">
+                                      Key settings and delivery information
+                                    </Typography>
+                                  </Box>
+                                  <Chip
+                                    className="!rounded-lg !border-slate-200 !bg-slate-50 !font-semibold !text-slate-600"
+                                    size="small"
+                                    variant="outlined"
+                                    label={getProviderLabel(campaign.provider)}
+                                  />
+                                </Stack>
+                                <Box
+                                  className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4"
+                                  sx={{
+                                    display: "grid",
+                                    gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 205px), 1fr))",
+                                    gap: 1.25,
+                                    minWidth: 0,
+                                  }}
                               >
                                 <DetailItem
                                   label="Campaign ID"
@@ -1982,10 +2244,12 @@ export default function CampaignsPage({
                                   label="Special ad categories"
                                   value={specialCategories}
                                 />
-                              </Box>
+                                </Box>
+                              </Paper>
 
-                              <Divider sx={{ my: 2.5 }} />
+                              <Divider className="!my-5 !border-slate-200" sx={{ my: 2 }} />
                               <Stack
+                                className="mb-3"
                                 position="relative"
                                 display="flex"
                                 direction={{ xs: "column", sm: "row" }}
@@ -1994,10 +2258,10 @@ export default function CampaignsPage({
                                 sx={{alignItems: { xs: "flex-start", sm: "center" }, mb: 1.5}}
                               >
                                 <Box flex={1} sx={{ minWidth: 0 }}>
-                                  <Typography variant="subtitle1" fontWeight={700}>
+                                  <Typography className="text-sm font-bold tracking-tight text-slate-900" variant="subtitle1" fontWeight={800}>
                                     {campaign.provider === "googleAds" ? "Ad groups" : "Ad sets"}
                                   </Typography>
-                                  <Typography variant="caption" color="text.secondary">
+                                  <Typography className="text-xs leading-5 text-slate-500" variant="caption" color="text.secondary">
                                     {campaign.provider === "googleAds"
                                       ? "Google Ads campaign → ad groups → ads → creative assets"
                                       : "Meta campaign → ad sets → ads → creative assets"}
@@ -2006,9 +2270,10 @@ export default function CampaignsPage({
                                 <Button
                                   component={Link}
                                   href="/dashboard/assets"
+                                  className="!rounded-lg !font-semibold !normal-case !text-indigo-700 hover:!bg-indigo-50"
                                   size="small"
                                   variant="text"
-                                  sx={{ textTransform: "none" }}
+                                  sx={{ textTransform: "none", borderRadius: 2 }}
                                 >
                                   Open asset library
                                 </Button>
@@ -2034,14 +2299,17 @@ export default function CampaignsPage({
                               )}
 
                               {groupsLoadedByCampaign[rowKey] && (adGroupsByCampaign[rowKey]?.length ?? 0) === 0 && !groupErrors[rowKey] && (
-                                <Alert severity="info" variant="outlined">
+                                <Alert className="rounded-xl border border-indigo-100 bg-indigo-50/70 text-indigo-900" severity="info" variant="outlined" sx={{ borderRadius: 3 }}>
                                   {campaign.provider === "googleAds" && getCampaignType(campaign).toUpperCase().includes("PERFORMANCE_MAX")
                                     ? "This is a Performance Max campaign. Google organizes its creatives under asset groups rather than standard ad groups; asset-group browsing is a separate integration step."
                                     : `No ${campaign.provider === "googleAds" ? "ad groups" : "ad sets"} were returned for this campaign.`}
                                 </Alert>
                               )}
 
-                              <Stack spacing={1.25} width={"100%"}  sx={{ mb: 1.5, width: "100%", display:"flex", flexDirection:"column"  }}>
+                              <Stack
+                                spacing={1.25}
+                                sx={{ mb: 1.5, width: "100%", minWidth: 0 }}
+                              >
                                 {(adGroupsByCampaign[rowKey] ?? []).map((group) => {
                                   const groupId = String(group.id ?? "");
                                   const groupKey = `${campaign.provider}:${campaign.id}:${groupId}`;
@@ -2051,20 +2319,20 @@ export default function CampaignsPage({
                                     ? (group.daily_budget ?? group.lifetime_budget)
                                     : group.cpcBidMicros;
                                   return (
-                                    <Paper key={groupKey} variant="outlined" sx={{ p: { xs: 1.5, sm: 2 }, borderRadius: 2, display: "flex", flexDirection: "column" }} >
+                                    <Paper key={groupKey} className="rounded-2xl border border-slate-200 bg-white shadow-sm transition-shadow hover:shadow-md" variant="outlined" sx={{ p: { xs: 1.5, sm: 2 }, borderRadius: 3, display: "flex", flexDirection: "column", borderColor: "#e2e8f0" }} >
                                       <Stack
                                         direction={{ xs: "column", sm: "row" }}
                                         justifyContent="space-between"
                                         spacing={1.5} sx={{ alignItems: { xs: "stretch", sm: "center" } }}>
                                         <Box sx={{ minWidth: 0 }}>
-                                          <Typography fontWeight={700} variant="body2">
+                                          <Typography className="text-sm font-bold tracking-tight text-slate-900" fontWeight={800} variant="body2">
                                             {group.name || `Untitled ${campaign.provider === "googleAds" ? "ad group" : "ad set"}`}
                                           </Typography>
                                           <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mt: 0.75 }}>
                                             <Chip size="small" label={groupStatus} color={/ACTIVE|ENABLED/.test(groupStatus) ? "success" : /PAUSED/.test(groupStatus) ? "warning" : "default"} />
                                             {group.type && <Chip size="small" variant="outlined" label={String(group.type).replace(/_/g, " ")} />}
                                             {group.optimization_goal && <Chip size="small" variant="outlined" label={String(group.optimization_goal).replace(/_/g, " ")} />}
-                                            <Typography variant="caption" color="text.secondary" sx={{ alignSelf: "center" }}>ID: {groupId}</Typography>
+                                            <Typography className="font-mono !text-[10px] !text-slate-400" variant="caption" color="text.secondary" sx={{ alignSelf: "center" }}>ID: {groupId}</Typography>
                                           </Stack>
                                           {group.metrics && (
                                             <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.75 }}>
@@ -2078,16 +2346,18 @@ export default function CampaignsPage({
                                           )}
                                         </Box>
                                         <Tooltip title={groupAdsOpen ? "Hide ads and creative details" : "View ads and creative details"} arrow placement="top" enterDelay={250}>
-                                        <Button
-                                          size="small"
-                                          variant={groupAdsOpen ? "outlined" : "contained"}
-                                          disableElevation
-                                          onClick={() => toggleGroupAds(campaign, group)}
-                                          endIcon={groupAdsOpen ? <Icon.ChevronUp /> : <Icon.ChevronDown />}
-                                          sx={{ textTransform: "none", alignSelf: { xs: "flex-start", sm: "center" }, whiteSpace: "nowrap" }}
-                                        >
-                                          {groupAdsOpen ? "Hide ads" : "View ads"}
-                                        </Button>
+                                          <span style={{ display: "inline-flex" }}>
+                                            <Button
+                                              size="small"
+                                              variant={groupAdsOpen ? "outlined" : "contained"}
+                                              disableElevation
+                                              onClick={() => toggleGroupAds(campaign, group)}
+                                              endIcon={groupAdsOpen ? <Icon.ChevronUp /> : <Icon.ChevronDown />}
+                                              sx={{ textTransform: "none", alignSelf: { xs: "flex-start", sm: "center" }, whiteSpace: "nowrap" }}
+                                            >
+                                              {groupAdsOpen ? "Hide ads" : "View ads"}
+                                            </Button>
+                                          </span>
                                         </Tooltip>
                                       </Stack>
 
@@ -2100,7 +2370,7 @@ export default function CampaignsPage({
                                           </Stack>
                                         ) : null}
                                         {adsErrors[groupKey] && (
-                                          <Alert severity="error" sx={{ mb: 1 }} action={<Button color="inherit" size="small" onClick={() => void loadGroupAds(campaign, group)}>Retry</Button>}>
+                                          <Alert className="rounded-xl border border-rose-200 bg-rose-50" severity="error" sx={{ mb: 1, borderRadius: 3 }} action={<Button color="inherit" size="small" onClick={() => void loadGroupAds(campaign, group)}>Retry</Button>}>
                                             {adsErrors[groupKey]}
                                           </Alert>
                                         )}
@@ -2112,7 +2382,7 @@ export default function CampaignsPage({
                                             const creative = getAdCreativeSummary(ad);
                                             const adStatus = String(ad.status ?? ad.effective_status ?? "—").replace(/_/g, " ");
                                             return (
-                                              <Paper key={String(ad.id)} variant="outlined" sx={{ p: 1.5, bgcolor: "background.default" }}>
+                                              <Paper key={String(ad.id)} className="rounded-xl border border-slate-200 bg-slate-50/70" variant="outlined" sx={{ p: 1.5, bgcolor: "#f8fafc", borderRadius: 2.5, borderColor: "#e2e8f0" }}>
                                                 <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ alignItems: { xs: "stretch", sm: "flex-start" } }}>
                                                   {creative.mediaUrl && (
                                                     <Box
@@ -2125,19 +2395,21 @@ export default function CampaignsPage({
                                                   )}
                                                   <Box sx={{ flex: 1, minWidth: 0 }}>
                                                     <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ alignItems: "center" }}>
-                                                      <Typography variant="body2" fontWeight={700}>{ad.name || `Ad ${ad.id}`}</Typography>
+                                                      <Typography className="text-xs font-bold text-slate-900" variant="body2" fontWeight={800}>{ad.name || `Ad ${ad.id}`}</Typography>
                                                       <Chip size="small" label={adStatus} color={/ACTIVE|ENABLED/.test(adStatus) ? "success" : /PAUSED/.test(adStatus) ? "warning" : "default"} />
                                                       {ad.type && <Chip size="small" variant="outlined" label={String(ad.type).replace(/_/g, " ")} />}
                                                     </Stack>
-                                                    <Typography variant="body2" sx={{ mt: 0.75, fontWeight: 600 }}>{creative.headline}</Typography>
-                                                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.25, whiteSpace: "pre-wrap" }}>{creative.body}</Typography>
+                                                    <Typography className="!mt-2 text-sm font-bold text-slate-800" variant="body2" sx={{ mt: 0.75, fontWeight: 700 }}>{creative.headline}</Typography>
+                                                    <Typography className="!mt-1 text-xs leading-5 text-slate-600" variant="body2" color="text.secondary" sx={{ mt: 0.25, whiteSpace: "pre-wrap" }}>{creative.body}</Typography>
                                                     <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
                                                       <Chip size="small" variant="outlined" label={`CTA: ${creative.callToAction}`} />
                                                       {creative.assetCount > 0 && <Chip size="small" variant="outlined" label={`${creative.assetCount} linked asset${creative.assetCount === 1 ? "" : "s"}`} />}
                                                       {ad.creative?.id && <Chip size="small" variant="outlined" label={`Creative ${ad.creative.id}`} />}
                                                       {Array.isArray(ad.assetResourceNames) && ad.assetResourceNames.slice(0, 2).map((resourceName: string) => (
-                                                        <Tooltip key={resourceName} title={resourceName} arrow enterDelay={250}>
-                                                          <Chip size="small" variant="outlined" label={`Asset ${resourceName.split("/").at(-1)}`} />
+                                                        <Tooltip key={resourceName} title={resourceName} arrow placement="top" enterDelay={250}>
+                                                          <span style={{ display: "inline-flex" }}>
+                                                            <Chip size="small" variant="outlined" label={`Asset ${resourceName.split("/").at(-1)}`} />
+                                                          </span>
                                                         </Tooltip>
                                                       ))}
                                                     </Stack>
@@ -2190,6 +2462,26 @@ export default function CampaignsPage({
           </TableContainer>
         )}
       </Paper>
+
+      <Snackbar
+        open={toast.open}
+        autoHideDuration={4500}
+        onClose={closeToast}
+        anchorOrigin={{ vertical: "top", horizontal: "right" }}
+        sx={{ mt: 7, zIndex: (theme) => theme.zIndex.snackbar + 1 }}
+      >
+        <Alert
+          onClose={closeToast}
+          severity={toast.severity}
+          variant="filled"
+          elevation={6}
+          className="rounded-xl !font-semibold !shadow-2xl"
+          iconMapping={{ success: <span className="font-bold">✓</span>, error: <span className="font-bold">!</span>, warning: <span className="font-bold">!</span>, info: <span className="font-bold">i</span> }}
+          sx={{ width: "100%", minWidth: { xs: "auto", sm: 340 }, borderRadius: 3, "& .MuiAlert-message": { fontWeight: 600 } }}
+        >
+          {toast.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

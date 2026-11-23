@@ -23,6 +23,7 @@ import {
   MenuItem,
   Paper,
   Stack,
+  Snackbar,
   Switch,
   Tab,
   Tabs,
@@ -221,14 +222,16 @@ function StatCard({ title, value, description, icon, tone = "blue" }: {
   return (
     <Card
       variant="outlined"
+      className="group relative h-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition-all duration-200 hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-lg dark:border-slate-800 dark:bg-slate-950"
       sx={{
         height: "100%",
-        borderRadius: 2,
-        transition: "all .15s ease",
-        "&:hover": { boxShadow: 2, borderColor: "divider" },
+        borderRadius: 3,
+        borderColor: "rgba(148,163,184,.28)",
+        transition: "all .2s ease",
+        "&:hover": { boxShadow: "0 12px 32px rgba(15,23,42,.08)", borderColor: "rgba(59,130,246,.35)" },
       }}
     >
-      <CardContent sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}>
+      <CardContent className="relative p-5" sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}>
         <Stack direction="row" spacing={1.5} alignItems="center">
           <Box
             sx={{
@@ -263,7 +266,7 @@ function StatCard({ title, value, description, icon, tone = "blue" }: {
 function SectionHeading({ title, subtitle, action }: { title: string; subtitle: string; action?: ReactNode }) {
   return (
     <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" alignItems={{ xs: "stretch", sm: "center" }} spacing={1.5} sx={{ mb: 2 }}>
-      <Box><Typography variant="h6" fontWeight={700}>{title}</Typography><Typography variant="body2" color="text.secondary">{subtitle}</Typography></Box>
+      <Box><Typography variant="h6" fontWeight={750} className="tracking-tight text-slate-900 dark:text-slate-100">{title}</Typography><Typography variant="body2" color="text.secondary" className="mt-0.5 text-slate-500 dark:text-slate-400">{subtitle}</Typography></Box>
       {action}
     </Stack>
   );
@@ -271,7 +274,7 @@ function SectionHeading({ title, subtitle, action }: { title: string; subtitle: 
 
 function CodePanel({ title, code, onCopy }: { title: string; code: string; onCopy: () => void }) {
   return (
-    <Paper variant="outlined" sx={{ borderRadius: 2, overflow: "hidden", bgcolor: "background.default" }}>
+    <Paper variant="outlined" className="overflow-hidden rounded-2xl border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900" sx={{ borderRadius: 3, overflow: "hidden", bgcolor: "background.default" }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ px: 1.5, py: 1, borderBottom: 1, borderColor: "divider" }}>
         <Typography variant="caption" fontWeight={750}>{title}</Typography>
         <Tooltip title="Copy code" arrow><IconButton size="small" onClick={onCopy}><ContentCopyRoundedIcon fontSize="small" /></IconButton></Tooltip>
@@ -308,14 +311,24 @@ export default function ConversionsPage() {
   const [metaRule, setMetaRule] = useState('{\n  "and": [\n    { "event": { "eq": "Purchase" } }\n  ]\n}');
   const [metaDefaultValue, setMetaDefaultValue] = useState("0");
   const [mutatingKey, setMutatingKey] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [toast, setToast] = useState<{
+    open: boolean;
+    message: string;
+    severity: "success" | "error" | "warning" | "info";
+  }>({ open: false, message: "", severity: "success" });
+  const showToast = useCallback((
+    message: string,
+    severity: "success" | "error" | "warning" | "info" = "success",
+  ) => {
+    setToast({ open: true, message, severity });
+  }, []);
   const [metaEditTarget, setMetaEditTarget] = useState<MetaCustomConversion | null>(null);
   const [metaEditName, setMetaEditName] = useState("");
   const [metaEditDescription, setMetaEditDescription] = useState("");
   const [metaEditValue, setMetaEditValue] = useState("0");
 
   const loadData = useCallback(async (isRefresh = false) => {
-    if (!isLoaded || !isSignedIn) return;
+    if (!isLoaded || !isSignedIn) return "failed" as const;
     isRefresh ? setRefreshing(true) : setLoading(true);
     setError(null);
     try {
@@ -328,13 +341,17 @@ export default function ConversionsPage() {
       setMetaPixelId((current) => availablePixels.some((pixel) => pixel.id === current)
         ? current
         : availablePixels[0]?.id ?? "");
+      return result.summary?.providersFailed ? "partial" as const : "success" as const;
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : "Unable to load conversion tracking.");
+      const message = requestError instanceof Error ? requestError.message : "Unable to load conversion tracking.";
+      setError(message);
+      if (isRefresh) showToast(message, "error");
+      return "failed" as const;
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [getToken, isLoaded, isSignedIn, range]);
+  }, [getToken, isLoaded, isSignedIn, range, showToast]);
 
   useEffect(() => { void loadData(); }, [loadData]);
 
@@ -359,19 +376,19 @@ export default function ConversionsPage() {
   const copyText = async (value: string) => {
     try {
       await navigator.clipboard.writeText(value);
-      setNotice("Copied to clipboard.");
+      showToast("Copied to clipboard.", "success");
     } catch {
-      setNotice("Clipboard access is unavailable in this browser.");
+      showToast("Clipboard access is unavailable in this browser.", "error");
     }
   };
 
   const verifyMetaPixelWebsite = async () => {
     if (!metaPixelId) {
-      setNotice("Select a Pixel/Dataset before verifying a website.");
+      showToast("Select a Pixel/Dataset before verifying a website.", "warning");
       return;
     }
     if (!pixelWebsiteUrl.trim()) {
-      setNotice("Enter the public website URL you want to check.");
+      showToast("Enter the public website URL you want to check.", "warning");
       return;
     }
 
@@ -392,8 +409,16 @@ export default function ConversionsPage() {
         throw new Error(response?.message || "The website verification did not return a result.");
       }
       setPixelVerification(response.verification);
+      showToast(
+        response.verification.status === "detected"
+          ? "Meta Pixel ID detected on the website."
+          : response.verification.status === "library_only"
+            ? "Meta Pixel library found, but the selected ID was not confirmed."
+            : "The selected Meta Pixel ID was not detected.",
+        response.verification.status === "detected" ? "success" : "warning",
+      );
     } catch (verificationError) {
-      setNotice(verificationError instanceof Error ? verificationError.message : "Unable to verify the Meta Pixel website.");
+      showToast(verificationError instanceof Error ? verificationError.message : "Unable to verify the Meta Pixel website.", "error");
     } finally {
       setVerifyingPixel(false);
     }
@@ -401,17 +426,16 @@ export default function ConversionsPage() {
 
   const runGoogleMutation = async (actionId: string, status: "ENABLED" | "HIDDEN") => {
     setMutatingKey(`google:${actionId}`);
-    setNotice(null);
     try {
       const token = await getToken();
       if (!token) throw new Error("Your session has expired. Please sign in again.");
       await authenticatedApiRequest(`/api/conversions/google/actions/${encodeURIComponent(actionId)}/status`, token, {
         method: "PATCH", body: JSON.stringify({ status }),
       });
-      setNotice(status === "ENABLED" ? "Conversion action enabled." : "Conversion action hidden and no longer accruing conversions.");
+      showToast(status === "ENABLED" ? "Conversion action enabled." : "Conversion action hidden and no longer accruing conversions.", "success");
       await loadData(true);
     } catch (mutationError) {
-      setNotice(mutationError instanceof Error ? mutationError.message : "Unable to update conversion action.");
+      showToast(mutationError instanceof Error ? mutationError.message : "Unable to update conversion action.", "error");
     } finally {
       setMutatingKey(null);
     }
@@ -429,10 +453,10 @@ export default function ConversionsPage() {
       });
       setGoogleDialogOpen(false);
       setGoogleName("");
-      setNotice("Website conversion action created. Refresh to retrieve its tag snippet.");
+      showToast("Website conversion action created. Refresh to retrieve its tag snippet.", "success");
       await loadData(true);
     } catch (mutationError) {
-      setNotice(mutationError instanceof Error ? mutationError.message : "Unable to create Google conversion action.");
+      showToast(mutationError instanceof Error ? mutationError.message : "Unable to create Google conversion action.", "error");
     } finally {
       setCreatingGoogle(false);
     }
@@ -445,7 +469,7 @@ export default function ConversionsPage() {
       rule = JSON.parse(metaRule) as JsonRecord;
       if (!rule || typeof rule !== "object" || Array.isArray(rule)) throw new Error("Rule must be a JSON object.");
     } catch (ruleError) {
-      setNotice(ruleError instanceof Error ? `Invalid rule JSON: ${ruleError.message}` : "Invalid rule JSON.");
+      showToast(ruleError instanceof Error ? `Invalid rule JSON: ${ruleError.message}` : "Invalid rule JSON.", "error");
       return;
     }
     setCreatingMeta(true);
@@ -459,10 +483,10 @@ export default function ConversionsPage() {
       setMetaDialogOpen(false);
       setMetaName("");
       setMetaDescription("");
-      setNotice("Meta custom conversion created.");
+      showToast("Meta custom conversion created.", "success");
       await loadData(true);
     } catch (mutationError) {
-      setNotice(mutationError instanceof Error ? mutationError.message : "Unable to create Meta custom conversion.");
+      showToast(mutationError instanceof Error ? mutationError.message : "Unable to create Meta custom conversion.", "error");
     } finally {
       setCreatingMeta(false);
     }
@@ -478,10 +502,10 @@ export default function ConversionsPage() {
         method: "PATCH", body: JSON.stringify({ name: metaEditName.trim(), description: metaEditDescription, defaultConversionValue: Number(metaEditValue) || 0 }),
       });
       setMetaEditTarget(null);
-      setNotice("Meta custom conversion updated.");
+      showToast("Meta custom conversion updated.", "success");
       await loadData(true);
     } catch (mutationError) {
-      setNotice(mutationError instanceof Error ? mutationError.message : "Unable to update Meta custom conversion.");
+      showToast(mutationError instanceof Error ? mutationError.message : "Unable to update Meta custom conversion.", "error");
     } finally {
       setMutatingKey(null);
     }
@@ -495,10 +519,10 @@ export default function ConversionsPage() {
       const token = await getToken();
       if (!token) throw new Error("Your session has expired. Please sign in again.");
       await authenticatedApiRequest(`/api/conversions/meta/custom-conversions/${encodeURIComponent(item.id)}`, token, { method: "DELETE" });
-      setNotice("Meta custom conversion deleted.");
+      showToast("Meta custom conversion deleted.", "success");
       await loadData(true);
     } catch (mutationError) {
-      setNotice(mutationError instanceof Error ? mutationError.message : "Unable to delete Meta custom conversion.");
+      showToast(mutationError instanceof Error ? mutationError.message : "Unable to delete Meta custom conversion.", "error");
     } finally {
       setMutatingKey(null);
     }
@@ -519,7 +543,10 @@ export default function ConversionsPage() {
   }
 
   return (
-    <Box sx={{ width: "100%", maxWidth: 1700, mx: "auto" }}>
+    <Box
+      className="mx-auto w-full max-w-[1700px] space-y-6 px-1 pb-8 sm:px-2"
+      sx={{ width: "100%", maxWidth: 1700, mx: "auto" }}
+    >
       {/* Page header follows the Campaign Management workspace layout. */}
       <Box
         sx={{
@@ -534,9 +561,10 @@ export default function ConversionsPage() {
         <Box>
           <Typography
             variant="caption"
+            className="font-semibold tracking-[0.12em] text-blue-700 dark:text-blue-400"
             sx={{
-              fontWeight: 600,
-              letterSpacing: "0.08em",
+              fontWeight: 700,
+              letterSpacing: "0.12em",
               textTransform: "uppercase",
               color: "primary.main",
             }}
@@ -547,11 +575,12 @@ export default function ConversionsPage() {
             variant="h4"
             component="h1"
             fontWeight={700}
-            sx={{ mt: 0.5, letterSpacing: "-0.02em" }}
+            className="tracking-tight text-slate-950 dark:text-white"
+            sx={{ mt: 0.5, letterSpacing: "-0.035em", fontWeight: 800 }}
           >
             Conversions &amp; Tracking
           </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+          <Typography variant="body2" color="text.secondary" className="max-w-2xl text-slate-500 dark:text-slate-400" sx={{ mt: 0.75 }}>
             View conversion performance and manage Google Ads and Meta tracking sources.
           </Typography>
         </Box>
@@ -562,7 +591,8 @@ export default function ConversionsPage() {
             size="small"
             value={range}
             onChange={(event) => setRange(event.target.value)}
-            sx={{ minWidth: 140 }}
+            className="min-w-[150px] rounded-xl"
+            sx={{ minWidth: 150, "& .MuiOutlinedInput-root": { borderRadius: 2.5, bgcolor: "background.paper" } }}
             aria-label="Conversion reporting date range"
           >
             <MenuItem value="7d">Last 7 days</MenuItem>
@@ -572,8 +602,13 @@ export default function ConversionsPage() {
           <Tooltip title="Refresh conversion data">
             <span>
               <IconButton
-                onClick={() => void loadData(true)}
+                onClick={async () => {
+                  const outcome = await loadData(true);
+                  if (outcome === "success") showToast("Conversion data refreshed.", "success");
+                  if (outcome === "partial") showToast("Data refreshed, but one or more providers returned errors.", "warning");
+                }}
                 disabled={refreshing}
+                className="rounded-xl border border-slate-200 bg-white shadow-sm transition-colors hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-900"
                 sx={{ border: 1, borderColor: "divider", bgcolor: "background.paper" }}
               >
                 {refreshing ? <CircularProgress size={20} /> : <RefreshRoundedIcon />}
@@ -589,12 +624,13 @@ export default function ConversionsPage() {
             disabled={providerTab === "googleAds"
               ? !google?.connected || !google?.success
               : !meta?.connected || !meta?.success || pixels.length === 0 || metaConversions.length >= 100}
+            className="rounded-xl bg-blue-600 px-5 py-2.5 font-semibold normal-case shadow-sm transition-all hover:-translate-y-0.5 hover:bg-blue-700 hover:shadow-md"
             sx={{
-              borderRadius: 2,
+              borderRadius: 2.5,
               textTransform: "none",
-              fontWeight: 600,
-              px: 3,
-              py: 1,
+              fontWeight: 700,
+              px: 2.5,
+              py: 1.1,
               whiteSpace: "nowrap",
             }}
           >
@@ -603,19 +639,32 @@ export default function ConversionsPage() {
         </Stack>
       </Box>
       {error && <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }} action={<Button color="inherit" size="small" onClick={() => void loadData()}>Retry</Button>}>{error}</Alert>}
-      {notice && <Alert severity={/unable|invalid|error|failed|cannot/i.test(notice) ? "error" : "success"} onClose={() => setNotice(null)} sx={{ mb: 2, borderRadius: 2 }}>{notice}</Alert>}
       {overview && overview.summary?.providersFailed ? <Alert severity="warning" sx={{ mb: 2, borderRadius: 2 }}>Some provider reports could not be loaded. The provider sections below show their individual errors.</Alert> : null}
 
-      <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "repeat(2,minmax(0,1fr))", xl: "repeat(4,minmax(0,1fr))" }, gap: 2, mb: 3 }}>
+      <Box className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4" sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "repeat(2,minmax(0,1fr))", xl: "repeat(4,minmax(0,1fr))" }, gap: 2, mb: 3 }}>
         <StatCard title="Google conversions" value={google ? formatNumber(googleTotal, 1) : "—"} description={`${range === "7d" ? "7" : range === "90d" ? "90" : "30"} day conversion actions`} icon={<GoogleIcon />} tone="blue" />
         <StatCard title="Google conversion value" value={googleData ? formatCurrency(googleData.totals.conversionsValue, googleCurrency) : "—"} description="Value attributed to conversions" icon={<InsightsRoundedIcon />} tone="green" />
         <StatCard title="Meta Pixels / Datasets" value={meta ? String(pixels.length) : "—"} description={`${metaRecentlyActive} reported activity in the last 7 days`} icon={<FacebookRoundedIcon />} tone="violet" />
         <StatCard title="Meta custom conversions" value={meta ? String(metaConversions.length) : "—"} description="Configured in the selected ad account" icon={<EventAvailableRoundedIcon />} tone="amber" />
       </Box>
 
-      <Card variant="outlined" sx={{ borderRadius: 2, overflow: "hidden" }}>
-        <Box sx={{ px: { xs: 1, sm: 2 }, borderBottom: 1, borderColor: "divider", bgcolor: "background.paper" }}>
-          <Tabs value={providerTab} onChange={(_event, value) => setProviderTab(value)} variant="scrollable" scrollButtons="auto">
+      <Card
+        variant="outlined"
+        className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-950"
+        sx={{ borderRadius: 3, overflow: "hidden", borderColor: "rgba(148,163,184,.28)", boxShadow: "0 4px 18px rgba(15,23,42,.035)" }}
+      >
+        <Box className="border-b border-slate-200 bg-slate-50/80 dark:border-slate-800 dark:bg-slate-900/70" sx={{ px: { xs: 1, sm: 2 }, borderBottom: 1, borderColor: "divider", bgcolor: "background.paper" }}>
+          <Tabs
+            value={providerTab}
+            onChange={(_event, value) => setProviderTab(value)}
+            variant="scrollable"
+            scrollButtons="auto"
+            sx={{
+              minHeight: 58,
+              "& .MuiTab-root": { minHeight: 58, textTransform: "none", fontWeight: 700, fontSize: 14, px: 2.5 },
+              "& .MuiTabs-indicator": { height: 3, borderRadius: "3px 3px 0 0" },
+            }}
+          >
             <Tab value="googleAds" icon={<GoogleIcon fontSize="small" />} iconPosition="start" label="Google Ads" />
             <Tab value="metaAds" icon={<FacebookRoundedIcon fontSize="small" />} iconPosition="start" label="Meta Ads" />
           </Tabs>
@@ -627,7 +676,7 @@ export default function ConversionsPage() {
             {!google?.connected ? <Alert severity="info">Select a Google Ads account on the Provider page to view its conversion setup.</Alert> : google.error ? <Alert severity="error">{google.error}</Alert> : googleData ? (
               <Stack spacing={2.5}>
                 {googleData.metricsError && <Alert severity="warning">Conversion actions loaded, but Google conversion metrics could not be retrieved: {googleData.metricsError}</Alert>}
-                <Paper variant="outlined" sx={{ p: 2.5, borderRadius: 2, bgcolor: "background.paper" }}>
+                <Paper variant="outlined" className="rounded-2xl border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900" sx={{ p: 2.5, borderRadius: 3, bgcolor: "background.paper" }}>
                   <Stack direction={{ xs: "column", md: "row" }} justifyContent="space-between" alignItems={{ xs: "flex-start", md: "center" }} spacing={1.5}>
                     <Box>
                       <Stack direction="row" spacing={1} alignItems="center"><Typography fontWeight={800}>Account tracking status</Typography><Chip size="small" color={statusTone(googleTrackingStatus)} label={readableStatus(googleTrackingStatus)} /></Stack>
@@ -646,12 +695,12 @@ export default function ConversionsPage() {
                 <Box>
                   <SectionHeading title="Conversion actions" subtitle={`${googleActions.length} actions · Performance for ${range === "7d" ? "the last 7 days" : range === "90d" ? "the last 90 days" : "the last 30 days"}`} />
                   {googleActions.length ? (
-                    <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2 }}>
-                      <Table size="medium" sx={{ minWidth: 860 }}>
-                        <TableHead><TableRow><TableCell sx={{ fontWeight: 700 }}>Conversion action</TableCell><TableCell sx={{ fontWeight: 700 }}>Category / type</TableCell><TableCell sx={{ fontWeight: 700 }}>Status</TableCell><TableCell align="right" sx={{ fontWeight: 700 }}>Conversions</TableCell><TableCell align="right" sx={{ fontWeight: 700 }}>Value</TableCell><TableCell sx={{ fontWeight: 700 }}>Goal</TableCell><TableCell align="right" sx={{ fontWeight: 700 }}>Actions</TableCell></TableRow></TableHead>
+                    <TableContainer component={Paper} variant="outlined" className="overflow-hidden rounded-2xl border-slate-200 dark:border-slate-800" sx={{ borderRadius: 3 }}>
+                      <Table size="medium" className="min-w-[860px]" sx={{ minWidth: 860 }}>
+                        <TableHead className="bg-slate-50 dark:bg-slate-900"><TableRow><TableCell sx={{ fontWeight: 700 }}>Conversion action</TableCell><TableCell sx={{ fontWeight: 700 }}>Category / type</TableCell><TableCell sx={{ fontWeight: 700 }}>Status</TableCell><TableCell align="right" sx={{ fontWeight: 700 }}>Conversions</TableCell><TableCell align="right" sx={{ fontWeight: 700 }}>Value</TableCell><TableCell sx={{ fontWeight: 700 }}>Goal</TableCell><TableCell align="right" sx={{ fontWeight: 700 }}>Actions</TableCell></TableRow></TableHead>
                         <TableBody>
                           {googleActions.map((action) => (
-                            <TableRow hover key={action.id}>
+                            <TableRow hover key={action.id} className="transition-colors hover:bg-blue-50/50 dark:hover:bg-slate-800/60">
                               <TableCell><Typography fontWeight={750}>{action.name}</Typography><Typography variant="caption" color="text.secondary">ID: {action.id}</Typography></TableCell>
                               <TableCell><Typography variant="body2">{action.category ?? "—"}</Typography><Typography variant="caption" color="text.secondary">{action.type ?? "—"}</Typography></TableCell>
                               <TableCell><Chip size="small" label={readableStatus(action.status)} color={statusTone(action.status)} /></TableCell>
@@ -684,7 +733,7 @@ export default function ConversionsPage() {
                   {pixels.length ? (
                     <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "repeat(2,minmax(0,1fr))" }, gap: 1.5 }}>
                       {pixels.map((pixel) => (
-                        <Card variant="outlined" key={pixel.id} sx={{ borderRadius: 2 }}>
+                        <Card variant="outlined" key={pixel.id} className="rounded-2xl border-slate-200 bg-white transition-all hover:-translate-y-0.5 hover:shadow-md dark:border-slate-800 dark:bg-slate-900" sx={{ borderRadius: 3 }}>
                           <CardContent sx={{ p: 2.25 }}>
                             <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
                               <Box sx={{ minWidth: 0 }}><Typography fontWeight={800} sx={{ overflowWrap: "anywhere" }}>{pixel.name ?? "Untitled Pixel / Dataset"}</Typography><Typography variant="caption" color="text.secondary">ID: {pixel.id}</Typography></Box>
@@ -699,7 +748,7 @@ export default function ConversionsPage() {
                             <Alert severity="info" variant="outlined" sx={{ mt: 1.5 }}>
                               Meta reports the Pixel/Dataset last-fired timestamp here. This is not a per-event log and does not identify whether individual events arrived from the browser or Conversions API. Use Meta Events Manager for Test Events, diagnostics and event-source details.
                             </Alert>
-                            <Stack direction="row" justifyContent="flex-end" sx={{ mt: 1.5 }}><Button size="small" onClick={() => { setMetaPixelId(pixel.id); setNotice(`Selected ${pixel.name ?? "Pixel/Dataset"} for setup instructions.`); }} sx={{ textTransform: "none" }}>Use for setup</Button></Stack>
+                            <Stack direction="row" justifyContent="flex-end" sx={{ mt: 1.5 }}><Button size="small" onClick={() => { setMetaPixelId(pixel.id); showToast(`Selected ${pixel.name ?? "Pixel/Dataset"} for setup instructions.`, "info"); }} sx={{ textTransform: "none" }}>Use for setup</Button></Stack>
                           </CardContent>
                         </Card>
                       ))}
@@ -711,13 +760,13 @@ export default function ConversionsPage() {
                   <SectionHeading title="Custom conversions" subtitle={`${metaConversions.length} rules configured in the selected ad account`} />
                   {metaConversions.length >= 100 && <Alert severity="warning" sx={{ mb: 1.5 }}>Meta's documented custom-conversion limit is 100 per ad account. AdSyntra has disabled creation for this account.</Alert>}
                   {metaConversions.length ? (
-                    <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2 }}>
-                      <Table size="medium" sx={{ minWidth: 760 }}>
-                        <TableHead><TableRow><TableCell sx={{ fontWeight: 700 }}>Name</TableCell><TableCell sx={{ fontWeight: 700 }}>Event</TableCell><TableCell sx={{ fontWeight: 700 }}>Event source</TableCell><TableCell sx={{ fontWeight: 700 }}>Last fired</TableCell><TableCell sx={{ fontWeight: 700 }}>Status</TableCell><TableCell align="right" sx={{ fontWeight: 700 }}>Actions</TableCell></TableRow></TableHead>
+                    <TableContainer component={Paper} variant="outlined" className="overflow-hidden rounded-2xl border-slate-200 dark:border-slate-800" sx={{ borderRadius: 3 }}>
+                      <Table size="medium" className="min-w-[760px]" sx={{ minWidth: 760 }}>
+                        <TableHead className="bg-slate-50 dark:bg-slate-900"><TableRow><TableCell sx={{ fontWeight: 700 }}>Name</TableCell><TableCell sx={{ fontWeight: 700 }}>Event</TableCell><TableCell sx={{ fontWeight: 700 }}>Event source</TableCell><TableCell sx={{ fontWeight: 700 }}>Last fired</TableCell><TableCell sx={{ fontWeight: 700 }}>Status</TableCell><TableCell align="right" sx={{ fontWeight: 700 }}>Actions</TableCell></TableRow></TableHead>
                         <TableBody>{metaConversions.map((item) => {
                           const blocked = item.is_unavailable === true;
                           const archived = item.is_archived === true;
-                          return <TableRow hover key={item.id}>
+                          return <TableRow hover key={item.id} className="transition-colors hover:bg-blue-50/50 dark:hover:bg-slate-800/60">
                             <TableCell><Typography fontWeight={750}>{item.name}</Typography><Typography variant="caption" color="text.secondary">ID: {item.id}</Typography></TableCell>
                             <TableCell>{item.custom_event_type ?? "—"}</TableCell>
                             <TableCell><Typography variant="body2">{item.pixel?.name ?? item.event_source_id ?? "—"}</Typography><Typography variant="caption" color="text.secondary">{item.event_source_type ?? "Pixel"}</Typography></TableCell>
@@ -737,7 +786,7 @@ export default function ConversionsPage() {
                     {pixels.map((pixel) => <MenuItem key={pixel.id} value={pixel.id}>{pixel.name ?? pixel.id} · {pixel.id}</MenuItem>)}
                   </TextField>
 
-                  <Paper variant="outlined" sx={{ p: 2, mb: 1.5, borderRadius: 2 }}>
+                  <Paper variant="outlined" className="rounded-2xl border-slate-200 bg-slate-50/70 dark:border-slate-800 dark:bg-slate-900/60" sx={{ p: 2, mb: 1.5, borderRadius: 3 }}>
                     <Typography fontWeight={750}>Verify website installation</Typography>
                     <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
                       Enter a public page URL. AdSyntra checks its initial HTML for the selected Pixel ID, the Meta Pixel library and the fallback tracking request.
@@ -767,7 +816,7 @@ export default function ConversionsPage() {
                   </Paper>
 
                   {pixelVerification && (
-                    <Card variant="outlined" sx={{ mb: 1.5, borderRadius: 2 }}>
+                    <Card variant="outlined" className="mb-3 rounded-2xl border-slate-200 dark:border-slate-800" sx={{ mb: 1.5, borderRadius: 3 }}>
                       <CardContent sx={{ p: 2, "&:last-child": { pb: 2 } }}>
                         <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" alignItems={{ sm: "center" }} spacing={1}>
                           <Box>
@@ -819,7 +868,7 @@ export default function ConversionsPage() {
                   </Alert>
                 </Box>
 
-                <Paper variant="outlined" sx={{ p: 2.5, borderRadius: 2, bgcolor: "background.paper" }}>
+                <Paper variant="outlined" className="rounded-2xl border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900" sx={{ p: 2.5, borderRadius: 3, bgcolor: "background.paper" }}>
                   <Stack direction="row" spacing={1.25} alignItems="flex-start">
                     <LanRoundedIcon color="primary" sx={{ mt: 0.2 }} />
                     <Box>
@@ -836,14 +885,20 @@ export default function ConversionsPage() {
         )}
       </Card>
 
-      <Paper variant="outlined" sx={{ p: 2.5, borderRadius: 2, bgcolor: "background.paper" }}>
+      <Paper variant="outlined" className="rounded-2xl border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900" sx={{ p: 2.5, borderRadius: 3, bgcolor: "background.paper" }}>
         <Typography variant="subtitle2" fontWeight={800}>Measurement notes</Typography>
         <Typography variant="caption" color="text.secondary" component="p" sx={{ mt: 0.5, lineHeight: 1.7 }}>
           Google conversion counts come from conversion-action reporting for the selected date range. Meta Pixel last-fired timestamps describe event-source activity reported by Meta; they are not a full event log or a guarantee of attribution. Google and Meta use different attribution models and conversion definitions, so their totals should not be added as if they were identical.
         </Typography>
       </Paper>
 
-      <Dialog open={googleDialogOpen} onClose={() => !creatingGoogle && setGoogleDialogOpen(false)} fullWidth maxWidth="sm">
+      <Dialog
+        open={googleDialogOpen}
+        onClose={() => !creatingGoogle && setGoogleDialogOpen(false)}
+        fullWidth
+        maxWidth="sm"
+        slotProps={{ paper: { className: "rounded-2xl border border-slate-200 shadow-2xl dark:border-slate-800", sx: { borderRadius: 3 } } }}
+      >
         <DialogTitle>Create Google website conversion</DialogTitle>
         <DialogContent dividers>
           <Stack spacing={2} sx={{ pt: 0.5 }}>
@@ -857,7 +912,13 @@ export default function ConversionsPage() {
         <DialogActions sx={{ p: 2 }}><Button onClick={() => setGoogleDialogOpen(false)} disabled={creatingGoogle}>Cancel</Button><Button onClick={() => void createGoogleAction()} disabled={creatingGoogle || !googleName.trim()} variant="contained" disableElevation>{creatingGoogle ? <CircularProgress size={18} color="inherit" /> : "Create action"}</Button></DialogActions>
       </Dialog>
 
-      <Dialog open={metaDialogOpen} onClose={() => !creatingMeta && setMetaDialogOpen(false)} fullWidth maxWidth="md">
+      <Dialog
+        open={metaDialogOpen}
+        onClose={() => !creatingMeta && setMetaDialogOpen(false)}
+        fullWidth
+        maxWidth="md"
+        slotProps={{ paper: { className: "rounded-2xl border border-slate-200 shadow-2xl dark:border-slate-800", sx: { borderRadius: 3 } } }}
+      >
         <DialogTitle>Create Meta custom conversion</DialogTitle>
         <DialogContent dividers>
           <Stack spacing={2} sx={{ pt: 0.5 }}>
@@ -873,7 +934,13 @@ export default function ConversionsPage() {
         <DialogActions sx={{ p: 2 }}><Button onClick={() => setMetaDialogOpen(false)} disabled={creatingMeta}>Cancel</Button><Button onClick={() => void createMetaConversion()} disabled={creatingMeta || !metaName.trim() || !metaPixelId} variant="contained" disableElevation>{creatingMeta ? <CircularProgress size={18} color="inherit" /> : "Create custom conversion"}</Button></DialogActions>
       </Dialog>
 
-      <Dialog open={Boolean(selectedAction)} onClose={() => setSelectedAction(null)} fullWidth maxWidth="md">
+      <Dialog
+        open={Boolean(selectedAction)}
+        onClose={() => setSelectedAction(null)}
+        fullWidth
+        maxWidth="md"
+        slotProps={{ paper: { className: "rounded-2xl border border-slate-200 shadow-2xl dark:border-slate-800", sx: { borderRadius: 3 } } }}
+      >
         <DialogTitle>{selectedAction?.name ?? "Conversion action"}</DialogTitle>
         <DialogContent dividers>
           {selectedAction && <Stack spacing={2}>
@@ -898,7 +965,13 @@ export default function ConversionsPage() {
         <DialogActions><Button onClick={() => setSelectedAction(null)}>Close</Button>{selectedAction && googleSnippet && <Button onClick={() => void copyText(googleSnippet)} startIcon={<ContentCopyRoundedIcon />}>Copy all snippets</Button>}</DialogActions>
       </Dialog>
 
-      <Dialog open={Boolean(metaEditTarget)} onClose={() => !mutatingKey && setMetaEditTarget(null)} fullWidth maxWidth="sm">
+      <Dialog
+        open={Boolean(metaEditTarget)}
+        onClose={() => !mutatingKey && setMetaEditTarget(null)}
+        fullWidth
+        maxWidth="sm"
+        slotProps={{ paper: { className: "rounded-2xl border border-slate-200 shadow-2xl dark:border-slate-800", sx: { borderRadius: 3 } } }}
+      >
         <DialogTitle>Edit Meta custom conversion</DialogTitle>
         <DialogContent dividers><Stack spacing={2} sx={{ pt: 0.5 }}>
           <TextField label="Name" value={metaEditName} onChange={(event) => setMetaEditName(event.target.value)} fullWidth />
@@ -908,6 +981,34 @@ export default function ConversionsPage() {
         </Stack></DialogContent>
         <DialogActions sx={{ p: 2 }}><Button onClick={() => setMetaEditTarget(null)} disabled={Boolean(mutatingKey)}>Cancel</Button><Button onClick={() => void saveMetaEdit()} disabled={!metaEditName.trim() || Boolean(mutatingKey)} variant="contained" disableElevation>{mutatingKey ? <CircularProgress size={18} color="inherit" /> : "Save changes"}</Button></DialogActions>
       </Dialog>
+
+      <Snackbar
+        open={toast.open}
+        autoHideDuration={4500}
+        anchorOrigin={{ vertical: "top", horizontal: "right" }}
+        onClose={(_event, reason) => {
+          if (reason !== "clickaway") setToast((current) => ({ ...current, open: false }));
+        }}
+        sx={{ mt: 1, mr: { xs: 1, sm: 2 } }}
+      >
+        <Alert
+          onClose={() => setToast((current) => ({ ...current, open: false }))}
+          severity={toast.severity}
+          variant="filled"
+          elevation={6}
+          sx={{
+            width: "100%",
+            minWidth: { xs: "calc(100vw - 32px)", sm: 360 },
+            maxWidth: 520,
+            borderRadius: 3,
+            boxShadow: "0 16px 40px rgba(15,23,42,.18)",
+            alignItems: "center",
+            "& .MuiAlert-message": { fontWeight: 600 },
+          }}
+        >
+          {toast.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

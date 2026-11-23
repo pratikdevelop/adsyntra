@@ -1281,6 +1281,7 @@ function toggleGoogleResourceName(
   return [...next].join("\n");
 }
 async function fetchGoogleLookupOptions(
+
   apiBaseUrl: string,
   token: string,
   customerId: string,
@@ -1350,6 +1351,23 @@ type GoogleMerchantCenterLink = {
   type?: string;
 };
 
+type GoogleHotelCenterLink = {
+  id?: string;
+  name?: string;
+  hotelCenterId?: string;
+  productLinkInvitationId?: string;
+  resourceName?: string;
+  type?: string;
+  status?: string;
+};
+
+type GoogleHotelCenterLookupResponse = {
+  count?: number;
+  hotelCenterLinks?: GoogleHotelCenterLink[];
+  pendingInvitations?: GoogleHotelCenterLink[];
+  invitations?: GoogleHotelCenterLink[];
+};
+
 type GoogleMerchantCenterDataSource = {
   dataSourceId?: string;
   name?: string;
@@ -1390,7 +1408,6 @@ async function fetchGoogleMerchantCenterLookup<T>(
   const url = new URL(
     `${apiBaseUrl.replace(/\/+$/, "")}/api/campaigns/lookups/google/${endpoint}`,
   );
-
   Object.entries(params).forEach(([key, value]) => {
     if (value) url.searchParams.set(key, value);
   });
@@ -1435,6 +1452,11 @@ function getMerchantCenterLinkId(
   link: GoogleMerchantCenterLink,
 ): string {
   return String(link.merchantCenterId ?? link.id ?? "").trim();
+}
+
+function getHotelCenterLinkId(link: GoogleHotelCenterLink): string {
+  const id = String(link.hotelCenterId ?? link.id ?? "").trim();
+  return /^\d+$/.test(id) ? id : "";
 }
 
 export default function CreateCampaignPage() {
@@ -1556,7 +1578,7 @@ const [googleShoppingProductGroupValue, setGoogleShoppingProductGroupValue] =
     useState("100");
   const [googleSearchPartners, setGoogleSearchPartners] = useState(false);
   const [googleDisplayExpansion, setGoogleDisplayExpansion] = useState(false);
-  const [googleHotelCenterId, setGoogleHotelCenterId] = useState("123456789");
+  const [googleHotelCenterId, setGoogleHotelCenterId] = useState("");
   const [googleHotelBidStrategy, setGoogleHotelBidStrategy] =
     useState<GoogleHotelBidStrategy>("PERCENT_CPC");
   const [googleHotelBidCeiling, setGoogleHotelBidCeiling] = useState("25");
@@ -1569,7 +1591,7 @@ const [googleShoppingProductGroupValue, setGoogleShoppingProductGroupValue] =
     "ALL_HOTELS" | "SELECTED_HOTELS"
   >("ALL_HOTELS");
   const [googleHotelPropertyIds, setGoogleHotelPropertyIds] =
-    useState("DEMO_HOTEL_001");
+    useState("");
 
   const [demandGenChannels, setDemandGenChannels] = useState({
     youtube_in_feed: true,
@@ -1928,6 +1950,14 @@ const [googleMerchantCenterLinksLoading, setGoogleMerchantCenterLinksLoading] =
 const [googleMerchantCenterLinksError, setGoogleMerchantCenterLinksError] =
   useState("");
 
+const [googleHotelCenterLinks, setGoogleHotelCenterLinks] =
+  useState<GoogleHotelCenterLink[]>([]);
+const [googleHotelCenterPendingInvitations, setGoogleHotelCenterPendingInvitations] =
+  useState<GoogleHotelCenterLink[]>([]);
+const [googleHotelCenterLoading, setGoogleHotelCenterLoading] =
+  useState(false);
+const [googleHotelCenterError, setGoogleHotelCenterError] = useState("");
+
 const [googleMerchantCenterDataSources, setGoogleMerchantCenterDataSources] =
   useState<GoogleMerchantCenterDataSource[]>([]);
 const [googleMerchantCenterDataSourcesLoading, setGoogleMerchantCenterDataSourcesLoading] =
@@ -1948,6 +1978,28 @@ const [googleMerchantCenterProductsLoading, setGoogleMerchantCenterProductsLoadi
   useState(false);
 const [googleMerchantCenterProductsError, setGoogleMerchantCenterProductsError] =
   useState("");
+
+
+const [
+  googleMerchantDeveloperEmail,
+  setGoogleMerchantDeveloperEmail,
+] = useState("");
+
+const [
+  googleMerchantRegistrationLoading,
+  setGoogleMerchantRegistrationLoading,
+] = useState(false);
+
+const [
+  googleMerchantRegistrationError,
+  setGoogleMerchantRegistrationError,
+] = useState("");
+
+const [
+  googleMerchantRegistrationSuccess,
+  setGoogleMerchantRegistrationSuccess,
+] = useState("");
+
 
 
   // Meta audience and location resource discovery is scoped to the selected
@@ -2529,8 +2581,119 @@ const [googleMerchantCenterProductsError, setGoogleMerchantCenterProductsError] 
     if (!isLoaded) return;
 
     let cancelled = false;
+    const selectedAccountId = connections.googleAds.selectedAccountId;
+
+    const resetHotelCenter = () => {
+      setGoogleHotelCenterId("");
+      setGoogleHotelCenterLinks([]);
+      setGoogleHotelCenterPendingInvitations([]);
+      setGoogleHotelCenterError("");
+      setGoogleHotelCenterLoading(false);
+    };
+
+    if (
+      !isSignedIn ||
+      !connections.googleAds.connected ||
+      !selectedAccountId
+    ) {
+      resetHotelCenter();
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const loadHotelCenterLinks = async () => {
+      try {
+        setGoogleHotelCenterLoading(true);
+        setGoogleHotelCenterError("");
+        setGoogleHotelCenterId("");
+
+        const token = await getToken();
+        if (!token) {
+          throw new Error(
+            "Unable to retrieve your Clerk authentication token.",
+          );
+        }
+
+        const data = await fetchGoogleMerchantCenterLookup<GoogleHotelCenterLookupResponse>(
+          API_BASE_URL,
+          token,
+          "hotel-center-links",
+        );
+
+        if (cancelled) return;
+
+        const acceptedLinks = (data.hotelCenterLinks ?? [])
+          .filter((link) =>
+            link.status?.toUpperCase() === "ACCEPTED" &&
+            Boolean(getHotelCenterLinkId(link)),
+          );
+
+        const pendingInvitations = (data.pendingInvitations ?? [])
+          .filter((invitation) =>
+            ["PENDING_APPROVAL", "REQUESTED"].includes(
+              String(invitation.status ?? "").toUpperCase(),
+            ),
+          );
+
+        setGoogleHotelCenterLinks(acceptedLinks);
+        setGoogleHotelCenterPendingInvitations(pendingInvitations);
+
+        const currentSelectionExists = acceptedLinks.some(
+          (link) => getHotelCenterLinkId(link) === googleHotelCenterId,
+        );
+        const nextSelection = currentSelectionExists
+          ? googleHotelCenterId
+          : getHotelCenterLinkId(acceptedLinks[0] ?? {});
+
+        setGoogleHotelCenterId(nextSelection);
+
+        if (acceptedLinks.length === 0 && pendingInvitations.length === 0) {
+          setGoogleHotelCenterError(
+            "No accepted Hotel Center link was found for the selected Google Ads customer.",
+          );
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setGoogleHotelCenterLinks([]);
+          setGoogleHotelCenterPendingInvitations([]);
+          setGoogleHotelCenterId("");
+          setGoogleHotelCenterError(
+            error instanceof Error
+              ? error.message
+              : "Unable to load Hotel Center links.",
+          );
+        }
+      } finally {
+        if (!cancelled) setGoogleHotelCenterLoading(false);
+      }
+    };
+
+    void loadHotelCenterLinks();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    getToken,
+    isLoaded,
+    isSignedIn,
+    connections.googleAds.connected,
+    connections.googleAds.selectedAccountId,
+  ]);
+
+  useEffect(() => {
+    if (!isLoaded) return;
+
+    let cancelled = false;
 
     const selectedAccountId = connections.googleAds.selectedAccountId;
+    const needsMerchantCenter =
+  googleCampaignType === "SHOPPING" ||
+  (
+    googleCampaignType === "DEMAND_GEN" &&
+    googleDemandGenFormat === "PRODUCT_FEED"
+  );
 
     const resetMerchantCenter = () => {
       setGoogleMerchantCenterId("");
@@ -2546,7 +2709,8 @@ const [googleMerchantCenterProductsError, setGoogleMerchantCenterProductsError] 
     if (
       !isSignedIn ||
       !connections.googleAds.connected ||
-      !selectedAccountId
+      !selectedAccountId || 
+      !needsMerchantCenter
     ) {
       resetMerchantCenter();
 
@@ -2628,6 +2792,279 @@ const [googleMerchantCenterProductsError, setGoogleMerchantCenterProductsError] 
     connections.googleAds.connected,
     connections.googleAds.selectedAccountId,
   ]);
+
+
+useEffect(() => {
+  const needsMerchantCenter =
+  googleCampaignType === "SHOPPING" ||
+  (
+    googleCampaignType === "DEMAND_GEN" &&
+    googleDemandGenFormat === "PRODUCT_FEED"
+  );
+  if (
+    !isLoaded ||
+    !isSignedIn ||
+    !connections.googleAds.selectedAccountId ||
+    !googleMerchantCenterId ||
+    !needsMerchantCenter
+  ) {
+    setGoogleMerchantCenterDataSources([]);
+    setGoogleMerchantCenterFeedLabels([]);
+    setGoogleShoppingFeedLabel("");
+    setGoogleShoppingContentLanguage("");
+
+    setGoogleMerchantCenterDataSourcesLoading(false);
+    setGoogleMerchantCenterFeedLabelsLoading(false);
+
+    return;
+  }
+
+  let cancelled = false;
+
+  const loadMerchantCenterResources = async () => {
+    setGoogleMerchantCenterDataSourcesLoading(true);
+    setGoogleMerchantCenterFeedLabelsLoading(true);
+
+    setGoogleMerchantCenterDataSourcesError("");
+    setGoogleMerchantCenterFeedLabelsError("");
+
+    try {
+      const token = await getToken();
+
+      if (!token) {
+        throw new Error("Unable to retrieve your Clerk authentication token.");
+      }
+
+      const [sourcesResult, labelsResult] = await Promise.allSettled([
+        fetchGoogleMerchantCenterLookup<{
+          count?: number;
+          dataSources?: GoogleMerchantCenterDataSource[];
+        }>(
+          API_BASE_URL,
+          token,
+          "merchant-center-data-sources",
+          { merchantCenterId: googleMerchantCenterId },
+        ),
+
+        fetchGoogleMerchantCenterLookup<{
+          count?: number;
+          feedLabels?: GoogleMerchantCenterFeedLabelOption[];
+        }>(
+          API_BASE_URL,
+          token,
+          "merchant-center-feed-labels",
+          { merchantCenterId: googleMerchantCenterId },
+        ),
+      ]);
+
+      if (cancelled) return;
+
+      let sources: GoogleMerchantCenterDataSource[] = [];
+
+      if (sourcesResult.status === "fulfilled") {
+        sources = sourcesResult.value.dataSources ?? [];
+        setGoogleMerchantCenterDataSources(sources);
+      } else {
+        setGoogleMerchantCenterDataSources([]);
+        setGoogleMerchantCenterDataSourcesError(
+          sourcesResult.reason instanceof Error
+            ? sourcesResult.reason.message
+            : "Unable to load Merchant Center data sources.",
+        );
+      }
+
+      let reportFeedLabels: GoogleMerchantCenterFeedLabelOption[] = [];
+
+      if (labelsResult.status === "fulfilled") {
+        reportFeedLabels = labelsResult.value.feedLabels ?? [];
+      } else {
+        setGoogleMerchantCenterFeedLabelsError(
+          labelsResult.reason instanceof Error
+            ? labelsResult.reason.message
+            : "Unable to load Merchant Center feed labels.",
+        );
+      }
+
+      // Use real primary product data sources as a fallback when the
+      // Reports API does not return feed labels.
+      const sourceFeedLabels = sources
+        .filter(
+          (source) =>
+            source.type === "PRIMARY_PRODUCT" ||
+            Boolean(source.primaryProductDataSource),
+        )
+        .map((source) => ({
+          feedLabel: String(
+            source.feedLabel ??
+              source.primaryProductDataSource?.feedLabel ??
+              "",
+          ).trim(),
+          contentLanguage: String(
+            source.contentLanguage ??
+              source.primaryProductDataSource?.contentLanguage ??
+              "",
+          ).trim(),
+          countries: source.countries ??
+            source.primaryProductDataSource?.countries ??
+            [],
+        }));
+
+      const uniqueLabels = new Map<
+        string,
+        GoogleMerchantCenterFeedLabelOption
+      >();
+
+      for (const item of [...sourceFeedLabels, ...reportFeedLabels]) {
+        const feedLabel = String(item.feedLabel ?? "").trim();
+        const contentLanguage = String(item.contentLanguage ?? "").trim();
+
+        if (!feedLabel || !contentLanguage) continue;
+
+        const key = `${feedLabel}|||${contentLanguage}`;
+
+        uniqueLabels.set(key, {
+          feedLabel,
+          contentLanguage,
+          countries: item.countries ?? [],
+        });
+      }
+
+      const options = [...uniqueLabels.values()];
+
+      setGoogleMerchantCenterFeedLabels(options);
+
+      const current = options.find(
+        (item) =>
+          item.feedLabel === googleShoppingFeedLabel &&
+          item.contentLanguage === googleShoppingContentLanguage,
+      );
+
+      const next = current ?? options[0];
+
+      setGoogleShoppingFeedLabel(next?.feedLabel ?? "");
+      setGoogleShoppingContentLanguage(next?.contentLanguage ?? "");
+    } catch (err) {
+      if (!cancelled) {
+        const message =
+          err instanceof Error
+            ? err.message
+            : "Unable to load Merchant Center resources.";
+
+        setGoogleMerchantCenterDataSourcesError(message);
+        setGoogleMerchantCenterFeedLabelsError(message);
+      }
+    } finally {
+      if (!cancelled) {
+        setGoogleMerchantCenterDataSourcesLoading(false);
+        setGoogleMerchantCenterFeedLabelsLoading(false);
+      }
+    }
+  };
+
+  void loadMerchantCenterResources();
+
+  return () => {
+    cancelled = true;
+  };
+}, [
+  getToken,
+  isLoaded,
+  isSignedIn,
+  connections.googleAds.selectedAccountId,
+  googleMerchantCenterId,
+]);
+
+
+useEffect(() => {
+  const needsMerchantProducts =
+    googleCampaignType === "SHOPPING" ||
+    (
+      googleCampaignType === "DEMAND_GEN" &&
+      googleDemandGenFormat === "PRODUCT_FEED"
+    );
+
+  if (
+    !isLoaded ||
+    !isSignedIn ||
+    !connections.googleAds.selectedAccountId ||
+    !needsMerchantProducts ||
+    !googleMerchantCenterId ||
+    !googleShoppingFeedLabel ||
+    !googleShoppingContentLanguage
+  ) {
+    setGoogleMerchantCenterProducts([]);
+    setGoogleMerchantCenterProductsLoading(false);
+    setGoogleMerchantCenterProductsError("");
+    return;
+  }
+
+  let cancelled = false;
+
+  const loadMerchantProducts = async () => {
+    try {
+      setGoogleMerchantCenterProductsLoading(true);
+      setGoogleMerchantCenterProductsError("");
+
+      const token = await getToken();
+
+      if (!token) {
+        throw new Error("Unable to retrieve your Clerk authentication token.");
+      }
+
+      const data =
+        await fetchGoogleMerchantCenterLookup<{
+          count?: number;
+          products?: GoogleMerchantCenterProduct[];
+          nextPageToken?: string | null;
+        }>(
+          API_BASE_URL,
+          token,
+          "merchant-center-products",
+          {
+            merchantCenterId: googleMerchantCenterId,
+            feedLabel: googleShoppingFeedLabel,
+            contentLanguage: googleShoppingContentLanguage,
+            pageSize: "50",
+          },
+        );
+
+      if (cancelled) return;
+
+      setGoogleMerchantCenterProducts(data.products ?? []);
+    } catch (err) {
+      if (!cancelled) {
+        setGoogleMerchantCenterProducts([]);
+
+        setGoogleMerchantCenterProductsError(
+          err instanceof Error
+            ? err.message
+            : "Unable to load Merchant Center products.",
+        );
+      }
+    } finally {
+      if (!cancelled) {
+        setGoogleMerchantCenterProductsLoading(false);
+      }
+    }
+  };
+
+  void loadMerchantProducts();
+
+  return () => {
+    cancelled = true;
+  };
+}, [
+  getToken,
+  isLoaded,
+  isSignedIn,
+  connections.googleAds.selectedAccountId,
+  googleCampaignType,
+  googleDemandGenFormat,
+  googleMerchantCenterId,
+  googleShoppingFeedLabel,
+  googleShoppingContentLanguage,
+]);
+
 
   // Campaign results are derived from the real POST /api/campaigns response.
   const liveApiResponse =
@@ -4241,9 +4678,12 @@ const [googleMerchantCenterProductsError, setGoogleMerchantCenterProductsError] 
       selectedPlatforms.includes("googleAds") &&
       googleCampaignType === "HOTEL"
     ) {
-      if (!/^\d+$/.test(googleHotelCenterId.trim())) {
+      const selectedHotelCenterLink = googleHotelCenterLinks.find(
+        (link) => getHotelCenterLinkId(link) === googleHotelCenterId.trim(),
+      );
+      if (!selectedHotelCenterLink) {
         setError(
-          "Enter the numeric Hotel Center account ID linked to this Google Ads account.",
+          "Select an accepted Hotel Center account linked to the selected Google Ads customer.",
         );
         return false;
       }
@@ -9900,6 +10340,75 @@ const [googleMerchantCenterProductsError, setGoogleMerchantCenterProductsError] 
     }
   };
   
+const handleRegisterGoogleMerchantCenter = async () => {
+  if (!googleMerchantCenterId) {
+    setGoogleMerchantRegistrationError(
+      "Select a linked Merchant Center account first.",
+    );
+    return;
+  }
+
+  setGoogleMerchantRegistrationLoading(true);
+  setGoogleMerchantRegistrationError("");
+  setGoogleMerchantRegistrationSuccess("");
+
+  try {
+    const token = await getToken();
+
+    if (!token) {
+      throw new Error(
+        "Unable to retrieve your Clerk authentication token.",
+      );
+    }
+
+    const response = await fetch(
+      `${API_BASE_URL}/api/campaigns/lookups/google/merchant-center/register-gcp`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          merchantCenterId: googleMerchantCenterId,
+          developerEmail:
+            googleMerchantDeveloperEmail.trim() || undefined,
+        }),
+        cache: "no-store",
+      },
+    );
+
+    const payload = await response.json().catch(() => null);
+
+    if (!response.ok || payload?.success !== true) {
+      throw new Error(
+        payload?.message ||
+          `Merchant Center registration failed (${response.status}).`,
+      );
+    }
+
+    const registration = payload.data?.registration;
+    const gcpIds = Array.isArray(registration?.gcpIds)
+      ? registration.gcpIds
+      : [];
+
+    setGoogleMerchantRegistrationSuccess(
+      `Google Cloud project registered successfully.${
+        gcpIds.length ? ` GCP ID: ${gcpIds.join(", ")}` : ""
+      }`,
+    );
+  } catch (error) {
+    setGoogleMerchantRegistrationError(
+      error instanceof Error
+        ? error.message
+        : "Unable to register the Google Cloud project.",
+    );
+  } finally {
+    setGoogleMerchantRegistrationLoading(false);
+  }
+};
+
   return (
     <div className="flex flex-col p-2">
       <Paper
@@ -10686,20 +11195,194 @@ const [googleMerchantCenterProductsError, setGoogleMerchantCenterProductsError] 
                         <option value="2">High (2)</option>
                       </select>
                     </div>
-                    <div>
-                      <label className={labelClass}>
-                        Feed Label (optional)
-                      </label>
-                      <input
-                        value={googleShoppingFeedLabel}
-                        onChange={(e) => {
-                          setGoogleShoppingFeedLabel(e.target.value);
-                          clearPreview();
-                        }}
-                        placeholder="IN"
-                        className={inputClass}
-                      />
-                    </div>
+                    
+<div>
+  <label className={labelClass}>
+    Feed Label and Language
+  </label>
+
+  <select
+    value={
+      googleShoppingFeedLabel && googleShoppingContentLanguage
+        ? `${googleShoppingFeedLabel}|||${googleShoppingContentLanguage}`
+        : ""
+    }
+    onChange={(e) => {
+      const [feedLabel, contentLanguage] =
+        e.target.value.split("|||", 2);
+
+      setGoogleShoppingFeedLabel(feedLabel ?? "");
+      setGoogleShoppingContentLanguage(contentLanguage ?? "");
+      clearPreview();
+    }}
+    className={inputClass}
+    disabled={
+      googleMerchantCenterFeedLabelsLoading ||
+      googleMerchantCenterFeedLabels.length === 0
+    }
+  >
+    <option value="">
+      {googleMerchantCenterFeedLabelsLoading
+        ? "Loading feed labels..."
+        : "No feed label selected"}
+    </option>
+
+    {googleMerchantCenterFeedLabels.map((item) => (
+      <option
+        key={`${item.feedLabel}-${item.contentLanguage}`}
+        value={`${item.feedLabel}|||${item.contentLanguage}`}
+      >
+        {item.feedLabel} · {item.contentLanguage.toUpperCase()}
+      </option>
+    ))}
+  </select>
+
+  {googleMerchantCenterFeedLabelsError && (
+    <p className="mt-1 text-xs text-amber-700">
+      {googleMerchantCenterFeedLabelsError}
+    </p>
+  )}
+</div>
+
+<div className="sm:col-span-2 rounded-lg border border-slate-200 p-3">
+  <div className="flex flex-wrap items-center justify-between gap-2">
+    <p className="text-sm font-semibold text-slate-800">
+      Merchant Center Data Sources
+    </p>
+    <span className="text-xs text-slate-500">
+      {googleMerchantCenterDataSourcesLoading
+        ? "Loading..."
+        : `${googleMerchantCenterDataSources.length} found`}
+    </span>
+  </div>
+
+  {googleMerchantCenterDataSourcesError ? (
+    <p className="mt-2 text-xs text-red-600">
+      {googleMerchantCenterDataSourcesError}
+    </p>
+  ) : (
+    <div className="mt-2 space-y-2">
+      {googleMerchantCenterDataSources.map((source, index) => (
+        <div
+          key={source.dataSourceId ?? source.name ?? index}
+          className="rounded-md bg-slate-50 p-2 text-xs"
+        >
+          <p className="font-medium text-slate-800">
+            {source.displayName || source.dataSourceId || source.name}
+          </p>
+          <p className="text-slate-500">
+            {source.type || "Data source"}
+            {source.feedLabel ? ` · ${source.feedLabel}` : ""}
+            {source.contentLanguage
+              ? ` · ${source.contentLanguage.toUpperCase()}`
+              : ""}
+          </p>
+        </div>
+      ))}
+    </div>
+  )}
+
+  <div className="mt-4 border-t border-slate-200 pt-3">
+    <div className="flex justify-between gap-2">
+      <p className="text-sm font-semibold text-slate-800">
+        Merchant Center Products
+      </p>
+      <span className="text-xs text-slate-500">
+        {googleMerchantCenterProductsLoading
+          ? "Loading..."
+          : `${googleMerchantCenterProducts.length} loaded`}
+      </span>
+    </div>
+
+    {googleMerchantCenterProductsError ? (
+      <p className="mt-2 text-xs text-amber-700">
+        {googleMerchantCenterProductsError}
+      </p>
+    ) : googleMerchantCenterProducts.length > 0 ? (
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        {googleMerchantCenterProducts.slice(0, 6).map((product, index) => (
+          <div
+            key={product.id ?? product.offerId ?? index}
+            className="rounded-md border border-slate-100 p-2"
+          >
+            <p className="text-xs font-medium text-slate-800">
+              {product.title || product.offerId || product.id}
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              {[product.brand, product.offerId, product.availability]
+                .filter(Boolean)
+                .join(" · ")}
+            </p>
+          </div>
+        ))}
+      </div>
+    ) : (
+      <p className="mt-2 text-xs text-slate-500">
+        {googleMerchantCenterProductsLoading
+          ? "Retrieving products..."
+          : "No products returned for the selected feed label and language."}
+      </p>
+    )}
+  </div>
+</div>
+
+<div className="mt-3 rounded-lg border border-slate-200 p-4 space-y-3">
+  <div>
+    <p className="text-sm font-semibold text-slate-800">
+      Merchant API Developer Registration
+    </p>
+    <p className="mt-1 text-xs text-slate-500">
+      One-time setup to register the AdSyntra Google Cloud project
+      with the selected Merchant Center account.
+    </p>
+  </div>
+
+  <div>
+    <label className={labelClass}>
+      Developer Contact Email (Google Account)
+    </label>
+    <input
+      type="email"
+      value={googleMerchantDeveloperEmail}
+      onChange={(e) =>
+        setGoogleMerchantDeveloperEmail(e.target.value)
+      }
+      placeholder="developer@example.com"
+      className={inputClass}
+    />
+    <p className="mt-1 text-xs text-slate-500">
+      Optional in Google's API. Recommended for technical notifications.
+    </p>
+  </div>
+
+  <button
+    type="button"
+    onClick={handleRegisterGoogleMerchantCenter}
+    disabled={
+      googleMerchantRegistrationLoading ||
+      !googleMerchantCenterId
+    }
+    className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+  >
+    {googleMerchantRegistrationLoading
+      ? "Registering..."
+      : "Register Google Cloud Project"}
+  </button>
+
+  {googleMerchantRegistrationError && (
+    <p className="text-xs text-red-600">
+      {googleMerchantRegistrationError}
+    </p>
+  )}
+
+  {googleMerchantRegistrationSuccess && (
+    <p className="text-xs text-emerald-700">
+      {googleMerchantRegistrationSuccess}
+    </p>
+  )}
+</div>
+
+
                     <div>
                       <label className={labelClass}>
                         Product Listing Group
@@ -10719,7 +11402,7 @@ const [googleMerchantCenterProductsError, setGoogleMerchantCenterProductsError] 
                         <option value="ITEM_ID">Item ID</option>
                       </select>
                     </div>
-                    {googleShoppingProductGroupType !== "ALL_PRODUCTS" && (
+                    {/* googleShoppingProductGroupType !== "ALL_PRODUCTS" && (
                       <div>
                         <label className={labelClass}>
                           Product group value *
@@ -10732,8 +11415,37 @@ const [googleMerchantCenterProductsError, setGoogleMerchantCenterProductsError] 
                           }}
                           className={inputClass}
                         />
-                      </div>
-                    )}
+                      </div> */}
+                    
+                    {googleShoppingProductGroupType === "ITEM_ID" &&
+googleMerchantCenterProducts.length > 0 ? (
+  <select
+    value={googleShoppingProductGroupValue}
+    onChange={(e) => {
+      setGoogleShoppingProductGroupValue(e.target.value);
+      clearPreview();
+    }}
+    className={inputClass}
+  >
+    <option value="">Select a Merchant Center product</option>
+    {googleMerchantCenterProducts
+      .filter((product) => product.offerId)
+      .map((product) => (
+        <option key={product.id ?? product.offerId} value={product.offerId}>
+          {product.title || product.offerId} · {product.offerId}
+        </option>
+      ))}
+  </select>
+) : (
+  <input
+    value={googleShoppingProductGroupValue}
+    onChange={(e) => {
+      setGoogleShoppingProductGroupValue(e.target.value);
+      clearPreview();
+    }}
+    className={inputClass}
+  />
+)}
                     <p className="sm:col-span-2 rounded-lg border border-blue-100 bg-blue-50 p-3 text-xs leading-5 text-blue-800">
                       Standard Shopping requires a linked Merchant Center
                       account and shopping_setting. The API adapter must create
@@ -10790,18 +11502,69 @@ const [googleMerchantCenterProductsError, setGoogleMerchantCenterProductsError] 
                   <>
                     <div>
                       <label className={labelClass}>
-                        Hotel Center Account ID *
+                        Linked Hotel Center Account *
                       </label>
-                      <input
-                        inputMode="numeric"
+                      <select
                         value={googleHotelCenterId}
                         onChange={(e) => {
                           setGoogleHotelCenterId(e.target.value);
                           clearPreview();
                         }}
-                        placeholder="Linked Hotel Center account ID"
+                        disabled={
+                          googleHotelCenterLoading ||
+                          googleHotelCenterLinks.length === 0
+                        }
                         className={inputClass}
-                      />
+                      >
+                        <option value="">
+                          {googleHotelCenterLoading
+                            ? "Loading linked Hotel Center accounts..."
+                            : googleHotelCenterLinks.length > 0
+                              ? "Select a linked Hotel Center account"
+                              : "No accepted Hotel Center account link"}
+                        </option>
+                        {googleHotelCenterLinks.map((link) => {
+                          const hotelCenterId = getHotelCenterLinkId(link);
+                          return (
+                            <option key={hotelCenterId} value={hotelCenterId}>
+                              {link.name || `Hotel Center ${hotelCenterId}`} ({hotelCenterId})
+                            </option>
+                          );
+                        })}
+                      </select>
+                      {googleHotelCenterLoading && (
+                        <p className="mt-2 text-xs text-slate-500">
+                          Loading Hotel Center links for the selected Google Ads account...
+                        </p>
+                      )}
+                      {googleHotelCenterError && (
+                        <p className="mt-2 text-xs text-amber-700">
+                          {googleHotelCenterError}
+                        </p>
+                      )}
+                      {googleHotelCenterPendingInvitations.length > 0 && (
+                        <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                          <p className="font-semibold">
+                            Hotel Center link invitation awaiting acceptance
+                          </p>
+                          {googleHotelCenterPendingInvitations.map((invitation) => (
+                            <p key={invitation.resourceName || invitation.productLinkInvitationId}>
+                              Hotel Center {getHotelCenterLinkId(invitation) || "account"}: {invitation.status}
+                            </p>
+                          ))}
+                          <p className="mt-1">
+                            The Hotel Center account administrator must accept the invitation before it can be selected here.
+                          </p>
+                        </div>
+                      )}
+                      {!googleHotelCenterLoading &&
+                        googleHotelCenterLinks.length === 0 &&
+                        googleHotelCenterPendingInvitations.length === 0 &&
+                        !googleHotelCenterError && (
+                          <p className="mt-2 text-xs text-slate-500">
+                            Link Hotel Center to this Google Ads account, then refresh this page. Only accepted links can be selected.
+                          </p>
+                        )}
                     </div>
                     <div>
                       <label className={labelClass}>
@@ -10839,10 +11602,12 @@ const [googleMerchantCenterProductsError, setGoogleMerchantCenterProductsError] 
                       />
                     </div>
                     <p className="sm:col-span-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
-                      Hotel campaigns require a linked Hotel Center account.
-                      Google documents Manual CPC and Percent CPC for Hotel
-                      campaigns; the backend must create the corresponding hotel
-                      setting and bidding scheme.
+                      A linked Hotel Center account does not prove Hotel Ads API
+                      access: Google's Hotel Ads API feature is available to
+                      allowlisted accounts only. Google also says Hotel campaigns
+                      begin migrating to Search campaigns for Travel in Q4 2026.
+                      Keep this legacy campaign path gated until Google confirms
+                      API access and the supported travel workflow is implemented.
                     </p>
                   </>
                 )}

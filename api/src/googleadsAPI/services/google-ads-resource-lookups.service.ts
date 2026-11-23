@@ -908,3 +908,232 @@ export async function getGoogleMerchantCenterProducts(
         nextPageToken: payload.nextPageToken ?? null,
     };
 }
+
+
+type GoogleMerchantCenterRegistrationResponse = {
+  name?: string;
+  gcpIds?: string[];
+};
+
+export async function registerGoogleMerchantCenterGcp(
+  context: GoogleAdsCreationContext,
+  input: {
+    merchantCenterId: string;
+    developerEmail?: string;
+  },
+) {
+  const merchantCenterId = input.merchantCenterId.trim();
+  const developerEmail = input.developerEmail?.trim();
+
+  if (!/^\d+$/.test(merchantCenterId)) {
+    throw new GoogleMerchantCenterLookupError(
+      "Invalid Merchant Center account ID.",
+      400,
+    );
+  }
+
+  // Ensure this Merchant Center belongs to the selected Google Ads customer.
+  const linkResult = await getGoogleAdsMerchantCenterLinks(context);
+  const links = linkResult.merchantCenterLinks ?? [];
+
+  const isLinked = links.some(
+    (link) =>
+      String(link.merchantCenterId ?? link.id ?? "") === merchantCenterId,
+  );
+
+  if (!isLinked) {
+    throw new GoogleMerchantCenterLookupError(
+      "This Merchant Center account is not linked to the selected Google Ads customer.",
+      400,
+    );
+  }
+
+  if (
+    developerEmail &&
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(developerEmail)
+  ) {
+    throw new GoogleMerchantCenterLookupError(
+      "Enter a valid developer contact email address.",
+      400,
+    );
+  }
+
+  let response: Response;
+
+  try {
+    response = await fetch(
+      `https://merchantapi.googleapis.com/accounts/v1/accounts/${merchantCenterId}/developerRegistration:registerGcp`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${context.accessToken}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify(
+          developerEmail ? { developerEmail } : {},
+        ),
+        signal: AbortSignal.timeout(30_000),
+      },
+    );
+  } catch (error) {
+    throw new GoogleMerchantCenterLookupError(
+      error instanceof Error
+        ? error.message
+        : "Unable to reach the Merchant API registration endpoint.",
+      502,
+    );
+  }
+
+  const payload = (await response.json().catch(() => null)) as
+    | (GoogleMerchantCenterRegistrationResponse & {
+        error?: {
+          message?: string;
+          status?: string;
+          code?: number;
+        };
+      })
+    | null;
+
+  if (!response.ok) {
+    let message =
+      payload?.error?.message ??
+      `Merchant Center registration failed (${response.status}).`;
+
+    if (response.status === 401) {
+      message =
+        "Merchant API registration authentication failed. Check that Google OAuth has granted the Merchant API content scope.";
+    } else if (response.status === 403) {
+      message =
+        "Merchant Center registration requires direct ADMIN access to this production account and a verified website homepage.";
+    }
+
+    throw new GoogleMerchantCenterLookupError(
+      message,
+      response.status,
+      payload,
+    );
+  }
+
+  if (!payload?.name) {
+    throw new GoogleMerchantCenterLookupError(
+      "Google returned an unexpected developer registration response.",
+      502,
+      payload,
+    );
+  }
+
+  return {
+    merchantCenterId,
+    registered: true,
+    registration: payload,
+  };
+}
+
+/**
+ * Discover Hotel Center link invitations for the selected Google Ads customer.
+ * An ACCEPTED product_link_invitation is treated as a linked Hotel Center
+ * account; REQUESTED/PENDING_APPROVAL remain visible as pending invitations.
+ *
+ * Google Ads v26 exposes hotel_center.hotel_center_id on
+ * product_link_invitation (not on product_link), so this lookup uses the
+ * invitation resource to obtain the actual Hotel Center ID.
+ */
+export async function getGoogleAdsHotelCenterLinks(
+    context: GoogleAdsCreationContext,
+) {
+    const rows = await searchGoogleAdsRows(
+        context,
+        `SELECT
+            product_link_invitation.product_link_invitation_id,
+            product_link_invitation.resource_name,
+            product_link_invitation.type,
+            product_link_invitation.status,
+            product_link_invitation.hotel_center.hotel_center_id
+         FROM product_link_invitation
+         WHERE product_link_invitation.type = 'HOTEL_CENTER'
+         ORDER BY product_link_invitation.product_link_invitation_id`,
+    );
+
+    const invitations = rows
+        .map((row) =>
+            row.productLinkInvitation ?? row.product_link_invitation,
+        )
+        .filter((item) => item && typeof item === "object")
+        .map((item) => {
+            const hotelCenter =
+                item.hotelCenter ?? item.hotel_center ?? {};
+
+            const hotelCenterId = String(
+                hotelCenter.hotelCenterId ??
+                    hotelCenter.hotel_center_id ??
+                    "",
+            ).trim();
+
+            const productLinkInvitationId = String(
+                item.productLinkInvitationId ??
+                    item.product_link_invitation_id ??
+                    "",
+            ).trim();
+
+            const resourceName = String(
+                item.resourceName ?? item.resource_name ?? "",
+            ).trim();
+
+            const status = String(item.status ?? "UNKNOWN")
+                .trim()
+                .toUpperCase();
+
+            return {
+                id: hotelCenterId,
+                name: hotelCenterId
+                    ? `Hotel Center ${hotelCenterId}`
+                    : "Hotel Center invitation",
+                hotelCenterId,
+                productLinkInvitationId,
+                resourceName,
+                type: String(item.type ?? "HOTEL_CENTER"),
+                status,
+            };
+        })
+        .filter((item) =>
+            /^\d+$/.test(item.hotelCenterId) &&
+            item.type.toUpperCase() === "HOTEL_CENTER",
+        );
+
+    const acceptedByHotelCenterId = new Map<
+        string,
+        (typeof invitations)[number]
+    >();
+
+    for (const invitation of invitations) {
+        if (
+            invitation.status === "ACCEPTED" &&
+            !acceptedByHotelCenterId.has(invitation.hotelCenterId)
+        ) {
+            acceptedByHotelCenterId.set(
+                invitation.hotelCenterId,
+                invitation,
+            );
+        }
+    }
+
+    const hotelCenterLinks = [
+        ...acceptedByHotelCenterId.values(),
+    ];
+
+    const pendingInvitations = invitations.filter((invitation) =>
+        ["REQUESTED", "PENDING_APPROVAL"].includes(
+            invitation.status,
+        ),
+    );
+
+    return {
+        count: hotelCenterLinks.length,
+        hotelCenterLinks,
+        pendingInvitationCount: pendingInvitations.length,
+        pendingInvitations,
+        invitationCount: invitations.length,
+        invitations,
+    };
+}

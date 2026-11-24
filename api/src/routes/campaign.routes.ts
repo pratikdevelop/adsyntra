@@ -6539,6 +6539,612 @@ router.get(
 );
 
 
+// ==========================================
+// META CATALOG AND PRODUCT SET DISCOVERY
+// Catalogs belong to a Business. Resolve the selected Ad Account's Business,
+// then read both Business-owned and client catalogs using the user's Meta token.
+// ==========================================
+
+type MetaCommerceGraphResponse = {
+    id?: string;
+    name?: string;
+    business?: { id?: string; name?: string } | null;
+    data?: Array<Record<string, any>>;
+    paging?: {
+        cursors?: { after?: string };
+        next?: string;
+    };
+    error?: {
+        message?: string;
+        type?: string;
+        code?: number;
+        error_subcode?: number;
+        fbtrace_id?: string;
+    };
+};
+
+type MetaCommerceContext = Awaited<ReturnType<typeof getMetaAdsCreationContext>>;
+
+class MetaCommerceLookupError extends Error {
+    constructor(
+        message: string,
+        public statusCode = 502,
+        public details?: unknown,
+    ) {
+        super(message);
+        this.name = "MetaCommerceLookupError";
+    }
+}
+
+const META_COMMERCE_LOOKUP_MAX_PAGES = 20;
+
+function normalizeMetaCommerceId(value: unknown): string {
+    return String(value ?? "").trim();
+}
+
+function getMetaGraphAccountNodeId(value: string): string {
+    const digits = value.trim().replace(/^act_/i, "");
+    if (!/^\d+$/.test(digits)) {
+        throw new MetaCommerceLookupError(
+            "The selected Meta Ad Account ID is invalid.",
+            400,
+        );
+    }
+    return `act_${digits}`;
+}
+
+async function requestMetaCommerceGraph<T extends MetaCommerceGraphResponse = MetaCommerceGraphResponse>(
+    context: MetaCommerceContext,
+    path: string,
+    params: Record<string, string> = {},
+): Promise<T> {
+    const url = new URL(
+        `https://graph.facebook.com/${context.apiVersion}/${path.replace(/^\/+/, "")}`,
+    );
+
+    for (const [key, value] of Object.entries(params)) {
+        if (value) url.searchParams.set(key, value);
+    }
+
+    let response: Response;
+    try {
+        response = await fetch(url.toString(), {
+            method: "GET",
+            headers: {
+                Authorization: `Bearer ${context.accessToken}`,
+                Accept: "application/json",
+            },
+            signal: AbortSignal.timeout(30_000),
+        });
+    } catch (error) {
+        throw new MetaCommerceLookupError(
+            error instanceof Error
+                ? error.message
+                : "Unable to reach the Meta Graph API.",
+            502,
+        );
+    }
+
+    const payload = (await response.json().catch(() => null)) as T | null;
+    if (!response.ok || payload?.error) {
+        const metaError = payload?.error;
+        const providerMessage =
+            metaError?.message ||
+            `Meta Catalog lookup failed (${response.status}).`;
+        const details = {
+            metaError: {
+                type: metaError?.type ?? null,
+                code: metaError?.code ?? null,
+                subcode: metaError?.error_subcode ?? null,
+                fbtraceId: metaError?.fbtrace_id ?? null,
+            },
+        };
+
+        if (response.status === 401 || metaError?.code === 190) {
+            throw new MetaCommerceLookupError(
+                "The Meta authorization is no longer valid. Reconnect Meta Ads and try again.",
+                401,
+                details,
+            );
+        }
+
+        if (response.status === 403 || metaError?.code === 200) {
+            throw new MetaCommerceLookupError(
+                "Meta denied access to Business or Catalog assets. Check that the connected user has business_management and ads_management permission, that the app has the required Marketing API access, and that the user has MANAGE or ADVERTISE access to the relevant Catalog.",
+                403,
+                { ...details, providerMessage },
+            );
+        }
+
+        throw new MetaCommerceLookupError(
+            providerMessage,
+            response.status >= 400 && response.status < 500
+                ? response.status
+                : 502,
+            details,
+        );
+    }
+
+    if (!payload || typeof payload !== "object") {
+        throw new MetaCommerceLookupError(
+            "Meta returned an invalid Catalog lookup response.",
+            502,
+        );
+    }
+
+    return payload;
+}
+
+async function readMetaCommerceEdge(
+    context: MetaCommerceContext,
+    path: string,
+    fields: string,
+): Promise<{
+    items: Array<Record<string, any>>;
+    truncated: boolean;
+}> {
+    const items: Array<Record<string, any>> = [];
+    let after: string | undefined;
+    let truncated = false;
+
+    for (let page = 0; page < META_COMMERCE_LOOKUP_MAX_PAGES; page += 1) {
+        const payload = await requestMetaCommerceGraph(
+            context,
+            path,
+            {
+                fields,
+                limit: "100",
+                ...(after ? { after } : {}),
+            },
+        );
+
+        if (Array.isArray(payload.data)) {
+            items.push(...payload.data);
+        }
+
+        const nextAfter = payload.paging?.cursors?.after;
+        if (!payload.paging?.next || !nextAfter) {
+            return { items, truncated: false };
+        }
+
+        after = nextAfter;
+    }
+
+    truncated = true;
+    return { items, truncated };
+}
+
+type MetaCommerceBusiness = {
+    id: string;
+    name: string | null;
+    relationship: "OWNER" | "AGENCY";
+};
+
+async function getMetaCatalogBusinesses(
+    context: MetaCommerceContext,
+): Promise<MetaCommerceBusiness[]> {
+    const adAccountNodeId = getMetaGraphAccountNodeId(context.adAccountId);
+    const businesses = new Map<string, MetaCommerceBusiness>();
+    let directOwnerLookupError: unknown;
+
+    // Prefer the Business that owns the Ad Account when Meta exposes it.
+    // A shared/agency Ad Account may not have an owning Business visible
+    // through this field, so this is not the only relationship we check.
+    try {
+        const account = await requestMetaCommerceGraph(
+            context,
+            adAccountNodeId,
+            { fields: "business{id,name}" },
+        );
+
+        const ownerId = normalizeMetaCommerceId(account.business?.id);
+        if (/^\d+$/.test(ownerId)) {
+            businesses.set(ownerId, {
+                id: ownerId,
+                name: account.business?.name ?? null,
+                relationship: "OWNER",
+            });
+        }
+    } catch (error) {
+        // Continue to the Business/agency relationship lookup. If that also
+        // fails, return its actionable Graph API error rather than masking it.
+        directOwnerLookupError = error;
+    }
+
+    // `me/businesses` lists Business Managers the connected Meta identity can
+    // access. `/act_<id>/agencies` lists Businesses that have agency access to
+    // the selected Ad Account. Intersecting the two avoids choosing an
+    // unrelated Business simply because the user manages it.
+    const [userBusinessesResult, accountAgenciesResult] = await Promise.allSettled([
+        readMetaCommerceEdge(context, "me/businesses", "id,name"),
+        readMetaCommerceEdge(context, `${adAccountNodeId}/agencies`, "id,name"),
+    ]);
+
+    if (
+        userBusinessesResult.status === "fulfilled" &&
+        accountAgenciesResult.status === "fulfilled"
+    ) {
+        const agencyBusinessIds = new Set(
+            accountAgenciesResult.value.items
+                .map((row) => normalizeMetaCommerceId(row.id ?? row.business_id))
+                .filter((id) => /^\d+$/.test(id)),
+        );
+
+        for (const row of userBusinessesResult.value.items) {
+            const id = normalizeMetaCommerceId(row.id);
+            if (!/^\d+$/.test(id) || !agencyBusinessIds.has(id)) continue;
+
+            // An owning Business already has priority if the same Business
+            // appears in the agency response for any reason.
+            if (!businesses.has(id)) {
+                businesses.set(id, {
+                    id,
+                    name: typeof row.name === "string" ? row.name : null,
+                    relationship: "AGENCY",
+                });
+            }
+        }
+    }
+
+    if (businesses.size > 0) {
+        return [...businesses.values()].sort((a, b) => {
+            if (a.relationship !== b.relationship) {
+                return a.relationship === "OWNER" ? -1 : 1;
+            }
+            return String(a.name ?? a.id).localeCompare(String(b.name ?? b.id));
+        });
+    }
+
+    // When no direct owner is visible, both fallback lookups are required to
+    // establish whether the signed-in user has an accessible agency Business.
+    if (userBusinessesResult.status === "rejected") {
+        throw userBusinessesResult.reason;
+    }
+    if (accountAgenciesResult.status === "rejected") {
+        throw accountAgenciesResult.reason;
+    }
+
+    throw new MetaCommerceLookupError(
+        "The connected Meta user could not resolve an owning or agency Business Manager for the selected Ad Account. Check that the user has business_management permission and that a Business Manager has access to this Ad Account.",
+        409,
+        {
+            adAccountId: adAccountNodeId,
+            directOwnerBusinessResolved: false,
+            accessibleBusinessCount: userBusinessesResult.value.items.length,
+            agencyBusinessCount: accountAgenciesResult.value.items.length,
+            directOwnerLookupFailed: Boolean(directOwnerLookupError),
+        },
+    );
+}
+
+async function getMetaCatalogsForSelectedAccount(
+    context: MetaCommerceContext,
+) {
+    const businesses = await getMetaCatalogBusinesses(context);
+    const fields = [
+        "id",
+        "name",
+        "vertical",
+        "product_count",
+        "feed_count",
+        "is_catalog_segment",
+        "is_local_catalog",
+    ].join(",");
+
+    // A selected Ad Account can be owned by one Business and/or shared with
+    // one or more agency Businesses. Discover catalogs through every
+    // Business relationship verified above, including owned and client lists.
+    const businessResults = await Promise.all(
+        businesses.map(async (business) => {
+            const [ownedResult, clientResult] = await Promise.allSettled([
+                readMetaCommerceEdge(
+                    context,
+                    `${business.id}/owned_product_catalogs`,
+                    fields,
+                ),
+                readMetaCommerceEdge(
+                    context,
+                    `${business.id}/client_product_catalogs`,
+                    fields,
+                ),
+            ]);
+
+            return { business, ownedResult, clientResult };
+        }),
+    );
+
+    const hasAnySuccessfulCatalogLookup = businessResults.some(
+        ({ ownedResult, clientResult }) =>
+            ownedResult.status === "fulfilled" ||
+            clientResult.status === "fulfilled",
+    );
+
+    if (!hasAnySuccessfulCatalogLookup) {
+        const firstFailure = businessResults
+            .flatMap(({ ownedResult, clientResult }) => [
+                ownedResult.status === "rejected" ? ownedResult.reason : null,
+                clientResult.status === "rejected" ? clientResult.reason : null,
+            ])
+            .find(Boolean);
+
+        throw firstFailure instanceof MetaCommerceLookupError
+            ? firstFailure
+            : new MetaCommerceLookupError(
+                "Unable to retrieve catalogs accessible through the selected Meta Business relationships.",
+                502,
+            );
+    }
+
+    const warnings: string[] = [];
+    const catalogMap = new Map<string, Record<string, any>>();
+
+    const addCatalogs = (
+        rows: Array<Record<string, any>>,
+        source: "OWNED" | "CLIENT",
+        business: MetaCommerceBusiness,
+    ) => {
+        for (const row of rows) {
+            const id = normalizeMetaCommerceId(row.id);
+            if (!/^\d+$/.test(id)) continue;
+
+            const existing = catalogMap.get(id);
+            const sources = new Set<string>(
+                Array.isArray(existing?.sources) ? existing.sources : [],
+            );
+            sources.add(source);
+
+            const catalogBusinesses = Array.isArray(existing?.businesses)
+                ? [...existing.businesses]
+                : [];
+            if (!catalogBusinesses.some((item: any) => item.id === business.id)) {
+                catalogBusinesses.push({
+                    id: business.id,
+                    name: business.name,
+                    relationship: business.relationship,
+                });
+            }
+
+            catalogMap.set(id, {
+                id,
+                name: String(row.name ?? `Catalog ${id}`),
+                vertical: row.vertical ?? null,
+                productCount:
+                    typeof row.product_count === "number"
+                        ? row.product_count
+                        : Number(row.product_count ?? 0),
+                feedCount:
+                    typeof row.feed_count === "number"
+                        ? row.feed_count
+                        : Number(row.feed_count ?? 0),
+                isCatalogSegment: row.is_catalog_segment === true,
+                isLocalCatalog: row.is_local_catalog === true,
+                sources: [...sources],
+                businesses: catalogBusinesses,
+            });
+        }
+    };
+
+    for (const { business, ownedResult, clientResult } of businessResults) {
+        const businessLabel = business.name || business.id;
+
+        if (ownedResult.status === "fulfilled") {
+            addCatalogs(ownedResult.value.items, "OWNED", business);
+        } else {
+            warnings.push(
+                `Owned catalogs for ${businessLabel} could not be loaded: ${
+                    ownedResult.reason instanceof Error
+                        ? ownedResult.reason.message
+                        : "Unknown Meta API error."
+                }`,
+            );
+        }
+
+        if (clientResult.status === "fulfilled") {
+            addCatalogs(clientResult.value.items, "CLIENT", business);
+        } else {
+            warnings.push(
+                `Client catalogs for ${businessLabel} could not be loaded: ${
+                    clientResult.reason instanceof Error
+                        ? clientResult.reason.message
+                        : "Unknown Meta API error."
+                }`,
+            );
+        }
+    }
+
+    const catalogs = [...catalogMap.values()].sort((a, b) =>
+        String(a.name).localeCompare(String(b.name)),
+    );
+
+    return {
+        adAccountId: getMetaGraphAccountNodeId(context.adAccountId),
+        // Keep the original singular field for clients that expect it, while
+        // exposing all verified Business contexts used for catalog discovery.
+        business: businesses[0] ?? null,
+        businesses,
+        count: catalogs.length,
+        catalogs,
+        truncated: businessResults.some(
+            ({ ownedResult, clientResult }) =>
+                (ownedResult.status === "fulfilled" && ownedResult.value.truncated) ||
+                (clientResult.status === "fulfilled" && clientResult.value.truncated),
+        ),
+        warnings,
+    };
+}
+
+async function getMetaProductSetsForSelectedAccount(
+    context: MetaCommerceContext,
+    catalogIdValue: unknown,
+) {
+    const catalogId = normalizeMetaCommerceId(catalogIdValue);
+    if (!/^\d+$/.test(catalogId)) {
+        throw new MetaCommerceLookupError(
+            "A valid numeric Meta Catalog ID is required.",
+            400,
+        );
+    }
+
+    // Do not allow the browser to request Product Sets for an arbitrary Catalog.
+    const catalogResult = await getMetaCatalogsForSelectedAccount(context);
+    const catalog = catalogResult.catalogs.find(
+        (item: Record<string, any>) => item.id === catalogId,
+    );
+
+    if (!catalog) {
+        throw new MetaCommerceLookupError(
+            "This Catalog is not accessible through the selected Meta Business and Ad Account.",
+            403,
+            { catalogId, adAccountId: catalogResult.adAccountId },
+        );
+    }
+
+    const result = await readMetaCommerceEdge(
+        context,
+        `${catalogId}/product_sets`,
+        "id,name,product_count,filter",
+    );
+
+    const productSets = result.items
+        .map((row) => {
+            const id = normalizeMetaCommerceId(row.id);
+            if (!/^\d+$/.test(id)) return null;
+            return {
+                id,
+                name: String(row.name ?? `Product Set ${id}`),
+                productCount:
+                    typeof row.product_count === "number"
+                        ? row.product_count
+                        : Number(row.product_count ?? 0),
+                filter: row.filter ?? null,
+            };
+        })
+        .filter((item): item is NonNullable<typeof item> => item !== null)
+        .sort((a, b) => a.name.localeCompare(b.name));
+
+    return {
+        adAccountId: catalogResult.adAccountId,
+        business: catalogResult.business,
+        businesses: catalog.businesses ?? catalogResult.businesses,
+        catalog: {
+            id: catalog.id,
+            name: catalog.name,
+            vertical: catalog.vertical,
+        },
+        count: productSets.length,
+        productSets,
+        truncated: result.truncated,
+    };
+}
+
+function sendMetaCommerceLookupError(
+    res: Response,
+    error: unknown,
+    fallbackMessage: string,
+) {
+    if (error instanceof MetaCommerceLookupError) {
+        return res.status(error.statusCode).json({
+            success: false,
+            provider: "metaAds",
+            message: error.message,
+            ...(error.details !== undefined && { details: error.details }),
+        });
+    }
+
+    console.error(
+        fallbackMessage,
+        error instanceof Error ? error.message : "Unknown error",
+    );
+
+    return res.status(502).json({
+        success: false,
+        provider: "metaAds",
+        message: fallbackMessage,
+    });
+}
+
+// GET /api/campaigns/lookups/meta/catalogs
+router.get(
+    "/lookups/meta/catalogs",
+    async (req: Request, res: Response) => {
+        try {
+            const { userId } = getAuth(req);
+            if (!userId) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Authentication required.",
+                });
+            }
+
+            const selectedAccount = await getSelectedMetaPixelLookupAccount(userId);
+            if (!selectedAccount) {
+                return res.status(409).json({
+                    success: false,
+                    provider: "metaAds",
+                    message: "Select an active Meta Ad Account before loading catalogs.",
+                });
+            }
+
+            const context = await getMetaAdsCreationContext(userId, selectedAccount);
+            const result = await getMetaCatalogsForSelectedAccount(context);
+            return res.status(200).json({ success: true, provider: "metaAds", ...result });
+        } catch (error) {
+            return sendMetaCommerceLookupError(
+                res,
+                error,
+                "Unable to retrieve Meta product catalogs.",
+            );
+        }
+    },
+);
+
+// GET /api/campaigns/lookups/meta/catalogs/:catalogId/product-sets
+router.get(
+    "/lookups/meta/catalogs/:catalogId/product-sets",
+    async (req: Request, res: Response) => {
+        try {
+            const { userId } = getAuth(req);
+            if (!userId) {
+                return res.status(401).json({
+                    success: false,
+                    message: "Authentication required.",
+                });
+            }
+
+            const catalogId = String(req.params.catalogId ?? "").trim();
+            if (!/^\d+$/.test(catalogId)) {
+                return res.status(400).json({
+                    success: false,
+                    provider: "metaAds",
+                    message: "A valid numeric Meta Catalog ID is required.",
+                });
+            }
+
+            const selectedAccount = await getSelectedMetaPixelLookupAccount(userId);
+            if (!selectedAccount) {
+                return res.status(409).json({
+                    success: false,
+                    provider: "metaAds",
+                    message: "Select an active Meta Ad Account before loading Product Sets.",
+                });
+            }
+
+            const context = await getMetaAdsCreationContext(userId, selectedAccount);
+            const result = await getMetaProductSetsForSelectedAccount(
+                context,
+                catalogId,
+            );
+            return res.status(200).json({ success: true, provider: "metaAds", ...result });
+        } catch (error) {
+            return sendMetaCommerceLookupError(
+                res,
+                error,
+                "Unable to retrieve Meta Product Sets.",
+            );
+        }
+    },
+);
+
 function readMerchantCenterQuery(
     req: Request,
     key: string,

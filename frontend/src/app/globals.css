@@ -3,6 +3,15 @@
 /* AdSyntra appearance preference: MUI and Tailwind share one root theme flag. */
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
+*{
+  font-family: "IBM Plex Sans", sans-serif !important;
+  font-optical-sizing: auto !important;
+  font-weight: 500 !important;
+  font-style: normal !important;
+
+  font-variation-settings:
+    "wdth" 100 !important;
+}
 :root {
   color-scheme: light;
 }

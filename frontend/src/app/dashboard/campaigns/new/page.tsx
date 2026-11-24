@@ -86,6 +86,7 @@ import {
   Typography,
   Checkbox,
   Autocomplete,
+  MenuItem
 } from "@mui/material";
 
 import { googleAdsLookups } from "@/lib/googleAdsLookups";
@@ -1298,6 +1299,50 @@ function appendUniqueValues(current: string, values: string[], separator = "\n")
   return [...next].join(separator);
 }
 
+type MetaCityDistanceUnit = "kilometer" | "mile";
+
+function buildMetaGeoLocationPayload(input: {
+  countries: string;
+  regionKeys: string[];
+  cityKeys: string[];
+  zipKeys: string[];
+  cityRadius: string;
+  cityDistanceUnit: MetaCityDistanceUnit;
+}): Record<string, unknown> {
+  const splitValues = (value: string) =>
+    value
+      .split(/[\n,]+/)
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+  const normalized: Record<string, unknown> = {};
+  const countries = splitValues(input.countries).map((code) => code.toUpperCase());
+  const regions = [...new Set(input.regionKeys.map((key) => key.trim()).filter(Boolean))];
+  const cities = [...new Set(input.cityKeys.map((key) => key.trim()).filter(Boolean))];
+  const zips = [...new Set(input.zipKeys.map((key) => key.trim()).filter(Boolean))];
+
+  // Meta supports several included/excluded location categories together.
+  // Do not choose only one category based on a priority chain.
+  if (countries.length) normalized.countries = [...new Set(countries)];
+  if (regions.length) normalized.regions = regions.map((key) => ({ key }));
+  if (cities.length) {
+    const radius = Number(input.cityRadius);
+    if (!Number.isFinite(radius) || radius <= 0) {
+      throw new Error("City radius must be a number greater than zero.");
+    }
+    normalized.cities = cities.map((key) => ({
+      key,
+      radius,
+      distance_unit: input.cityDistanceUnit,
+    }));
+  }
+  if (zips.length) {
+    normalized.zips = zips.map((key) => ({ key: key.toUpperCase() }));
+  }
+
+  return normalized;
+}
+
 async function fetchMetaCampaignLookupOptions(
   apiBaseUrl: string,
   token: string,
@@ -1813,6 +1858,13 @@ const [googleShoppingProductGroupValue, setGoogleShoppingProductGroupValue] =
   const [metaCityDistanceUnit, setMetaCityDistanceUnit] = useState<
     "kilometer" | "mile"
   >("kilometer");
+  const [metaExcludedCountries, setMetaExcludedCountries] = useState("");
+  const [metaExcludedRegionKeys, setMetaExcludedRegionKeys] = useState("");
+  const [metaExcludedCityKeys, setMetaExcludedCityKeys] = useState("");
+  const [metaExcludedZipKeys, setMetaExcludedZipKeys] = useState("");
+  const [metaExcludedCityRadius, setMetaExcludedCityRadius] = useState("25");
+  const [metaExcludedCityDistanceUnit, setMetaExcludedCityDistanceUnit] =
+    useState<"kilometer" | "mile">("kilometer");
   const [metaAgeMin, setMetaAgeMin] = useState("18");
   const [metaAgeMax, setMetaAgeMax] = useState("65");
   const [metaGender, setMetaGender] = useState<"ALL" | "MEN" | "WOMEN">("ALL");
@@ -2164,6 +2216,7 @@ const [
   const [metaTargetingLoading, setMetaTargetingLoading] = useState(false);
   const [metaTargetingError, setMetaTargetingError] = useState("");
   const [metaLocationKind, setMetaLocationKind] = useState<"country" | "region" | "city" | "zip">("country");
+  const [metaLocationTargetMode, setMetaLocationTargetMode] = useState<"INCLUDE" | "EXCLUDE">("INCLUDE");
   const [metaLocationQuery, setMetaLocationQuery] = useState("");
   const [metaLocationOptions, setMetaLocationOptions] = useState<MetaCampaignLookupOption[]>([]);
   const [metaLocationLoading, setMetaLocationLoading] = useState(false);
@@ -4379,10 +4432,29 @@ useEffect(() => {
       })
       .filter(Boolean);
     if (!values.length) return;
-    if (metaLocationKind === "country") setMetaCountries((current) => appendUniqueValues(current, values, ", "));
-    if (metaLocationKind === "region") setMetaRegionKeys((current) => appendUniqueValues(current, values));
-    if (metaLocationKind === "city") setMetaCityKeys((current) => appendUniqueValues(current, values));
-    if (metaLocationKind === "zip") setMetaZipKeys((current) => appendUniqueValues(current, values));
+
+    const excluded = metaLocationTargetMode === "EXCLUDE";
+    if (metaLocationKind === "country") {
+      (excluded ? setMetaExcludedCountries : setMetaCountries)(
+        (current) => appendUniqueValues(current, values, ", "),
+      );
+    }
+    if (metaLocationKind === "region") {
+      (excluded ? setMetaExcludedRegionKeys : setMetaRegionKeys)(
+        (current) => appendUniqueValues(current, values),
+      );
+    }
+    if (metaLocationKind === "city") {
+      (excluded ? setMetaExcludedCityKeys : setMetaCityKeys)(
+        (current) => appendUniqueValues(current, values),
+      );
+    }
+    if (metaLocationKind === "zip") {
+      (excluded ? setMetaExcludedZipKeys : setMetaZipKeys)(
+        (current) => appendUniqueValues(current, values),
+      );
+    }
+
     setMetaSelectedLocationOptions([]);
     clearPreview();
   };
@@ -4404,6 +4476,16 @@ useEffect(() => {
     if (regions.length) setMetaRegionKeys(regions.join("\n"));
     if (cities.length) setMetaCityKeys(cities.join("\n"));
     if (zips.length) setMetaZipKeys(zips.join("\n"));
+
+    const excludedGeo = asObject(targeting.excluded_geo_locations);
+    const excludedCountries = Array.isArray(excludedGeo.countries) ? excludedGeo.countries.map(String) : [];
+    const excludedRegions = Array.isArray(excludedGeo.regions) ? excludedGeo.regions.map((item: any) => String(item?.key ?? "")).filter(Boolean) : [];
+    const excludedCities = Array.isArray(excludedGeo.cities) ? excludedGeo.cities.map((item: any) => String(item?.key ?? "")).filter(Boolean) : [];
+    const excludedZips = Array.isArray(excludedGeo.zips) ? excludedGeo.zips.map((item: any) => String(item?.key ?? "")).filter(Boolean) : [];
+    if (excludedCountries.length) setMetaExcludedCountries(excludedCountries.join(", "));
+    if (excludedRegions.length) setMetaExcludedRegionKeys(excludedRegions.join("\n"));
+    if (excludedCities.length) setMetaExcludedCityKeys(excludedCities.join("\n"));
+    if (excludedZips.length) setMetaExcludedZipKeys(excludedZips.join("\n"));
     if (Number.isFinite(Number(targeting.age_min))) setMetaAgeMin(String(targeting.age_min));
     if (Number.isFinite(Number(targeting.age_max))) setMetaAgeMax(String(targeting.age_max));
     if (Array.isArray(targeting.genders) && targeting.genders.length === 1) {
@@ -5069,10 +5151,14 @@ useEffect(() => {
       const countryCodes = splitMetaLocations(metaCountries).map((code) =>
         code.toUpperCase(),
       );
+      const excludedCountryCodes = splitMetaLocations(metaExcludedCountries).map((code) =>
+        code.toUpperCase(),
+      );
 
       const regionKeys = splitMetaLocations(metaRegionKeys);
       const cityKeys = splitMetaLocations(metaCityKeys);
       const zipKeys = splitMetaLocations(metaZipKeys);
+      const excludedCityKeys = splitMetaLocations(metaExcludedCityKeys);
 
       const minAge = Number(metaAgeMin);
       const maxAge = Number(metaAgeMax);
@@ -5085,12 +5171,18 @@ useEffect(() => {
 
       if (
         !hasAnyLocation ||
-        (countryCodes.length > 0 &&
-          countryCodes.some((code) => !/^[A-Z]{2}$/.test(code)))
+        [...countryCodes, ...excludedCountryCodes].some((code) => !/^[A-Z]{2}$/.test(code))
       ) {
         setError(
           "Select at least one valid Meta country, region, city or ZIP location.",
         );
+        return false;
+      }
+      if (
+        (cityKeys.length > 0 && (!Number.isFinite(Number(metaCityRadius)) || Number(metaCityRadius) <= 0)) ||
+        (excludedCityKeys.length > 0 && (!Number.isFinite(Number(metaExcludedCityRadius)) || Number(metaExcludedCityRadius) <= 0))
+      ) {
+        setError("Included and excluded city radius values must be greater than zero.");
         return false;
       }
       const metaObjective = metaObjectiveMap[objective];
@@ -5974,36 +6066,22 @@ useEffect(() => {
         .map((item) => item.trim())
         .filter(Boolean);
 
-    const countryCodes = splitMetaLocations(metaCountries).map((code) =>
-      code.toUpperCase(),
-    );
-
-    const regionKeys = splitMetaLocations(metaRegionKeys);
-    const cityKeys = splitMetaLocations(metaCityKeys);
-    const zipKeys = splitMetaLocations(metaZipKeys);
-
-    const executionGeoLocations =
-      zipKeys.length > 0
-        ? {
-          zips: zipKeys.map((key) => ({
-            key: key.toUpperCase(),
-          })),
-        }
-        : cityKeys.length > 0
-          ? {
-            cities: cityKeys.map((key) => ({
-              key,
-              radius: Number(metaCityRadius),
-              distance_unit: metaCityDistanceUnit,
-            })),
-          }
-          : regionKeys.length > 0
-            ? {
-              regions: regionKeys.map((key) => ({ key })),
-            }
-            : {
-              countries: countryCodes,
-            };
+    const executionGeoLocations = buildMetaGeoLocationPayload({
+      countries: metaCountries,
+      regionKeys: splitMetaLocations(metaRegionKeys),
+      cityKeys: splitMetaLocations(metaCityKeys),
+      zipKeys: splitMetaLocations(metaZipKeys),
+      cityRadius: metaCityRadius,
+      cityDistanceUnit: metaCityDistanceUnit,
+    });
+    const executionExcludedGeoLocations = buildMetaGeoLocationPayload({
+      countries: metaExcludedCountries,
+      regionKeys: splitMetaLocations(metaExcludedRegionKeys),
+      cityKeys: splitMetaLocations(metaExcludedCityKeys),
+      zipKeys: splitMetaLocations(metaExcludedZipKeys),
+      cityRadius: metaExcludedCityRadius,
+      cityDistanceUnit: metaExcludedCityDistanceUnit,
+    });
 
     const interests = metaTargetingOptions.filter((option: any) => {
       return metaAudienceInterestIds.includes(option.id)
@@ -6726,6 +6804,9 @@ useEffect(() => {
                 "Meta start_time and end_time belong to the Ad Set, including when the budget is at Campaign level.",
               targeting: {
                 geo_locations: executionGeoLocations,
+                ...(Object.keys(executionExcludedGeoLocations).length > 0 && {
+                  excluded_geo_locations: executionExcludedGeoLocations,
+                }),
                 ...(metaSpecialAdCategories.length === 0 && {
                   age_min: Number(metaAgeMin),
                   age_max: Number(metaAgeMax),
@@ -8103,34 +8184,28 @@ useEffect(() => {
       }
 
       const zipKeys = splitValues(metaZipKeys);
-
-      const geoLocations =
-        zipKeys.length > 0
-          ? {
-            zips: zipKeys.map((key) => ({
-              key: key.toUpperCase(),
-            })),
-          }
-          : cityKeys.length > 0
-            ? {
-              cities: cityKeys.map((key) => ({
-                key,
-                radius: Number(metaCityRadius),
-                distance_unit: metaCityDistanceUnit,
-              })),
-            }
-            : regionKeys.length > 0
-              ? {
-                regions: regionKeys.map((key) => ({ key })),
-              }
-              : {
-                countries: splitValues(metaCountries).map((code) =>
-                  code.toUpperCase(),
-                ),
-              };
+      const geoLocations = buildMetaGeoLocationPayload({
+        countries: metaCountries,
+        regionKeys,
+        cityKeys,
+        zipKeys,
+        cityRadius: metaCityRadius,
+        cityDistanceUnit: metaCityDistanceUnit,
+      });
+      const excludedGeoLocations = buildMetaGeoLocationPayload({
+        countries: metaExcludedCountries,
+        regionKeys: realMetaIds(metaExcludedRegionKeys),
+        cityKeys: realMetaIds(metaExcludedCityKeys),
+        zipKeys: splitValues(metaExcludedZipKeys),
+        cityRadius: metaExcludedCityRadius,
+        cityDistanceUnit: metaExcludedCityDistanceUnit,
+      });
 
       const targeting = {
         geo_locations: geoLocations,
+        ...(Object.keys(excludedGeoLocations).length > 0 && {
+          excluded_geo_locations: excludedGeoLocations,
+        }),
 
         ...(metaSpecialAdCategories.length === 0 && {
           age_min: Number(metaAgeMin),
@@ -12977,26 +13052,58 @@ googleMerchantCenterProducts.length > 0 ? (
     </Typography>
   </Stack>
 
-  <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
-    {/* 1. Location Type Select */}
-    <TextField
-      select
-      size="small"
-      value={metaLocationKind}
-      onChange={(event) => {
-        setMetaLocationKind(event.target.value as "country" | "region" | "city" | "zip");
-        setMetaLocationOptions([]);
-        setMetaSelectedLocationOptions([]);
-        setMetaLocationError("");
-      }}
-      sx={{ minWidth: 140 }}
-      SelectProps={{ native: true }}
+  <div className="mb-3 flex flex-wrap items-center gap-2">
+    <span className="text-xs font-semibold text-slate-600">Apply searched locations as:</span>
+    <button
+      type="button"
+      onClick={() => { setMetaSelectedLocationOptions([]); setMetaLocationTargetMode("INCLUDE"); }}
+      className={`rounded-lg border px-3 py-2 text-xs font-semibold ${
+        metaLocationTargetMode === "INCLUDE"
+          ? "border-blue-600 bg-blue-50 text-blue-700"
+          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+      }`}
     >
-      <option value="country">Country</option>
-      <option value="region">Region</option>
-      <option value="city">City</option>
-      <option value="zip">ZIP / Postal</option>
-    </TextField>
+      Include locations
+    </button>
+    <button
+      type="button"
+      onClick={() => { setMetaSelectedLocationOptions([]); setMetaLocationTargetMode("EXCLUDE"); }}
+      className={`rounded-lg border px-3 py-2 text-xs font-semibold ${
+        metaLocationTargetMode === "EXCLUDE"
+          ? "border-rose-600 bg-rose-50 text-rose-700"
+          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+      }`}
+    >
+      Exclude locations
+    </button>
+  </div>
+
+  <p className="mb-3 text-xs text-slate-500">
+    Search results are added to the selected include or exclude list. Included and excluded locations can contain countries, regions, cities and ZIP codes together.
+  </p>
+
+  <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+
+<TextField
+  select
+  label="Location Type"
+  size="small"
+  value={metaLocationKind}
+  onChange={(event) => {
+    setMetaLocationKind(
+      event.target.value as "country" | "region" | "city" | "zip"
+    );
+    setMetaLocationOptions([]);
+    setMetaSelectedLocationOptions([]);
+    setMetaLocationError("");
+  }}
+  sx={{ minWidth: 160 }}
+>
+  <MenuItem value="country">Country</MenuItem>
+  <MenuItem value="region">Region</MenuItem>
+  <MenuItem value="city">City</MenuItem>
+  <MenuItem value="zip">ZIP / Postal</MenuItem>
+</TextField>
 
     {/* 2. Search Input */}
     <TextField
@@ -13090,16 +13197,20 @@ googleMerchantCenterProducts.length > 0 ? (
             minWidth: 130,
           }}
         >
-          Add Selected
+          {metaLocationTargetMode === "EXCLUDE" ? "Add Exclusions" : "Add Included"}
         </Button>
       </Stack>
     </Box>
   )}
 </Box>
                     </div>
-                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50/40 p-3">
+                      <p className="text-sm font-semibold text-slate-800">Included locations *</p>
+                      <p className="mt-1 text-xs text-slate-500">People in at least one of these selected areas can be eligible for delivery.</p>
+                    </div>
+                    <div className="mt-3 grid gap-4 sm:grid-cols-2">
                       <div>
-                        <label className={labelClass}>Countries *</label>
+                        <label className={labelClass}>Included Countries *</label>
                         <input
                           value={metaCountries}
                           onChange={(e) => {
@@ -13112,7 +13223,7 @@ googleMerchantCenterProducts.length > 0 ? (
                       </div>
                       <div>
                         <label className={labelClass}>
-                          Region Keys (optional; one per line)
+                          Included Region Keys (optional; one per line)
                         </label>
                         <textarea
                           rows={2}
@@ -13127,7 +13238,7 @@ googleMerchantCenterProducts.length > 0 ? (
                       </div>
                       <div>
                         <label className={labelClass}>
-                          City Keys (optional; one per line)
+                          Included City Keys (optional; one per line)
                         </label>
                         <textarea
                           rows={2}
@@ -13143,7 +13254,7 @@ googleMerchantCenterProducts.length > 0 ? (
                       {metaCityKeys.trim() && (
                         <div className="grid grid-cols-2 gap-2">
                           <div>
-                            <label className={labelClass}>City radius</label>
+                            <label className={labelClass}>Included city radius</label>
                             <input
                               type="number"
                               min="1"
@@ -13176,7 +13287,7 @@ googleMerchantCenterProducts.length > 0 ? (
                       )}
                       <div>
                         <label className={labelClass}>
-                          ZIP Keys (optional; e.g. US:94103)
+                          Included ZIP Keys (optional; e.g. US:94103)
                         </label>
                         <textarea
                           rows={2}
@@ -13189,6 +13300,97 @@ googleMerchantCenterProducts.length > 0 ? (
                           className={inputClass}
                         />
                       </div>
+                    </div>
+                    <div className="mt-5 rounded-xl border border-rose-100 bg-rose-50/40 p-3">
+                      <p className="text-sm font-semibold text-slate-800">Excluded locations (optional)</p>
+                      <p className="mt-1 text-xs text-slate-500">These areas are excluded from delivery, even when they fall inside a broader included area. Use the Include / Exclude selector above to add searched locations here.</p>
+                    </div>
+                    <div className="mt-3 grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className={labelClass}>Excluded Countries</label>
+                        <input
+                          value={metaExcludedCountries}
+                          onChange={(e) => {
+                            setMetaExcludedCountries(e.target.value);
+                            clearPreview();
+                          }}
+                          placeholder="IN, US"
+                          className={inputClass}
+                        />
+                      </div>
+                      <div>
+                        <label className={labelClass}>Excluded Region Keys</label>
+                        <textarea
+                          rows={2}
+                          value={metaExcludedRegionKeys}
+                          onChange={(e) => {
+                            setMetaExcludedRegionKeys(e.target.value);
+                            clearPreview();
+                          }}
+                          placeholder="Meta geo-location region keys"
+                          className={inputClass}
+                        />
+                      </div>
+                      <div>
+                        <label className={labelClass}>Excluded City Keys</label>
+                        <textarea
+                          rows={2}
+                          value={metaExcludedCityKeys}
+                          onChange={(e) => {
+                            setMetaExcludedCityKeys(e.target.value);
+                            clearPreview();
+                          }}
+                          placeholder="Meta geo-location city keys"
+                          className={inputClass}
+                        />
+                      </div>
+                      {metaExcludedCityKeys.trim() && (
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className={labelClass}>Excluded city radius</label>
+                            <input
+                              type="number"
+                              min="1"
+                              max="80"
+                              value={metaExcludedCityRadius}
+                              onChange={(e) => {
+                                setMetaExcludedCityRadius(e.target.value);
+                                clearPreview();
+                              }}
+                              className={inputClass}
+                            />
+                          </div>
+                          <div>
+                            <label className={labelClass}>Distance unit</label>
+                            <select
+                              value={metaExcludedCityDistanceUnit}
+                              onChange={(e) => {
+                                setMetaExcludedCityDistanceUnit(e.target.value as "kilometer" | "mile");
+                                clearPreview();
+                              }}
+                              className={inputClass}
+                            >
+                              <option value="kilometer">Kilometers</option>
+                              <option value="mile">Miles</option>
+                            </select>
+                          </div>
+                        </div>
+                      )}
+                      <div>
+                        <label className={labelClass}>Excluded ZIP Keys</label>
+                        <textarea
+                          rows={2}
+                          value={metaExcludedZipKeys}
+                          onChange={(e) => {
+                            setMetaExcludedZipKeys(e.target.value);
+                            clearPreview();
+                          }}
+                          placeholder="US:94103"
+                          className={inputClass}
+                        />
+                      </div>
+                    </div>
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
                       <div>
                         <label className={labelClass}>Gender</label>
                         <select
@@ -17285,6 +17487,20 @@ googleMerchantCenterProducts.length > 0 ? (
                     ? "Special-category restrictions apply"
                     : `Ages ${metaAgeMin}–${metaAgeMax} · ${metaGender === "ALL" ? "All genders" : metaGender}`}
                 </p>
+                {(metaExcludedCountries.trim() ||
+                  metaExcludedRegionKeys.trim() ||
+                  metaExcludedCityKeys.trim() ||
+                  metaExcludedZipKeys.trim()) && (
+                  <p>
+                    <strong>Excluded locations:</strong>{" "}
+                    {[
+                      metaExcludedCountries.trim(),
+                      metaExcludedRegionKeys.trim() ? "Selected regions" : "",
+                      metaExcludedCityKeys.trim() ? "Selected cities" : "",
+                      metaExcludedZipKeys.trim() ? "Selected ZIP codes" : "",
+                    ].filter(Boolean).join(" · ")}
+                  </p>
+                )}
                 <p>
                   <strong>Bid Strategy:</strong> {metaBidStrategy}
                 </p>

@@ -77,6 +77,9 @@ export default function RootLayout({
           rel="stylesheet"
           href="https://fonts.googleapis.com/icon?family=Material+Icons"
         />
+        <style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,100..700;1,100..700&display=swap');
+</style>
       </head>
       <body className="relative flex min-h-full flex-col bg-slate-100">
         <ClerkProvider>{children}</ClerkProvider>

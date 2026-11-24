@@ -17,6 +17,7 @@ import overviewRouter from './routes/overview.routes.js';
 import conversionsRouter from './routes/conversions.routes.js';
 
 import userSettingsRouter from "./routes/user-settings.routes.js";
+import billingRouter from "./routes/billing.routes.js";
 
 
 const app = express();
@@ -87,6 +88,7 @@ app.use("/api/audiences", audiencesRouter);
 app.use("/api/overview", overviewRouter);
 app.use("/api/conversions", conversionsRouter);
 app.use("/api/user-settings", userSettingsRouter);
+app.use("/api/billing", billingRouter);
 
 // --------------------------------------------------
 // 404 handler

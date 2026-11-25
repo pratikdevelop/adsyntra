@@ -144,7 +144,7 @@ export default async function Home() {
   const { userId } = await auth();
   // Already signed in? Go directly to account connections.
   if (userId) {
-    redirect("/dashboard/provider");
+    redirect("/dashboard");
   }
 
   return (

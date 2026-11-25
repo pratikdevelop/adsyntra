@@ -192,6 +192,7 @@ export interface CreateGoogleAdsPerformanceMaxCampaignFlowInput {
 
     assetGroups: GoogleAdsPerformanceMaxAssetGroupInput[];
     locations?: GoogleAdsLocationTargetInput[];
+    proximities?: GoogleAdsProximityTargetInput[];
     languages?: Array<{
         languageConstantResourceName: string;
     }>;
@@ -221,6 +222,7 @@ export interface GoogleAdsPerformanceMaxCampaignCreatedResources {
     campaignAssets: string[];
     assetGroups: GoogleAdsPerformanceMaxAssetGroupCreatedResource[];
     locationCriteria: string[];
+    proximityCriteria: string[];
     languageCriteria: string[];
     negativeKeywords: string[];
     urlExclusions: string[];
@@ -313,6 +315,21 @@ export interface GoogleAdsLocationTargetInput {
     negative?: boolean;
 }
 
+/** Address-based Google Ads radius targeting. Proximity criteria are inclusion-only. */
+export interface GoogleAdsProximityTargetInput {
+    address: {
+        streetAddress?: string;
+        streetAddress2?: string;
+        cityName: string;
+        provinceName?: string;
+        provinceCode?: string;
+        postalCode?: string;
+        countryCode: string;
+    };
+    radius: number;
+    radiusUnits: "KILOMETERS" | "MILES";
+}
+
 export interface CreateGoogleAdsCampaignLocationTargetsInput {
     campaignResourceName: string;
     locations: GoogleAdsLocationTargetInput[];
@@ -387,6 +404,7 @@ export interface CreateGoogleAdsSearchCampaignFlowInput {
     };
 
     locations?: GoogleAdsLocationTargetInput[];
+    proximities?: GoogleAdsProximityTargetInput[];
 
     ad: {
         finalUrl: string;
@@ -427,6 +445,7 @@ export interface CreateGoogleAdsDisplayCampaignFlowInput {
     };
 
     locations?: GoogleAdsLocationTargetInput[];
+    proximities?: GoogleAdsProximityTargetInput[];
 
     languages?: Array<{
         languageConstantResourceName: string;
@@ -472,6 +491,7 @@ export interface GoogleAdsDisplayCampaignFlowResult {
         campaign: string;
         adGroup: string;
         locationCriteria: string[];
+        proximityCriteria: string[];
         languageCriteria: string[];
         audienceCriteria: string[];
         responsiveDisplayAd: string | null;
@@ -499,6 +519,7 @@ export interface GoogleAdsSearchCampaignFlowResult {
         campaign: string;
         adGroup: string;
         locationCriteria: string[];
+        proximityCriteria: string[];
         positiveKeywords: string[];
         negativeKeywords: string[];
         responsiveSearchAd: string;

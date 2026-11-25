@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth, useClerk, useUser } from "@clerk/nextjs";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 // ── MUI Components ──────────────────────────────────────
 import {
@@ -26,7 +26,6 @@ import CampaignOutlinedIcon from "@mui/icons-material/CampaignOutlined";
 import CableOutlinedIcon from "@mui/icons-material/CableOutlined";
 import MenuOutlinedIcon from "@mui/icons-material/MenuOutlined";
 import CloseOutlinedIcon from "@mui/icons-material/CloseOutlined";
-// import HelpOutlineOutlinedIcon from "@mui/icons-material/HelpOutlineOutlined";
 import ChevronRightOutlinedIcon from "@mui/icons-material/ChevronRightOutlined";
 import AutoAwesomeOutlinedIcon from "@mui/icons-material/AutoAwesomeOutlined";
 import AdUnitsOutlinedIcon from "@mui/icons-material/AdUnitsOutlined";
@@ -41,18 +40,34 @@ import PersonOutlineRoundedIcon from "@mui/icons-material/PersonOutlineRounded";
 import LogoutRoundedIcon from "@mui/icons-material/LogoutRounded";
 import { authenticatedApiRequest } from "@/lib/api";
 
+// ── Static maps ─────────────────────────────────────────
+const PAGE_TITLES: Record<string, string> = {
+  "/dashboard/campaigns/new": "Create campaign",
+  "/dashboard/profile": "My profile",
+};
+
+// ── Account menu ────────────────────────────────────────
 function AccountMenu({ compact = false }: { compact?: boolean }) {
   const { isLoaded, isSignedIn, user } = useUser();
   const { signOut } = useClerk();
   const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
   const open = Boolean(anchorEl);
 
-  if (!isLoaded) return <div className={compact ? "h-9 w-9" : "h-10 w-36"} />;
+  if (!isLoaded) {
+    return <div className={compact ? "h-9 w-9" : "h-10 w-36"} />;
+  }
   if (!isSignedIn || !user) return null;
 
-  const fullName = [user.firstName, user.lastName].filter(Boolean).join(" ") || "AdSyntra user";
+  const fullName =
+    [user.firstName, user.lastName].filter(Boolean).join(" ") || "AdSyntra user";
   const email = user.primaryEmailAddress?.emailAddress ?? "Signed-in account";
-  const initials = [user.firstName?.[0], user.lastName?.[0]].filter(Boolean).join("").toUpperCase() || email[0]?.toUpperCase() || "A";
+  const initials =
+    [user.firstName?.[0], user.lastName?.[0]]
+      .filter(Boolean)
+      .join("")
+      .toUpperCase() ||
+    email.match(/[A-Za-z]/)?.[0]?.toUpperCase() ||
+    "U";
   const close = () => setAnchorEl(null);
 
   return (
@@ -63,60 +78,145 @@ function AccountMenu({ compact = false }: { compact?: boolean }) {
         aria-expanded={open ? "true" : undefined}
         variant="text"
         color="inherit"
-        className="!rounded-xl !normal-case hover:!bg-slate-100 dark:hover:!bg-slate-800"
-        sx={{ minWidth: compact ? 42 : 180, px: compact ? 0.5 : 1.25, py: 0.5, gap: 1, justifyContent: compact ? "center" : "flex-start" }}
+        sx={{
+          borderRadius: 3,
+          textTransform: "none",
+          minWidth: compact ? 42 : 180,
+          px: compact ? 0.5 : 1.25,
+          py: 0.5,
+          gap: 1,
+          justifyContent: compact ? "center" : "flex-start",
+          "&:hover": { backgroundColor: "action.hover" },
+        }}
       >
-        <Avatar src={user.imageUrl} alt={fullName} sx={{ width: compact ? 32 : 36, height: compact ? 32 : 36, bgcolor: "#4338ca", fontSize: 13, fontWeight: 800 }}>{initials}</Avatar>
+        <Avatar
+          src={user.imageUrl}
+          alt={fullName}
+          sx={{
+            width: compact ? 32 : 36,
+            height: compact ? 32 : 36,
+            bgcolor: "#4338ca",
+            fontSize: 13,
+            fontWeight: 800,
+          }}
+        >
+          {initials}
+        </Avatar>
         {!compact && (
           <Box sx={{ minWidth: 0, flex: 1, textAlign: "left" }}>
-            <span className="block max-w-32 truncate text-xs font-bold text-slate-800 dark:text-slate-100">{fullName}</span>
-            <span className="block max-w-32 truncate text-[10px] text-slate-500 dark:text-slate-400">{email}</span>
+            <span className="block max-w-32 truncate text-xs font-bold text-slate-800 dark:text-slate-100">
+              {fullName}
+            </span>
+            <span className="block max-w-32 truncate text-[11px] text-slate-500 dark:text-slate-400">
+              {email}
+            </span>
           </Box>
         )}
         <ExpandMoreRoundedIcon sx={{ fontSize: 18, color: "#64748b" }} />
       </Button>
+
       <Menu
         anchorEl={anchorEl}
         open={open}
         onClose={close}
         anchorOrigin={{ vertical: "bottom", horizontal: "right" }}
         transformOrigin={{ vertical: "top", horizontal: "right" }}
-        slotProps={{ paper: { sx: { mt: 1, minWidth: 250, borderRadius: 2.5, border: "1px solid", borderColor: "divider", boxShadow: "0 14px 36px rgba(15,23,42,.14)" } } }}
+        slotProps={{
+          paper: {
+            sx: {
+              mt: 1,
+              minWidth: 250,
+              borderRadius: 2.5,
+              border: "1px solid",
+              borderColor: "divider",
+              boxShadow: "0 14px 36px rgba(15,23,42,.14)",
+            },
+          },
+        }}
       >
         <Box sx={{ px: 2, py: 1.5 }}>
           <Box sx={{ display: "flex", alignItems: "center", gap: 1.25 }}>
-            <Avatar src={user.imageUrl} alt={fullName} sx={{ width: 40, height: 40, bgcolor: "#4338ca", fontSize: 14, fontWeight: 800 }}>{initials}</Avatar>
+            <Avatar
+              src={user.imageUrl}
+              alt={fullName}
+              sx={{ width: 40, height: 40, bgcolor: "#4338ca", fontSize: 14, fontWeight: 800 }}
+            >
+              {initials}
+            </Avatar>
             <Box sx={{ minWidth: 0 }}>
-              <span className="block truncate text-sm font-bold text-slate-900 dark:text-slate-100">{fullName}</span>
-              <span className="block truncate text-xs text-slate-500 dark:text-slate-400">{email}</span>
+              <span className="block truncate text-sm font-bold text-slate-900 dark:text-slate-100">
+                {fullName}
+              </span>
+              <span className="block truncate text-xs text-slate-500 dark:text-slate-400">
+                {email}
+              </span>
             </Box>
           </Box>
         </Box>
         <Divider />
-        <MenuItem component={Link} href="/dashboard/profile" onClick={close} sx={{ py: 1.1, gap: 1 }}>
-          <ListItemIcon sx={{ minWidth: 30 }}><PersonOutlineRoundedIcon fontSize="small" /></ListItemIcon>
-          <ListItemText primary="My profile" secondary="Personal information & sign-in identity" primaryTypographyProps={{ fontSize: 13, fontWeight: 700 }} secondaryTypographyProps={{ fontSize: 11 }} />
+        <MenuItem
+          component={Link}
+          href="/dashboard/profile"
+          onClick={close}
+          sx={{ py: 1.1, gap: 1 }}
+        >
+          <ListItemIcon sx={{ minWidth: 30 }}>
+            <PersonOutlineRoundedIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText
+            primary="My profile"
+            secondary="Personal information & sign-in identity"
+            primaryTypographyProps={{ fontSize: 13, fontWeight: 700 }}
+            secondaryTypographyProps={{ fontSize: 11 }}
+          />
         </MenuItem>
-        <MenuItem component={Link} href="/dashboard/settings" onClick={close} sx={{ py: 1.1, gap: 1 }}>
-          <ListItemIcon sx={{ minWidth: 30 }}><SettingsOutlinedIcon fontSize="small" /></ListItemIcon>
-          <ListItemText primary="Settings" secondary="Appearance & workspace preferences" primaryTypographyProps={{ fontSize: 13, fontWeight: 700 }} secondaryTypographyProps={{ fontSize: 11 }} />
+        <MenuItem
+          component={Link}
+          href="/dashboard/settings"
+          onClick={close}
+          sx={{ py: 1.1, gap: 1 }}
+        >
+          <ListItemIcon sx={{ minWidth: 30 }}>
+            <SettingsOutlinedIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText
+            primary="Settings"
+            secondary="Appearance & workspace preferences"
+            primaryTypographyProps={{ fontSize: 13, fontWeight: 700 }}
+            secondaryTypographyProps={{ fontSize: 11 }}
+          />
         </MenuItem>
         <Divider sx={{ my: 0.5 }} />
-        <MenuItem onClick={() => { close(); void signOut({ redirectUrl: "/" }); }} sx={{ py: 1.1, gap: 1, color: "error.main" }}>
-          <ListItemIcon sx={{ minWidth: 30, color: "error.main" }}><LogoutRoundedIcon fontSize="small" /></ListItemIcon>
-          <ListItemText primary="Sign out" primaryTypographyProps={{ fontSize: 13, fontWeight: 700 }} />
+        <MenuItem
+          onClick={() => {
+            close();
+            void signOut({ redirectUrl: "/" });
+          }}
+          sx={{ py: 1.1, gap: 1, color: "error.main" }}
+        >
+          <ListItemIcon sx={{ minWidth: 30, color: "error.main" }}>
+            <LogoutRoundedIcon fontSize="small" />
+          </ListItemIcon>
+          <ListItemText
+            primary="Sign out"
+            primaryTypographyProps={{ fontSize: 13, fontWeight: 700 }}
+          />
         </MenuItem>
       </Menu>
     </>
   );
 }
 
+// ── Theme preference sync ───────────────────────────────
+// Split into two effects so the settings fetch does NOT re-run on every route change.
 function ThemePreferenceSync() {
   const { getToken, isLoaded, isSignedIn } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
   const initialLandingHandled = useRef(false);
+  const landingPreferenceRef = useRef<"overview" | "campaigns" | null>(null);
 
+  // Effect 1 — fetch settings & apply theme (fires once auth is ready).
   useEffect(() => {
     let cancelled = false;
     let preferenceEventReceived = false;
@@ -132,9 +232,12 @@ function ThemePreferenceSync() {
     };
 
     const apply = (theme: "system" | "light" | "dark") => {
-      const resolved = theme === "system"
-        ? (window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
-        : theme;
+      const resolved =
+        theme === "system"
+          ? window.matchMedia("(prefers-color-scheme: dark)").matches
+            ? "dark"
+            : "light"
+          : theme;
       document.documentElement.dataset.theme = resolved;
     };
 
@@ -150,7 +253,11 @@ function ThemePreferenceSync() {
 
     const onPreferenceChange = (event: Event) => {
       const detail = (event as CustomEvent<{ theme?: string }>).detail;
-      if (detail?.theme === "system" || detail?.theme === "light" || detail?.theme === "dark") {
+      if (
+        detail?.theme === "system" ||
+        detail?.theme === "light" ||
+        detail?.theme === "dark"
+      ) {
         preferenceEventReceived = true;
         syncTheme(detail.theme);
       }
@@ -167,7 +274,10 @@ function ThemePreferenceSync() {
       try {
         const token = await getToken();
         if (!token) return;
-        const response = await authenticatedApiRequest("/api/user-settings", token) as {
+        const response = (await authenticatedApiRequest(
+          "/api/user-settings",
+          token
+        )) as {
           settings?: {
             appearance?: { theme?: "system" | "light" | "dark" };
             dashboard?: { defaultLandingPage?: "overview" | "campaigns" };
@@ -175,15 +285,8 @@ function ThemePreferenceSync() {
         };
         if (cancelled || preferenceEventReceived) return;
         syncTheme(response.settings?.appearance?.theme ?? "system");
-
-        // Apply the preferred landing page only on the initial dashboard entry.
-        // Users can still navigate to Overview manually after the first load.
-        if (!initialLandingHandled.current) {
-          initialLandingHandled.current = true;
-          if (pathname === "/dashboard" && response.settings?.dashboard?.defaultLandingPage === "campaigns") {
-            router.replace("/dashboard/campaigns");
-          }
-        }
+        landingPreferenceRef.current =
+          response.settings?.dashboard?.defaultLandingPage ?? null;
       } catch {
         // Keep the browser's current theme when preference retrieval is unavailable.
       }
@@ -195,11 +298,28 @@ function ThemePreferenceSync() {
       window.removeEventListener("adsyntra:theme-preference", onPreferenceChange);
       stopSystemListener();
     };
-  }, [getToken, isLoaded, isSignedIn, pathname, router]);
+  }, [getToken, isLoaded, isSignedIn]);
+
+  // Effect 2 — apply landing page preference once, on initial dashboard entry.
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn) return;
+    if (initialLandingHandled.current) return;
+    if (pathname !== "/dashboard") return;
+
+    // Wait one tick for Effect 1 to populate the ref (same commit, effects run in order).
+    const preference = landingPreferenceRef.current;
+    if (preference === null) return;
+
+    initialLandingHandled.current = true;
+    if (preference === "campaigns") {
+      router.replace("/dashboard/campaigns");
+    }
+  }, [isLoaded, isSignedIn, pathname, router]);
 
   return null;
 }
 
+// ── Navigation config ───────────────────────────────────
 const navigationGroups = [
   {
     label: "Workspace",
@@ -282,8 +402,10 @@ const navigationGroups = [
     ],
   },
 ];
+
 const navigation = navigationGroups.flatMap((group) => group.items);
 
+// ── Layout ──────────────────────────────────────────────
 export default function DashboardLayout({
   children,
 }: Readonly<{
@@ -291,13 +413,14 @@ export default function DashboardLayout({
 }>) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [createMenuAnchor, setCreateMenuAnchor] = useState<HTMLElement | null>(null);
+  const [createMenuAnchor, setCreateMenuAnchor] = useState<HTMLElement | null>(
+    null
+  );
   const createMenuOpen = Boolean(createMenuAnchor);
 
   const openCreateMenu = (event: React.MouseEvent<HTMLButtonElement>) => {
     setCreateMenuAnchor(event.currentTarget);
   };
-
   const closeCreateMenu = () => setCreateMenuAnchor(null);
 
   const createMenuItems = [
@@ -355,23 +478,23 @@ export default function DashboardLayout({
     return pathname === href || pathname.startsWith(`${href}/`);
   };
 
-  const activeItem = navigation
-    .filter((item) => isActive(item.href))
-    .sort((a, b) => b.href.length - a.href.length)[0];
+  const activeItem = useMemo(
+    () =>
+      navigation
+        .filter((item) => isActive(item.href))
+        .sort((a, b) => b.href.length - a.href.length)[0],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pathname]
+  );
 
   const currentPageTitle =
-    pathname === "/dashboard/campaigns/new"
-      ? "Create campaign"
-      : pathname === "/dashboard/profile"
-        ? "My profile"
-        : (activeItem?.label ??
-          (pathname.startsWith("/dashboard/settings") ? "Settings" : "Workspace"));
+    PAGE_TITLES[pathname] ?? activeItem?.label ?? "Workspace";
 
   // ── Sidebar (shared between desktop & mobile) ─────────
   const sidebarContent = (
     <>
-      {/* Brand */}
-      <div className="border-b border-slate-200 px-5 py-5 dark:border-slate-800">
+      {/* Brand + close button (close only visible on mobile) */}
+      <div className="flex items-center justify-between border-b border-slate-200 px-5 py-5 dark:border-slate-800">
         <Link href="/dashboard" className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-600 to-indigo-600 text-sm font-bold text-white shadow-md shadow-blue-500/20">
             AS
@@ -385,8 +508,15 @@ export default function DashboardLayout({
             </p>
           </div>
         </Link>
+        <IconButton
+          size="small"
+          onClick={() => setMobileOpen(false)}
+          aria-label="Close menu"
+          sx={{ display: { xs: "inline-flex", md: "none" } }}
+        >
+          <CloseOutlinedIcon fontSize="small" />
+        </IconButton>
       </div>
-
 
       {/* Navigation */}
       <div className="flex-1 overflow-y-auto px-3 py-5">
@@ -396,7 +526,7 @@ export default function DashboardLayout({
               {group.label}
             </p>
 
-            <nav className="space-y-0.5">
+            <nav className="space-y-0.5" aria-label={`${group.label} navigation`}>
               {group.items.map((item) => {
                 const active = isActive(item.href);
                 const Icon = item.icon;
@@ -425,9 +555,7 @@ export default function DashboardLayout({
                           color: active ? "primary.main" : "inherit",
                         }}
                       />
-
                       <span className="flex-1">{item.label}</span>
-
                       {active && (
                         <span className="h-1.5 w-1.5 rounded-full bg-blue-600" />
                       )}
@@ -476,7 +604,10 @@ export default function DashboardLayout({
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
       {/* ── Desktop Sidebar ─────────────────────────────── */}
-      <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950 md:flex">
+      <aside
+        aria-label="Main navigation"
+        className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950 md:flex lg:w-64"
+      >
         {sidebarContent}
       </aside>
 
@@ -485,25 +616,15 @@ export default function DashboardLayout({
         anchor="left"
         open={mobileOpen}
         onClose={() => setMobileOpen(false)}
-        ModalProps={{ keepMounted: true }}
-        // PaperProps={{
-        //   sx: {
-        //     width: 280,
-        //     display: "flex",
-        //     flexDirection: "column",
-        //   },
-        // }}
+        PaperProps={{
+          sx: {
+            width: { xs: "min(85vw, 300px)", sm: 280 },
+            display: "flex",
+            flexDirection: "column",
+          },
+        }}
       >
-        <Box sx={{ display: "flex", justifyContent: "flex-end", p: 1 }}>
-          <IconButton
-            size="small"
-            onClick={() => setMobileOpen(false)}
-            aria-label="Close menu"
-          >
-            <CloseOutlinedIcon fontSize="small" />
-          </IconButton>
-        </Box>
-        {sidebarContent}
+        <div aria-label="Mobile navigation">{sidebarContent}</div>
       </Drawer>
 
       {/* ── Main column ─────────────────────────────────── */}
@@ -523,7 +644,9 @@ export default function DashboardLayout({
               <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-blue-600 to-indigo-600 text-xs font-bold text-white">
                 AS
               </div>
-              <span className="text-sm font-bold text-slate-900 dark:text-slate-100">AdSyntra</span>
+              <span className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                AdSyntra
+              </span>
             </Link>
           </div>
 
@@ -539,8 +662,15 @@ export default function DashboardLayout({
               aria-haspopup="menu"
               aria-expanded={createMenuOpen ? "true" : undefined}
               aria-controls={createMenuOpen ? "global-create-menu" : undefined}
-              className="!rounded-lg !px-3 !py-1.5 !normal-case !font-semibold"
-              sx={{ minHeight: 34, boxShadow: "none" }}
+              sx={{
+                borderRadius: 2,
+                px: 1.5,
+                py: 0.75,
+                textTransform: "none",
+                fontWeight: 600,
+                minHeight: 34,
+                boxShadow: "none",
+              }}
             >
               Create
             </Button>
@@ -571,8 +701,15 @@ export default function DashboardLayout({
               aria-haspopup="menu"
               aria-expanded={createMenuOpen ? "true" : undefined}
               aria-controls={createMenuOpen ? "global-create-menu" : undefined}
-              className="!rounded-xl !px-4 !py-2 !normal-case !font-semibold shadow-sm"
-              sx={{ minHeight: 40, boxShadow: "0 2px 8px rgba(37,99,235,.16)" }}
+              sx={{
+                borderRadius: 3,
+                px: 2,
+                py: 1,
+                textTransform: "none",
+                fontWeight: 600,
+                minHeight: 40,
+                boxShadow: "0 2px 8px rgba(37,99,235,.16)",
+              }}
             >
               Create
             </Button>
@@ -618,8 +755,14 @@ export default function DashboardLayout({
                 component={Link}
                 href={item.href}
                 onClick={closeCreateMenu}
-                className="!mx-0.5 !my-0.5 !rounded-xl !py-2.5 transition-colors hover:!bg-blue-50 dark:hover:!bg-slate-800"
-                sx={{ gap: 0.5 }}
+                sx={{
+                  mx: 0.5,
+                  my: 0.5,
+                  borderRadius: 3,
+                  py: 1.25,
+                  gap: 0.5,
+                  "&:hover": { backgroundColor: "primary.50" },
+                }}
               >
                 <ListItemIcon sx={{ minWidth: 36, color: "primary.main" }}>
                   <Icon fontSize="small" />
@@ -627,10 +770,19 @@ export default function DashboardLayout({
                 <ListItemText
                   primary={item.label}
                   secondary={item.description}
-                  primaryTypographyProps={{ fontSize: 13, fontWeight: 700, color: "text.primary" }}
-                  secondaryTypographyProps={{ fontSize: 11, color: "text.secondary" }}
+                  primaryTypographyProps={{
+                    fontSize: 13,
+                    fontWeight: 700,
+                    color: "text.primary",
+                  }}
+                  secondaryTypographyProps={{
+                    fontSize: 11,
+                    color: "text.secondary",
+                  }}
                 />
-                <ChevronRightOutlinedIcon sx={{ fontSize: 17, color: "text.disabled" }} />
+                <ChevronRightOutlinedIcon
+                  sx={{ fontSize: 17, color: "text.disabled" }}
+                />
               </MenuItem>
             );
           })}
@@ -639,7 +791,12 @@ export default function DashboardLayout({
             component={Link}
             href="/dashboard"
             onClick={closeCreateMenu}
-            className="!mx-0.5 !rounded-xl !py-2 transition-colors hover:!bg-slate-50 dark:hover:!bg-slate-800"
+            sx={{
+              mx: 0.5,
+              borderRadius: 3,
+              py: 1,
+              "&:hover": { backgroundColor: "action.hover" },
+            }}
           >
             <ListItemIcon sx={{ minWidth: 36, color: "text.secondary" }}>
               <DashboardOutlinedIcon fontSize="small" />
@@ -647,7 +804,7 @@ export default function DashboardLayout({
             <ListItemText
               primary="Workspace overview"
               secondary="Go back to your dashboard"
-              primaryTypographyProps={{ fontSize: 12, fontWeight: 650 }}
+              primaryTypographyProps={{ fontSize: 12, fontWeight: 600 }}
               secondaryTypographyProps={{ fontSize: 11 }}
             />
           </MenuItem>
@@ -656,7 +813,9 @@ export default function DashboardLayout({
         <ThemePreferenceSync />
 
         {/* Current Page */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8">{children}</main>
+        <main className="flex-1 p-4 text-sm sm:p-6 sm:text-[15px] lg:p-8 lg:text-base">
+          {children}
+        </main>
       </div>
     </div>
   );

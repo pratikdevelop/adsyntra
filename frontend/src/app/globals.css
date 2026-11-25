@@ -3,27 +3,45 @@
 /* AdSyntra appearance preference: MUI and Tailwind share one root theme flag. */
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
-*{
-  font-family: "IBM Plex Sans", sans-serif !important;
-  font-optical-sizing: auto !important;
-  font-weight: 500 !important;
-  font-style: normal !important;
+/* ---- FONT SETUP ---- */
+/* Load IBM Plex Sans properly (weights + responsive optical sizing) */
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap');
 
-  font-variation-settings:
-    "wdth" 100 !important;
-}
-:root {
-  color-scheme: light;
-}
-
-html[data-theme="light"] {
-  color-scheme: light;
+/* Apply font only at the root, let inheritance handle the rest */
+html {
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont,
+               "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-optical-sizing: auto;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
-html[data-theme="dark"] {
-  color-scheme: dark;
+body,
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
 }
 
+/* Respect system font scaling / responsive text */
+html {
+  font-size: 100%;          /* scales with user/browser settings */
+  -webkit-text-size-adjust: 100%;
+}
+
+/* Scale base font on small screens for better readability */
+@media (max-width: 640px) {
+  html { font-size: 15px; }
+}
+
+/* ---- COLOR SCHEME ---- */
+:root { color-scheme: light; }
+html[data-theme="light"] { color-scheme: light; }
+html[data-theme="dark"]  { color-scheme: dark; }
+
+/* ---- DARK THEME ---- */
 html[data-theme="dark"] body {
   background-color: #0b1220;
   color: #e2e8f0;
@@ -59,11 +77,6 @@ html[data-theme="dark"] .MuiPopover-paper {
 
 html[data-theme="dark"] .MuiDivider-root {
   border-color: #26364d;
-}
-
-html[data-theme="dark"] body {
-  background-color: #0b1220;
-  color: #e2e8f0;
 }
 
 html[data-theme="dark"] .MuiTypography-colorTextSecondary {

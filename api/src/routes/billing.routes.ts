@@ -11,6 +11,7 @@ import {
 import {
   downloadMetaBillingInvoice,
   getMetaBillingOverview,
+  getMetaBillingActivities,
 } from "../metaadsAPI/services/billing.service.js";
 
 const router = Router();
@@ -118,6 +119,20 @@ async function getOwnedAccount(
     .exec();
 }
 
+async function getOwnedGoogleAccount(userId: string, requestedAccountId: string) {
+  const numericId = requestedAccountId.replace(/^customers\//, "");
+  if (!/^\d+$/.test(numericId)) return null;
+
+  return AdAccountModel.findOne({
+    userId,
+    provider: "googleAds",
+    externalAccountId: { $in: [requestedAccountId, numericId, `customers/${numericId}`] },
+  })
+    .select("externalAccountId name currency timezone status isSelected")
+    .lean()
+    .exec();
+}
+
 router.get("/", async (req: Request, res: Response) => {
   const userId = getAuthenticatedUserId(req);
   if (!userId) {
@@ -203,6 +218,9 @@ router.get("/", async (req: Request, res: Response) => {
                   reportingSpend: null,
                   reportingSpendAvailability: "error" as const,
                   reportingSpendMessage: safeErrorMessage(error, "Google Ads reporting data could not be loaded."),
+                  spendTrend: [],
+                  spendTrendAvailability: "error" as const,
+                  spendTrendMessage: safeErrorMessage(error, "Google Ads daily reporting data could not be loaded."),
                   billingSetups: [],
                   accountBudgets: [],
                   invoices: [],
@@ -237,6 +255,9 @@ router.get("/", async (req: Request, res: Response) => {
                   periodSpend: null,
                   periodSpendAvailability: "error" as const,
                   periodSpendMessage: safeErrorMessage(error, "Meta Ads reporting data could not be loaded."),
+                  spendTrend: [],
+                  spendTrendAvailability: "error" as const,
+                  spendTrendMessage: safeErrorMessage(error, "Meta Ads daily reporting data could not be loaded."),
                   paymentMethod: { availability: "not_available" as const, displayString: null, type: null },
                   tax: { availability: "not_available" as const, taxId: null, taxIdStatus: null },
                   business: null,
@@ -295,6 +316,75 @@ router.get("/", async (req: Request, res: Response) => {
   }
 });
 
+
+router.get("/meta/activities", async (req: Request, res: Response) => {
+  const userId = getAuthenticatedUserId(req);
+  if (!userId) return res.status(401).json({ success: false, message: "Authentication required." });
+  res.setHeader("Cache-Control", "private, no-store");
+
+  const requestedRange = queryString(req.query.range) ?? "30d";
+  if (!isRangeKey(requestedRange)) {
+    return res.status(400).json({ success: false, message: "range must be one of: 7d, 30d, 90d." });
+  }
+  const requestedAccountId = queryString(req.query.accountId) ?? "all";
+
+  try {
+    const [connection, allAccounts] = await Promise.all([
+      getUserConnection(userId),
+      AdAccountModel.find({ userId, provider: "metaAds" })
+        .select("externalAccountId name currency timezone status isSelected")
+        .sort({ isSelected: -1, name: 1 })
+        .lean()
+        .exec(),
+    ]);
+
+    if (!connection?.providers.metaAds.connected) {
+      return res.status(200).json({
+        success: true,
+        connected: false,
+        range: { key: requestedRange, ...getDateRange(requestedRange) },
+        accounts: [],
+        message: "Meta Ads is not connected. Connect the provider to retrieve billing activity.",
+      });
+    }
+
+    const targets = requestedAccountId === "all"
+      ? allAccounts
+      : allAccounts.filter((account) => account.externalAccountId === requestedAccountId);
+
+    if (requestedAccountId !== "all" && targets.length === 0) {
+      return res.status(404).json({ success: false, message: "Meta Ads account not found for this user." });
+    }
+
+    const dates = getDateRange(requestedRange);
+    const accounts = await mapWithConcurrency(targets, 2, async (account) => {
+      const result = await getMetaBillingActivities({
+        userId,
+        accountId: account.externalAccountId,
+        dates,
+      });
+      return {
+        account: toAccountSummary(account),
+        ...result,
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      connected: true,
+      range: { key: requestedRange, ...dates },
+      accounts,
+      lastSyncedAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.error("Meta billing activities request failed:", error);
+    return res.status(502).json({
+      success: false,
+      message: safeErrorMessage(error, "Meta billing activity could not be loaded."),
+    });
+  }
+});
+
 router.get("/google/:accountId/invoices/:invoiceId/download", async (req: Request, res: Response) => {
   const userId = getAuthenticatedUserId(req);
   if (!userId) return res.status(401).json({ success: false, message: "Authentication required." });
@@ -305,18 +395,18 @@ router.get("/google/:accountId/invoices/:invoiceId/download", async (req: Reques
   const issueYear = Number(req.query.issueYear);
   const issueMonth = queryString(req.query.issueMonth);
 
-  if (!/^\d+$/.test(accountId) || !/^[A-Za-z0-9._-]{1,128}$/.test(invoiceId) || !billingSetupId || !issueMonth ||
+  if (!/^(?:customers\/)?\d+$/.test(accountId) || !/^[A-Za-z0-9._-]{1,128}$/.test(invoiceId) || !/^\d+$/.test(billingSetupId ?? "") || !issueMonth ||
       !Number.isInteger(issueYear) || issueYear < 2019) {
     return res.status(400).json({ success: false, message: "Invalid Google invoice download parameters." });
   }
 
   try {
-    const account = await getOwnedAccount(userId, "googleAds", accountId);
-    if (!account) return res.status(404).json({ success: false, message: "Google Ads account not found." });
+    const account = await getOwnedGoogleAccount(userId, accountId);
+    if (!account) return res.status(404).json({ success: false, message: "Google Ads account not found for this user." });
 
     const file = await downloadGoogleBillingInvoice({
       userId,
-      accountId,
+      accountId: account.externalAccountId,
       invoiceId,
       billingSetupId,
       issueYear,

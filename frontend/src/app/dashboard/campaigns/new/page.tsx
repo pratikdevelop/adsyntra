@@ -81,12 +81,12 @@ import {
   Tab,
   Tabs,
   IconButton,
+  MenuItem,
   TextField,
   Stack,
   Typography,
   Checkbox,
   Autocomplete,
-  MenuItem
 } from "@mui/material";
 
 import { googleAdsLookups } from "@/lib/googleAdsLookups";
@@ -109,6 +109,43 @@ type NormalizedGoogleImage = {
   width: number;
   height: number;
 };
+
+type GoogleAdsProximityTargetInput = {
+  address: {
+    streetAddress?: string;
+    cityName: string;
+    provinceName?: string;
+    postalCode?: string;
+    countryCode: string;
+  };
+  radius: number;
+  radiusUnits: "KILOMETERS" | "MILES";
+};
+
+type GoogleAdsProximityDraft = {
+  streetAddress: string;
+  cityName: string;
+  provinceName: string;
+  postalCode: string;
+  countryCode: string;
+  radius: string;
+  radiusUnits: "KILOMETERS" | "MILES";
+};
+
+function getGoogleProximityTargetIdentity(target: GoogleAdsProximityTargetInput): string {
+  const address = target.address;
+  const radiusInKilometers = target.radiusUnits === "MILES"
+    ? target.radius * 1.609344
+    : target.radius;
+  return JSON.stringify({
+    streetAddress: address.streetAddress?.trim().toLowerCase() ?? "",
+    cityName: address.cityName.trim().toLowerCase(),
+    provinceName: address.provinceName?.trim().toLowerCase() ?? "",
+    postalCode: address.postalCode?.trim().toLowerCase() ?? "",
+    countryCode: address.countryCode.trim().toUpperCase(),
+    radiusKilometers: Math.round(radiusInKilometers * 1_000_000) / 1_000_000,
+  });
+}
 
 /**
  * Google Ads Image Assets currently accept JPEG and PNG only and have a 5 MB
@@ -1732,6 +1769,20 @@ const [googleShoppingProductGroupValue, setGoogleShoppingProductGroupValue] =
   const [googleStartDate, setGoogleStartDate] = useState(getTodayString());
   const [googleEndDate, setGoogleEndDate] = useState(getNextMonthString());
   const [googleGeoTargetResources, setGoogleGeoTargetResources] = useState("");
+  const [googleExcludedGeoTargetResources, setGoogleExcludedGeoTargetResources] = useState("");
+  const [googleLocationTargetMode, setGoogleLocationTargetMode] =
+    useState<"INCLUDE" | "EXCLUDE">("INCLUDE");
+  const [googleProximityTargets, setGoogleProximityTargets] = useState<GoogleAdsProximityTargetInput[]>([]);
+  const [googleProximityDraft, setGoogleProximityDraft] = useState<GoogleAdsProximityDraft>({
+    streetAddress: "",
+    cityName: "",
+    provinceName: "",
+    postalCode: "",
+    countryCode: "IN",
+    radius: "5",
+    radiusUnits: "KILOMETERS",
+  });
+  const [googleProximityError, setGoogleProximityError] = useState("");
   const [
     metaCustomConversionOptions,
     setMetaCustomConversionOptions,
@@ -3332,6 +3383,92 @@ useEffect(() => {
     setGoogleLocationOptionsOpen(true);
     await searchGoogleLocations();
   };
+  const updateGoogleLocationSelection = (resourceName: string, checked: boolean) => {
+    if (googleLocationTargetMode === "INCLUDE") {
+      setGoogleGeoTargetResources((current) =>
+        toggleGoogleResourceName(current, resourceName, checked),
+      );
+      if (checked) {
+        setGoogleExcludedGeoTargetResources((current) =>
+          toggleGoogleResourceName(current, resourceName, false),
+        );
+      }
+    } else {
+      setGoogleExcludedGeoTargetResources((current) =>
+        toggleGoogleResourceName(current, resourceName, checked),
+      );
+      if (checked) {
+        setGoogleGeoTargetResources((current) =>
+          toggleGoogleResourceName(current, resourceName, false),
+        );
+      }
+    }
+    clearPreview();
+  };
+
+  const handleAddGoogleProximityTarget = () => {
+    const countryCode = googleProximityDraft.countryCode.trim().toUpperCase();
+    const streetAddress = googleProximityDraft.streetAddress.trim();
+    const cityName = googleProximityDraft.cityName.trim();
+    const provinceName = googleProximityDraft.provinceName.trim();
+    const postalCode = googleProximityDraft.postalCode.trim();
+    const radius = Number(googleProximityDraft.radius);
+    const radiusUnits = googleProximityDraft.radiusUnits;
+
+    if (!cityName || !/^[A-Z]{2}$/.test(countryCode) || (!streetAddress && !postalCode)) {
+      setGoogleProximityError(
+        "Enter a street address or postal code, city, and a valid two-letter country code (for example, IN).",
+      );
+      return;
+    }
+
+    const isBelowMinimumRadius = radiusUnits === "MILES"
+      ? radius < 1 / 1.609344
+      : radius < 1;
+    if (!Number.isFinite(radius) || radius <= 0 || isBelowMinimumRadius) {
+      setGoogleProximityError(
+        "Google Ads radius targeting requires a radius of at least 1 km (or the equivalent in miles).",
+      );
+      return;
+    }
+
+    const target: GoogleAdsProximityTargetInput = {
+      address: {
+        ...(streetAddress ? { streetAddress } : {}),
+        cityName,
+        ...(provinceName ? { provinceName } : {}),
+        ...(postalCode ? { postalCode } : {}),
+        countryCode,
+      },
+      radius,
+      radiusUnits,
+    };
+
+    if (googleLocationTargets.length + googleProximityTargets.length >= 1000) {
+      setGoogleProximityError(
+        "You can add up to 1000 combined Google Ads location and radius targets.",
+      );
+      return;
+    }
+
+    const identity = getGoogleProximityTargetIdentity(target);
+    if (googleProximityTargets.some((existing) => getGoogleProximityTargetIdentity(existing) === identity)) {
+      setGoogleProximityError("This radius target has already been added.");
+      return;
+    }
+
+    setGoogleProximityTargets((current) => [...current, target]);
+    setGoogleProximityDraft((current) => ({
+      ...current,
+      streetAddress: "",
+      cityName: "",
+      provinceName: "",
+      postalCode: "",
+      countryCode,
+    }));
+    setGoogleProximityError("");
+    clearPreview();
+  };
   const hasLiveCreatedResources = liveProviderEntries.some(
     ([providerKey, providerResult]) => {
       const campaignProvider =
@@ -3457,10 +3594,31 @@ useEffect(() => {
   )
     ? metaBillingEvent
     : availableMetaBillingOptions[0]?.value || "IMPRESSIONS";
-  const geoResources = googleGeoTargetResources
+  const geoResources = [...new Set(googleGeoTargetResources
     .split(/[\n,]+/)
     .map((v) => v.trim())
-    .filter(Boolean);
+    .filter(Boolean))];
+  const excludedGeoResources = [...new Set(googleExcludedGeoTargetResources
+    .split(/[\n,]+/)
+    .map((v) => v.trim())
+    .filter(Boolean))];
+  const activeGoogleGeoResources =
+    googleLocationTargetMode === "INCLUDE" ? geoResources : excludedGeoResources;
+  const googleLocationTargets = [
+    ...geoResources.map((geoTargetConstantResourceName) => ({
+      geoTargetConstantResourceName,
+      negative: false,
+    })),
+    ...excludedGeoResources.map((geoTargetConstantResourceName) => ({
+      geoTargetConstantResourceName,
+      negative: true,
+    })),
+  ];
+  const supportsGoogleProximityTargeting = [
+    "SEARCH",
+    "DISPLAY",
+    "PERFORMANCE_MAX",
+  ].includes(googleCampaignType);
 
   const languageResources = googleLanguageResources;
 
@@ -4827,7 +4985,20 @@ useEffect(() => {
     }
     if (
       selectedPlatforms.includes("googleAds") &&
-      (geoResources.some((v) => !/^geoTargetConstants\/\d+$/.test(v)) ||
+      (googleLocationTargets.length + googleProximityTargets.length > 1000 ||
+        googleProximityTargets.some((target) =>
+          !target.address.cityName.trim() ||
+          !/^[A-Z]{2}$/.test(target.address.countryCode) ||
+          (!target.address.streetAddress?.trim() && !target.address.postalCode?.trim()) ||
+          !Number.isFinite(target.radius) ||
+          target.radius <= 0 ||
+          (target.radiusUnits === "KILOMETERS"
+            ? target.radius < 1
+            : target.radius < 1 / 1.609344)
+        ) ||
+        geoResources.some((v) => !/^geoTargetConstants\/\d+$/.test(v)) ||
+        excludedGeoResources.some((v) => !/^geoTargetConstants\/\d+$/.test(v)) ||
+        geoResources.some((resourceName) => excludedGeoResources.includes(resourceName)) ||
         languageResources.some((v) => !/^languageConstants\/\d+$/.test(v)))
     ) {
       setError(
@@ -6378,6 +6549,8 @@ useEffect(() => {
                 : {
                   campaignCriteria: {
                     locationResourceNames: geoResources,
+                    locationTargets: googleLocationTargets,
+                    proximities: googleProximityTargets,
                     languageResourceNames: languageResources,
                   },
                 }),
@@ -7676,9 +7849,8 @@ useEffect(() => {
             })),
           },
 
-          locations: geoResources.map((geoTargetConstantResourceName) => ({
-            geoTargetConstantResourceName,
-          })),
+          locations: googleLocationTargets,
+          proximities: googleProximityTargets,
 
           languages: languageResources,
 
@@ -7872,6 +8044,8 @@ useEffect(() => {
             campaignBudget: budget,
             campaignCriteria: {
               locationResourceNames: geoResources,
+              locationTargets: googleLocationTargets,
+              proximities: googleProximityTargets,
               languageResourceNames: languageResources,
             },
             contains_eu_political_advertising: googleEuPoliticalStatus,
@@ -8006,9 +8180,8 @@ useEffect(() => {
               negative: negativeKeywords,
             },
 
-            locations: geoResources.map((geoTargetConstantResourceName) => ({
-              geoTargetConstantResourceName,
-            })),
+            locations: googleLocationTargets,
+            proximities: googleProximityTargets,
 
             ad: {
               finalUrl: googleFinalUrl,
@@ -12053,6 +12226,27 @@ googleMerchantCenterProducts.length > 0 ? (
                         <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 1 }}>
                           Locations
                         </Typography>
+                          <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
+                            <Typography variant="caption" color="text.secondary">Targeting mode</Typography>
+                            <Button
+                              size="small"
+                              variant={googleLocationTargetMode === "INCLUDE" ? "contained" : "outlined"}
+                              color="primary"
+                              onClick={() => setGoogleLocationTargetMode("INCLUDE")}
+                              sx={{ textTransform: "none", borderRadius: 1.5, minWidth: 86 }}
+                            >
+                              Include
+                            </Button>
+                            <Button
+                              size="small"
+                              variant={googleLocationTargetMode === "EXCLUDE" ? "contained" : "outlined"}
+                              color="error"
+                              onClick={() => setGoogleLocationTargetMode("EXCLUDE")}
+                              sx={{ textTransform: "none", borderRadius: 1.5, minWidth: 86 }}
+                            >
+                              Exclude
+                            </Button>
+                          </Stack>
 <Box ref={locationAnchorRef}>
   <TextField
     fullWidth
@@ -12073,23 +12267,47 @@ googleMerchantCenterProducts.length > 0 ? (
         void handleGoogleLocationSearch();
       }
     }}
-    placeholder={geoResources.length === 0 ? "Search city, state or country" : ""}
+    placeholder={geoResources.length + excludedGeoResources.length === 0 ? "Search city, state or country" : ""}
     InputProps={{
-      startAdornment: geoResources.length > 0 ? (
+      startAdornment: geoResources.length + excludedGeoResources.length > 0 ? (
         <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5 }}>
           {geoResources.map((resourceName) => {
             const matchingOption = googleLocationOptions.find(
               (opt) => getGoogleLookupResourceName(opt, "geoTargetConstants") === resourceName
             );
             const label = matchingOption ? getGoogleLookupLabel(matchingOption) : resourceName;
-            
+
             return (
               <Chip
-                key={resourceName}
-                label={label}
+                key={`included-${resourceName}`}
+                label={`Include: ${label}`}
                 size="small"
+                color="primary"
+                variant="outlined"
                 onDelete={() => {
                   setGoogleGeoTargetResources((current) =>
+                    toggleGoogleResourceName(current, resourceName, false)
+                  );
+                  clearPreview();
+                }}
+              />
+            );
+          })}
+          {excludedGeoResources.map((resourceName) => {
+            const matchingOption = googleLocationOptions.find(
+              (opt) => getGoogleLookupResourceName(opt, "geoTargetConstants") === resourceName
+            );
+            const label = matchingOption ? getGoogleLookupLabel(matchingOption) : resourceName;
+
+            return (
+              <Chip
+                key={`excluded-${resourceName}`}
+                label={`Exclude: ${label}`}
+                size="small"
+                color="error"
+                variant="outlined"
+                onDelete={() => {
+                  setGoogleExcludedGeoTargetResources((current) =>
                     toggleGoogleResourceName(current, resourceName, false)
                   );
                   clearPreview();
@@ -12126,12 +12344,12 @@ googleMerchantCenterProducts.length > 0 ? (
         borderRadius: 2,
         backgroundColor: "background.paper",
         flexWrap: "wrap", // Allows the box to grow downwards
-        paddingY: geoResources.length > 0 ? "6px" : undefined,
+        paddingY: geoResources.length + excludedGeoResources.length > 0 ? "6px" : undefined,
       },
       "& .MuiOutlinedInput-input": {
         flex: 1, // Input takes remaining space on the line
         minWidth: "100px", // Prevents input from being squished
-        padding: geoResources.length > 0 ? "4px 0" : undefined,
+        padding: geoResources.length + excludedGeoResources.length > 0 ? "4px 0" : undefined,
       },
     }}
   />
@@ -12204,7 +12422,7 @@ googleMerchantCenterProducts.length > 0 ? (
                                         );
                                         if (!resourceName) return null;
 
-                                        const selected = geoResources.includes(resourceName);
+                                        const selected = activeGoogleGeoResources.includes(resourceName);
 
                                         return (
                                           <Box
@@ -12229,14 +12447,10 @@ googleMerchantCenterProducts.length > 0 ? (
                                               size="small"
                                               checked={selected}
                                               onChange={(e) => {
-                                                setGoogleGeoTargetResources((current) =>
-                                                  toggleGoogleResourceName(
-                                                    current,
-                                                    resourceName,
-                                                    e.target.checked
-                                                  )
+                                                updateGoogleLocationSelection(
+                                                  resourceName,
+                                                  e.target.checked,
                                                 );
-                                                clearPreview();
                                               }}
                                               sx={{ p: 0.5, mt: 0.1 }}
                                             />
@@ -12300,16 +12514,175 @@ googleMerchantCenterProducts.length > 0 ? (
                           sx={{ mt: 1.5 }}
                         >
                           <Typography variant="caption" color="text.secondary" sx={{ minWidth: 0 }}>
-                            Select the locations where your ads should appear.
+                            Choose locations to include or exclude from campaign delivery.
                           </Typography>
-                          <Chip
-                            size="small"
-                            variant="outlined"
-                            color="primary"
-                            label={`${geoResources.length} selected`}
-                            sx={{ flexShrink: 0 }}
-                          />
+                          <Stack direction="row" spacing={0.75} sx={{ flexShrink: 0 }}>
+                            <Chip size="small" variant="outlined" color="primary" label={`${geoResources.length} included`} />
+                            <Chip size="small" variant="outlined" color="error" label={`${excludedGeoResources.length} excluded`} />
+                          </Stack>
                         </Stack>
+
+                        {supportsGoogleProximityTargeting && (
+                          <Box sx={{ mt: 2, p: 2, border: 1, borderColor: "divider", borderRadius: 2, bgcolor: "background.paper" }}>
+                            <Typography variant="subtitle2" fontWeight={600}>
+                              Radius targeting
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+                              Add an address-based radius around a shop or service area. Google resolves the address to a centre point. Radius targets are inclusion-only; use the location selector above for exclusions.
+                            </Typography>
+
+                            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                              <div className="sm:col-span-2">
+                                <label className={labelClass}>Street address</label>
+                                <input
+                                  value={googleProximityDraft.streetAddress}
+                                  onChange={(e) => {
+                                    setGoogleProximityDraft((current) => ({ ...current, streetAddress: e.target.value }));
+                                    setGoogleProximityError("");
+                                    clearPreview();
+                                  }}
+                                  placeholder="e.g. 12 MG Road"
+                                  className={inputClass}
+                                />
+                              </div>
+                              <div>
+                                <label className={labelClass}>City *</label>
+                                <input
+                                  value={googleProximityDraft.cityName}
+                                  onChange={(e) => {
+                                    setGoogleProximityDraft((current) => ({ ...current, cityName: e.target.value }));
+                                    setGoogleProximityError("");
+                                    clearPreview();
+                                  }}
+                                  placeholder="e.g. Indore"
+                                  className={inputClass}
+                                />
+                              </div>
+                              <div>
+                                <label className={labelClass}>State / Province</label>
+                                <input
+                                  value={googleProximityDraft.provinceName}
+                                  onChange={(e) => {
+                                    setGoogleProximityDraft((current) => ({ ...current, provinceName: e.target.value }));
+                                    clearPreview();
+                                  }}
+                                  placeholder="e.g. Madhya Pradesh"
+                                  className={inputClass}
+                                />
+                              </div>
+                              <div>
+                                <label className={labelClass}>Postal code</label>
+                                <input
+                                  value={googleProximityDraft.postalCode}
+                                  onChange={(e) => {
+                                    setGoogleProximityDraft((current) => ({ ...current, postalCode: e.target.value }));
+                                    setGoogleProximityError("");
+                                    clearPreview();
+                                  }}
+                                  placeholder="e.g. 452001"
+                                  className={inputClass}
+                                />
+                              </div>
+                              <div>
+                                <label className={labelClass}>Country code (ISO 2-letter) *</label>
+                                <input
+                                  value={googleProximityDraft.countryCode}
+                                  maxLength={2}
+                                  onChange={(e) => {
+                                    setGoogleProximityDraft((current) => ({ ...current, countryCode: e.target.value.toUpperCase() }));
+                                    setGoogleProximityError("");
+                                    clearPreview();
+                                  }}
+                                  placeholder="IN"
+                                  className={inputClass}
+                                />
+                              </div>
+                              <div>
+                                <label className={labelClass}>Radius *</label>
+                                <input
+                                  type="number"
+                                  min={googleProximityDraft.radiusUnits === "KILOMETERS" ? "1" : String(1 / 1.609344)}
+                                  step="0.1"
+                                  value={googleProximityDraft.radius}
+                                  onChange={(e) => {
+                                    setGoogleProximityDraft((current) => ({ ...current, radius: e.target.value }));
+                                    setGoogleProximityError("");
+                                    clearPreview();
+                                  }}
+                                  className={inputClass}
+                                />
+                              </div>
+                              <div>
+                                <label className={labelClass}>Radius unit</label>
+                                <select
+                                  value={googleProximityDraft.radiusUnits}
+                                  onChange={(e) => {
+                                    setGoogleProximityDraft((current) => ({ ...current, radiusUnits: e.target.value as "KILOMETERS" | "MILES" }));
+                                    setGoogleProximityError("");
+                                    clearPreview();
+                                  }}
+                                  className={inputClass}
+                                >
+                                  <option value="KILOMETERS">Kilometers</option>
+                                  <option value="MILES">Miles</option>
+                                </select>
+                              </div>
+                            </div>
+
+                            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>
+                              Enter a street address or postal code, together with the city and country. Minimum radius: 1 km (0.62 miles).
+                            </Typography>
+                            {googleProximityError && (
+                              <Typography color="error" variant="caption" sx={{ display: "block", mt: 1 }}>
+                                {googleProximityError}
+                              </Typography>
+                            )}
+                            <Button
+                              size="small"
+                              variant="outlined"
+                              onClick={handleAddGoogleProximityTarget}
+                              sx={{ mt: 1.5, textTransform: "none", borderRadius: 1.5 }}
+                            >
+                              Add radius target
+                            </Button>
+
+                            {googleProximityTargets.length > 0 && (
+                              <Stack spacing={1} sx={{ mt: 1.5 }}>
+                                {googleProximityTargets.map((target, index) => (
+                                  <Box
+                                    key={getGoogleProximityTargetIdentity(target)}
+                                    sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, p: 1.25, border: 1, borderColor: "divider", borderRadius: 1.5 }}
+                                  >
+                                    <Box sx={{ minWidth: 0 }}>
+                                      <Typography variant="body2" fontWeight={600}>
+                                        {target.address.streetAddress || target.address.postalCode}, {target.address.cityName}
+                                      </Typography>
+                                      <Typography variant="caption" color="text.secondary">
+                                        {[target.address.provinceName, target.address.countryCode].filter(Boolean).join(", ")} · {target.radius} {target.radiusUnits === "KILOMETERS" ? "km" : "mi"} radius
+                                      </Typography>
+                                    </Box>
+                                    <Button
+                                      size="small"
+                                      color="error"
+                                      onClick={() => {
+                                        setGoogleProximityTargets((current) => current.filter((_, itemIndex) => itemIndex !== index));
+                                        clearPreview();
+                                      }}
+                                      sx={{ flexShrink: 0, textTransform: "none" }}
+                                    >
+                                      Remove
+                                    </Button>
+                                  </Box>
+                                ))}
+                              </Stack>
+                            )}
+                          </Box>
+                        )}
+                        {googleProximityTargets.length > 0 && !supportsGoogleProximityTargeting && (
+                          <Typography color="warning.main" variant="caption" sx={{ display: "block", mt: 1.5 }}>
+                            You have radius targets saved in this draft, but the current Google campaign type does not apply them in this creation flow. Switch to Search, Display or Performance Max to use them, or remove them before continuing.
+                          </Typography>
+                        )}
                       </Box>
 
                       {/* ================= LANGUAGES ================= */}
@@ -13083,27 +13456,24 @@ googleMerchantCenterProducts.length > 0 ? (
   </p>
 
   <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
-
-<TextField
-  select
-  label="Location Type"
-  size="small"
-  value={metaLocationKind}
-  onChange={(event) => {
-    setMetaLocationKind(
-      event.target.value as "country" | "region" | "city" | "zip"
-    );
-    setMetaLocationOptions([]);
-    setMetaSelectedLocationOptions([]);
-    setMetaLocationError("");
-  }}
-  sx={{ minWidth: 160 }}
->
-  <MenuItem value="country">Country</MenuItem>
-  <MenuItem value="region">Region</MenuItem>
-  <MenuItem value="city">City</MenuItem>
-  <MenuItem value="zip">ZIP / Postal</MenuItem>
-</TextField>
+    {/* 1. Location Type Select */}
+    <TextField
+      select
+      size="small"
+      value={metaLocationKind}
+      onChange={(event) => {
+        setMetaLocationKind(event.target.value as "country" | "region" | "city" | "zip");
+        setMetaLocationOptions([]);
+        setMetaSelectedLocationOptions([]);
+        setMetaLocationError("");
+      }}
+      sx={{ minWidth: 140 }}
+    >
+      <MenuItem value="country">Country</MenuItem>
+      <MenuItem value="region">Region</MenuItem>
+      <MenuItem value="city">City</MenuItem>
+      <MenuItem value="zip">ZIP / Postal</MenuItem>
+    </TextField>
 
     {/* 2. Search Input */}
     <TextField
@@ -17316,6 +17686,28 @@ googleMerchantCenterProducts.length > 0 ? (
                   <strong>Budget API:</strong> CampaignBudgetService →
                   Campaign.campaign_budget
                 </p>
+                {(geoResources.length > 0 || excludedGeoResources.length > 0 || googleProximityTargets.length > 0) && (
+                  <p>
+                    <strong>Location targeting:</strong> {geoResources.length} included · {excludedGeoResources.length} excluded · {googleProximityTargets.length} radius targets
+                  </p>
+                )}
+                {googleProximityTargets.length > 0 && (
+                  <div className="mt-2 space-y-1">
+                    <strong>Radius target details:</strong>
+                    <ul className="list-disc space-y-1 pl-5">
+                      {googleProximityTargets.map((target, index) => (
+                        <li key={`${getGoogleProximityTargetIdentity(target)}-${index}`}>
+                          {[target.address.streetAddress || target.address.postalCode, target.address.cityName, target.address.provinceName, target.address.countryCode].filter(Boolean).join(", ")} — {target.radius} {target.radiusUnits === "KILOMETERS" ? "km" : "mi"}
+                        </li>
+                      ))}
+                    </ul>
+                    {!supportsGoogleProximityTargeting && (
+                      <p className="text-amber-700">
+                        These radius targets are saved in the draft but are not applied by the selected Google campaign creation flow.
+                      </p>
+                    )}
+                  </div>
+                )}
                 <p>
                   <strong>Bidding Scope:</strong> {effectiveGoogleBiddingScope}
                 </p>

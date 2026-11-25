@@ -54,6 +54,11 @@ export interface GoogleBillingInvoice {
   issueMonth: string;
 }
 
+export interface GoogleSpendTrendPoint {
+  date: string;
+  amount: number;
+}
+
 export interface GoogleBillingOverview {
   availability: "available" | "not_supported" | "permission_required" | "error";
   message: string | null;
@@ -62,6 +67,9 @@ export interface GoogleBillingOverview {
   currencyIsMixed?: boolean;
   reportingSpendAvailability: "available" | "no_data" | "permission_required" | "error";
   reportingSpendMessage: string | null;
+  spendTrend: GoogleSpendTrendPoint[];
+  spendTrendAvailability: "available" | "no_data" | "permission_required" | "error";
+  spendTrendMessage: string | null;
   billingSetups: GoogleBillingSetup[];
   accountBudgets: GoogleAccountBudget[];
   invoices: GoogleBillingInvoice[];
@@ -497,6 +505,197 @@ async function getGoogleReportingSpend(
   return directResult;
 }
 
+interface GoogleSpendTrendResult {
+  points: GoogleSpendTrendPoint[];
+  currency: string | null;
+  currencyIsMixed?: boolean;
+  availability: "available" | "no_data" | "permission_required" | "error";
+  message: string | null;
+}
+
+function dailyPointsFromGoogleRows(rows: UnknownRecord[]): GoogleSpendTrendPoint[] | null {
+  const totals = new Map<string, number>();
+  for (const row of rows) {
+    const date = stringValue(nestedRecord(row, "segments").date);
+    const micros = numberValue(nestedRecord(row, "metrics").costMicros);
+    if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date) || micros === null) return null;
+    totals.set(date, (totals.get(date) ?? 0) + micros / 1_000_000);
+  }
+  return [...totals.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, amount]) => ({ date, amount }));
+}
+
+async function getGoogleSpendTrendForCustomer(
+  context: GoogleAdsContext,
+  dates: BillingDateRange,
+  fallbackCurrency: string | null,
+  loginCustomerId?: string | null,
+): Promise<GoogleSpendTrendResult> {
+  const dateFilter = `WHERE segments.date BETWEEN '${dates.since}' AND '${dates.until}'`;
+  const requestOptions = loginCustomerId === undefined ? {} : { loginCustomerId };
+  let primaryError: unknown = null;
+  let primarySucceeded = false;
+
+  try {
+    const rows = await googleAdsSearch(
+      context,
+      `SELECT customer.currency_code, segments.date, metrics.cost_micros FROM customer ${dateFilter} ORDER BY segments.date`,
+      requestOptions,
+    );
+    primarySucceeded = true;
+    if (rows.length > 0) {
+      const points = dailyPointsFromGoogleRows(rows);
+      if (points) {
+        const currency = stringValue(nestedRecord(rows[0]!, "customer").currencyCode) ?? fallbackCurrency;
+        return { points, currency, availability: "available", message: null };
+      }
+      primaryError = new Error("Google customer daily report returned rows without a valid date or cost_micros value.");
+    }
+  } catch (error) {
+    primaryError = error;
+  }
+
+  try {
+    const rows = await googleAdsSearch(
+      context,
+      `SELECT segments.date, metrics.cost_micros FROM campaign ${dateFilter} ORDER BY segments.date`,
+      requestOptions,
+    );
+    if (rows.length > 0) {
+      const points = dailyPointsFromGoogleRows(rows);
+      if (!points) {
+        throw new Error("Google campaign daily report returned rows without a valid date or cost_micros value.");
+      }
+      return {
+        points,
+        currency: fallbackCurrency,
+        availability: "available",
+        message: primaryError
+          ? "Daily spend was retrieved from campaign-level reporting because the customer-level daily report was unavailable."
+          : null,
+      };
+    }
+
+    if (primarySucceeded) {
+      return {
+        points: [],
+        currency: fallbackCurrency,
+        availability: "no_data",
+        message: `Google Ads returned no daily reporting rows for ${dates.since} to ${dates.until}. Missing dates are not treated as zero spend.`,
+      };
+    }
+
+    return {
+      points: [],
+      currency: fallbackCurrency,
+      availability: reportingErrorAvailability(primaryError),
+      message: `Google daily reporting could not be loaded. ${primaryError ? errorText(primaryError) : "No customer-level daily data was returned."}`,
+    };
+  } catch (fallbackError) {
+    return {
+      points: [],
+      currency: fallbackCurrency,
+      availability: reportingErrorAvailability(primaryError, fallbackError),
+      message: `Google daily reporting failed. Customer-level: ${primaryError ? errorText(primaryError) : "No usable rows."} Campaign-level: ${errorText(fallbackError)}`,
+    };
+  }
+}
+
+async function getManagerAccountSpendTrend(
+  context: GoogleAdsContext,
+  dates: BillingDateRange,
+): Promise<GoogleSpendTrendResult> {
+  let clientRows: UnknownRecord[];
+  try {
+    clientRows = await googleAdsSearch(
+      context,
+      "SELECT customer_client.client_customer, customer_client.manager, customer_client.currency_code " +
+      "FROM customer_client WHERE customer_client.manager = FALSE",
+      { loginCustomerId: context.customerId },
+    );
+  } catch (error) {
+    return {
+      points: [], currency: null, availability: reportingErrorAvailability(error),
+      message: `Google manager-account client list could not be loaded for spend analytics: ${errorText(error)}`,
+    };
+  }
+
+  const clients = new Map<string, string | null>();
+  for (const row of clientRows) {
+    const client = nestedRecord(row, "customerClient");
+    const resourceName = stringValue(client.clientCustomer);
+    const clientId = resourceName?.match(/customers\/(\d+)/)?.[1] ?? null;
+    if (clientId) clients.set(clientId, stringValue(client.currencyCode));
+  }
+
+  if (clients.size === 0) {
+    return {
+      points: [], currency: null, availability: "no_data",
+      message: "This manager account has no non-manager client accounts available for daily spend analytics.",
+    };
+  }
+
+  const results = await mapWithConcurrency([...clients.entries()], 4, async ([clientId, currency]) => ({
+    currency,
+    result: await getGoogleSpendTrendForCustomer(
+      { ...context, customerId: clientId }, dates, currency, context.customerId,
+    ),
+  }));
+  const currencies = new Set(results.map(({ result, currency }) => result.currency ?? currency).filter((value): value is string => Boolean(value)));
+  if (results.some(({ result, currency }) => !(result.currency ?? currency))) {
+    return { points: [], currency: null, availability: "error", message: "At least one Google client account has no confirmed currency; daily spend was not aggregated." };
+  }
+  if (currencies.size > 1) {
+    return { points: [], currency: null, currencyIsMixed: true, availability: "error", message: `Manager client accounts use multiple currencies (${[...currencies].join(", ")}). Daily spend is not combined.` };
+  }
+  const failed = results.filter(({ result }) => result.availability !== "available");
+  if (failed.length > 0) {
+    const hasPermissionIssue = failed.some(({ result }) => result.availability === "permission_required");
+    return {
+      points: [], currency: [...currencies][0] ?? null,
+      availability: hasPermissionIssue ? "permission_required" : failed.some(({ result }) => result.availability === "error") ? "error" : "no_data",
+      message: `${failed.length} of ${results.length} manager client accounts did not return a complete daily spend series. No partial chart total is shown.`,
+    };
+  }
+
+  const dailyMaps = results.map(({ result }) => new Map(result.points.map((point) => [point.date, point.amount])));
+  const candidateDates = [...(dailyMaps[0]?.keys() ?? [])];
+  const completeDates = candidateDates.filter((date) => dailyMaps.every((dailyMap) => dailyMap.has(date)));
+  if (completeDates.length === 0) {
+    return {
+      points: [],
+      currency: [...currencies][0] ?? null,
+      availability: "no_data",
+      message: "Google returned daily spend for manager client accounts, but no common dates were available across every account. AdSyntra will not fill missing client-account days with zero.",
+    };
+  }
+  const points = completeDates
+    .sort((a, b) => a.localeCompare(b))
+    .map((date) => ({
+      date,
+      amount: dailyMaps.reduce((sum, dailyMap) => sum + (dailyMap.get(date) ?? 0), 0),
+    }));
+  return {
+    points,
+    currency: [...currencies][0] ?? null,
+    availability: "available",
+    message: `Daily spend is aggregated from ${results.length} non-manager client account(s) for dates returned by every client. Missing client-account days are not treated as zero.`,
+  };
+}
+
+async function getGoogleSpendTrend(
+  context: GoogleAdsContext,
+  dates: BillingDateRange,
+  fallbackCurrency: string | null,
+): Promise<GoogleSpendTrendResult> {
+  const direct = await getGoogleSpendTrendForCustomer(context, dates, fallbackCurrency);
+  if (direct.message?.includes("REQUESTED_METRICS_FOR_MANAGER")) {
+    return getManagerAccountSpendTrend(context, dates);
+  }
+  return direct;
+}
+
 async function listGoogleInvoicesForMonth(
   context: GoogleAdsContext,
   billingSetup: GoogleBillingSetup,
@@ -596,8 +795,9 @@ export async function getGoogleBillingOverview(input: {
   dates: BillingDateRange;
 }): Promise<GoogleBillingOverview> {
   const context = await getGoogleAdsCreationContext(input.userId, input.accountId);
-  const [reportingResult, setupResult] = await Promise.allSettled([
+  const [reportingResult, trendResult, setupResult] = await Promise.allSettled([
     getGoogleReportingSpend(context, input.dates, input.currency),
+    getGoogleSpendTrend(context, input.dates, input.currency),
     googleAdsSearch(context,
       "SELECT billing_setup.resource_name, billing_setup.id, billing_setup.status, " +
       "billing_setup.payments_account, billing_setup.payments_account_info.payments_account_id, " +
@@ -618,6 +818,9 @@ export async function getGoogleBillingOverview(input: {
         message: errorText(reportingResult.reason),
       };
   const currency = reporting.currencyIsMixed ? null : reporting.currency ?? input.currency;
+  const spendTrend: GoogleSpendTrendResult = trendResult.status === "fulfilled"
+    ? trendResult.value
+    : { points: [], currency, availability: "error", message: errorText(trendResult.reason) };
 
   if (setupResult.status === "rejected") {
     const availability = availabilityFromError(setupResult.reason);
@@ -629,6 +832,9 @@ export async function getGoogleBillingOverview(input: {
       currencyIsMixed: reporting.currencyIsMixed ?? false,
       reportingSpendAvailability: reporting.availability,
       reportingSpendMessage: reporting.message,
+      spendTrend: spendTrend.points,
+      spendTrendAvailability: spendTrend.availability,
+      spendTrendMessage: spendTrend.message,
       billingSetups: [],
       accountBudgets: [],
       invoices: [],
@@ -651,6 +857,9 @@ export async function getGoogleBillingOverview(input: {
       currencyIsMixed: reporting.currencyIsMixed ?? false,
       reportingSpendAvailability: reporting.availability,
       reportingSpendMessage: reporting.message,
+      spendTrend: spendTrend.points,
+      spendTrendAvailability: spendTrend.availability,
+      spendTrendMessage: spendTrend.message,
       billingSetups: [],
       accountBudgets: [],
       invoices: [],
@@ -684,11 +893,14 @@ export async function getGoogleBillingOverview(input: {
   const invoiceResults: GoogleBillingInvoice[] = [];
   let invoiceError: unknown = null;
   const issueMonths = getRecentIssueMonths(6);
-  const invoiceJobs = billingSetups.slice(0, 3).flatMap((setup) =>
+  // Query the recent invoice window for every billing setup returned by Google.
+  // A setup-count slice can silently hide invoices from older/additional setups.
+  // Requests remain batched to keep provider traffic bounded.
+  const invoiceJobs = billingSetups.flatMap((setup) =>
     issueMonths.map((period) => ({ setup, period })),
   );
-  // Bound concurrency so a manager account with several billing setups does not
-  // fan out an unrestricted burst of InvoiceService requests.
+  // Bound concurrency so multiple billing setups do not fan out an unrestricted
+  // burst of InvoiceService requests.
   for (let offset = 0; offset < invoiceJobs.length; offset += 3) {
     const batch = invoiceJobs.slice(offset, offset + 3);
     const batchResults = await Promise.all(batch.map(async ({ setup, period }) => {
@@ -739,6 +951,9 @@ export async function getGoogleBillingOverview(input: {
     currencyIsMixed: reporting.currencyIsMixed ?? false,
     reportingSpendAvailability: reporting.availability,
     reportingSpendMessage: reporting.message,
+    spendTrend: spendTrend.points,
+    spendTrendAvailability: spendTrend.availability,
+    spendTrendMessage: spendTrend.message,
     billingSetups,
     accountBudgets,
     invoices: [...uniqueInvoices.values()].sort((a, b) =>
@@ -748,7 +963,7 @@ export async function getGoogleBillingOverview(input: {
     invoicesMessage: invoiceError
       ? messageForBillingError(invoiceError, invoicesAvailability)
       : uniqueInvoices.size === 0
-        ? "No Google Ads invoices were returned for the recent six-month lookup. Invoice API history is available only for eligible monthly-invoiced accounts."
+        ? "No Google Ads invoices were returned for the recent six-month lookup across the billing setups returned by Google. Invoice API history is available only for eligible monthly-invoiced accounts."
         : null,
     lastSyncedAt: new Date().toISOString(),
   };

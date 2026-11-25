@@ -1,0 +1,1027 @@
+--- a/frontend/src/app/dashboard/campaigns/new/page.tsx
++++ b/frontend/src/app/dashboard/campaigns/new/page.tsx
+@@ -110,6 +110,43 @@
+   height: number;
+ };
+ 
++type GoogleAdsProximityTargetInput = {
++  address: {
++    streetAddress?: string;
++    cityName: string;
++    provinceName?: string;
++    postalCode?: string;
++    countryCode: string;
++  };
++  radius: number;
++  radiusUnits: "KILOMETERS" | "MILES";
++};
++
++type GoogleAdsProximityDraft = {
++  streetAddress: string;
++  cityName: string;
++  provinceName: string;
++  postalCode: string;
++  countryCode: string;
++  radius: string;
++  radiusUnits: "KILOMETERS" | "MILES";
++};
++
++function getGoogleProximityTargetIdentity(target: GoogleAdsProximityTargetInput): string {
++  const address = target.address;
++  const radiusInKilometers = target.radiusUnits === "MILES"
++    ? target.radius * 1.609344
++    : target.radius;
++  return JSON.stringify({
++    streetAddress: address.streetAddress?.trim().toLowerCase() ?? "",
++    cityName: address.cityName.trim().toLowerCase(),
++    provinceName: address.provinceName?.trim().toLowerCase() ?? "",
++    postalCode: address.postalCode?.trim().toLowerCase() ?? "",
++    countryCode: address.countryCode.trim().toUpperCase(),
++    radiusKilometers: Math.round(radiusInKilometers * 1_000_000) / 1_000_000,
++  });
++}
++
+ /**
+  * Google Ads Image Assets currently accept JPEG and PNG only and have a 5 MB
+  * upload limit. Convert WebP/GIF (and oversized JPEG/PNG) before they are
+@@ -1735,6 +1772,17 @@
+   const [googleExcludedGeoTargetResources, setGoogleExcludedGeoTargetResources] = useState("");
+   const [googleLocationTargetMode, setGoogleLocationTargetMode] =
+     useState<"INCLUDE" | "EXCLUDE">("INCLUDE");
++  const [googleProximityTargets, setGoogleProximityTargets] = useState<GoogleAdsProximityTargetInput[]>([]);
++  const [googleProximityDraft, setGoogleProximityDraft] = useState<GoogleAdsProximityDraft>({
++    streetAddress: "",
++    cityName: "",
++    provinceName: "",
++    postalCode: "",
++    countryCode: "IN",
++    radius: "5",
++    radiusUnits: "KILOMETERS",
++  });
++  const [googleProximityError, setGoogleProximityError] = useState("");
+   const [
+     metaCustomConversionOptions,
+     setMetaCustomConversionOptions,
+@@ -3357,6 +3405,70 @@
+     }
+     clearPreview();
+   };
++
++  const handleAddGoogleProximityTarget = () => {
++    const countryCode = googleProximityDraft.countryCode.trim().toUpperCase();
++    const streetAddress = googleProximityDraft.streetAddress.trim();
++    const cityName = googleProximityDraft.cityName.trim();
++    const provinceName = googleProximityDraft.provinceName.trim();
++    const postalCode = googleProximityDraft.postalCode.trim();
++    const radius = Number(googleProximityDraft.radius);
++    const radiusUnits = googleProximityDraft.radiusUnits;
++
++    if (!cityName || !/^[A-Z]{2}$/.test(countryCode) || (!streetAddress && !postalCode)) {
++      setGoogleProximityError(
++        "Enter a street address or postal code, city, and a valid two-letter country code (for example, IN).",
++      );
++      return;
++    }
++
++    const isBelowMinimumRadius = radiusUnits === "MILES"
++      ? radius < 1 / 1.609344
++      : radius < 1;
++    if (!Number.isFinite(radius) || radius <= 0 || isBelowMinimumRadius) {
++      setGoogleProximityError(
++        "Google Ads radius targeting requires a radius of at least 1 km (or the equivalent in miles).",
++      );
++      return;
++    }
++
++    const target: GoogleAdsProximityTargetInput = {
++      address: {
++        ...(streetAddress ? { streetAddress } : {}),
++        cityName,
++        ...(provinceName ? { provinceName } : {}),
++        ...(postalCode ? { postalCode } : {}),
++        countryCode,
++      },
++      radius,
++      radiusUnits,
++    };
++
++    if (googleLocationTargets.length + googleProximityTargets.length >= 1000) {
++      setGoogleProximityError(
++        "You can add up to 1000 combined Google Ads location and radius targets.",
++      );
++      return;
++    }
++
++    const identity = getGoogleProximityTargetIdentity(target);
++    if (googleProximityTargets.some((existing) => getGoogleProximityTargetIdentity(existing) === identity)) {
++      setGoogleProximityError("This radius target has already been added.");
++      return;
++    }
++
++    setGoogleProximityTargets((current) => [...current, target]);
++    setGoogleProximityDraft((current) => ({
++      ...current,
++      streetAddress: "",
++      cityName: "",
++      provinceName: "",
++      postalCode: "",
++      countryCode,
++    }));
++    setGoogleProximityError("");
++    clearPreview();
++  };
+   const hasLiveCreatedResources = liveProviderEntries.some(
+     ([providerKey, providerResult]) => {
+       const campaignProvider =
+@@ -3502,6 +3614,11 @@
+       negative: true,
+     })),
+   ];
++  const supportsGoogleProximityTargeting = [
++    "SEARCH",
++    "DISPLAY",
++    "PERFORMANCE_MAX",
++  ].includes(googleCampaignType);
+ 
+   const languageResources = googleLanguageResources;
+ 
+@@ -4868,7 +4985,17 @@
+     }
+     if (
+       selectedPlatforms.includes("googleAds") &&
+-      (googleLocationTargets.length > 1000 ||
++      (googleLocationTargets.length + googleProximityTargets.length > 1000 ||
++        googleProximityTargets.some((target) =>
++          !target.address.cityName.trim() ||
++          !/^[A-Z]{2}$/.test(target.address.countryCode) ||
++          (!target.address.streetAddress?.trim() && !target.address.postalCode?.trim()) ||
++          !Number.isFinite(target.radius) ||
++          target.radius <= 0 ||
++          (target.radiusUnits === "KILOMETERS"
++            ? target.radius < 1
++            : target.radius < 1 / 1.609344)
++        ) ||
+         geoResources.some((v) => !/^geoTargetConstants\/\d+$/.test(v)) ||
+         excludedGeoResources.some((v) => !/^geoTargetConstants\/\d+$/.test(v)) ||
+         geoResources.some((resourceName) => excludedGeoResources.includes(resourceName)) ||
+@@ -6423,6 +6550,7 @@
+                   campaignCriteria: {
+                     locationResourceNames: geoResources,
+                     locationTargets: googleLocationTargets,
++                    proximities: googleProximityTargets,
+                     languageResourceNames: languageResources,
+                   },
+                 }),
+@@ -7722,6 +7850,7 @@
+           },
+ 
+           locations: googleLocationTargets,
++          proximities: googleProximityTargets,
+ 
+           languages: languageResources,
+ 
+@@ -7916,6 +8045,7 @@
+             campaignCriteria: {
+               locationResourceNames: geoResources,
+               locationTargets: googleLocationTargets,
++              proximities: googleProximityTargets,
+               languageResourceNames: languageResources,
+             },
+             contains_eu_political_advertising: googleEuPoliticalStatus,
+@@ -8051,6 +8181,7 @@
+             },
+ 
+             locations: googleLocationTargets,
++            proximities: googleProximityTargets,
+ 
+             ad: {
+               finalUrl: googleFinalUrl,
+@@ -12390,6 +12521,168 @@
+                             <Chip size="small" variant="outlined" color="error" label={`${excludedGeoResources.length} excluded`} />
+                           </Stack>
+                         </Stack>
++
++                        {supportsGoogleProximityTargeting && (
++                          <Box sx={{ mt: 2, p: 2, border: 1, borderColor: "divider", borderRadius: 2, bgcolor: "background.paper" }}>
++                            <Typography variant="subtitle2" fontWeight={600}>
++                              Radius targeting
++                            </Typography>
++                            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
++                              Add an address-based radius around a shop or service area. Google resolves the address to a centre point. Radius targets are inclusion-only; use the location selector above for exclusions.
++                            </Typography>
++
++                            <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
++                              <div className="sm:col-span-2">
++                                <label className={labelClass}>Street address</label>
++                                <input
++                                  value={googleProximityDraft.streetAddress}
++                                  onChange={(e) => {
++                                    setGoogleProximityDraft((current) => ({ ...current, streetAddress: e.target.value }));
++                                    setGoogleProximityError("");
++                                    clearPreview();
++                                  }}
++                                  placeholder="e.g. 12 MG Road"
++                                  className={inputClass}
++                                />
++                              </div>
++                              <div>
++                                <label className={labelClass}>City *</label>
++                                <input
++                                  value={googleProximityDraft.cityName}
++                                  onChange={(e) => {
++                                    setGoogleProximityDraft((current) => ({ ...current, cityName: e.target.value }));
++                                    setGoogleProximityError("");
++                                    clearPreview();
++                                  }}
++                                  placeholder="e.g. Indore"
++                                  className={inputClass}
++                                />
++                              </div>
++                              <div>
++                                <label className={labelClass}>State / Province</label>
++                                <input
++                                  value={googleProximityDraft.provinceName}
++                                  onChange={(e) => {
++                                    setGoogleProximityDraft((current) => ({ ...current, provinceName: e.target.value }));
++                                    clearPreview();
++                                  }}
++                                  placeholder="e.g. Madhya Pradesh"
++                                  className={inputClass}
++                                />
++                              </div>
++                              <div>
++                                <label className={labelClass}>Postal code</label>
++                                <input
++                                  value={googleProximityDraft.postalCode}
++                                  onChange={(e) => {
++                                    setGoogleProximityDraft((current) => ({ ...current, postalCode: e.target.value }));
++                                    setGoogleProximityError("");
++                                    clearPreview();
++                                  }}
++                                  placeholder="e.g. 452001"
++                                  className={inputClass}
++                                />
++                              </div>
++                              <div>
++                                <label className={labelClass}>Country code (ISO 2-letter) *</label>
++                                <input
++                                  value={googleProximityDraft.countryCode}
++                                  maxLength={2}
++                                  onChange={(e) => {
++                                    setGoogleProximityDraft((current) => ({ ...current, countryCode: e.target.value.toUpperCase() }));
++                                    setGoogleProximityError("");
++                                    clearPreview();
++                                  }}
++                                  placeholder="IN"
++                                  className={inputClass}
++                                />
++                              </div>
++                              <div>
++                                <label className={labelClass}>Radius *</label>
++                                <input
++                                  type="number"
++                                  min={googleProximityDraft.radiusUnits === "KILOMETERS" ? "1" : String(1 / 1.609344)}
++                                  step="0.1"
++                                  value={googleProximityDraft.radius}
++                                  onChange={(e) => {
++                                    setGoogleProximityDraft((current) => ({ ...current, radius: e.target.value }));
++                                    setGoogleProximityError("");
++                                    clearPreview();
++                                  }}
++                                  className={inputClass}
++                                />
++                              </div>
++                              <div>
++                                <label className={labelClass}>Radius unit</label>
++                                <select
++                                  value={googleProximityDraft.radiusUnits}
++                                  onChange={(e) => {
++                                    setGoogleProximityDraft((current) => ({ ...current, radiusUnits: e.target.value as "KILOMETERS" | "MILES" }));
++                                    setGoogleProximityError("");
++                                    clearPreview();
++                                  }}
++                                  className={inputClass}
++                                >
++                                  <option value="KILOMETERS">Kilometers</option>
++                                  <option value="MILES">Miles</option>
++                                </select>
++                              </div>
++                            </div>
++
++                            <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 1 }}>
++                              Enter a street address or postal code, together with the city and country. Minimum radius: 1 km (0.62 miles).
++                            </Typography>
++                            {googleProximityError && (
++                              <Typography color="error" variant="caption" sx={{ display: "block", mt: 1 }}>
++                                {googleProximityError}
++                              </Typography>
++                            )}
++                            <Button
++                              size="small"
++                              variant="outlined"
++                              onClick={handleAddGoogleProximityTarget}
++                              sx={{ mt: 1.5, textTransform: "none", borderRadius: 1.5 }}
++                            >
++                              Add radius target
++                            </Button>
++
++                            {googleProximityTargets.length > 0 && (
++                              <Stack spacing={1} sx={{ mt: 1.5 }}>
++                                {googleProximityTargets.map((target, index) => (
++                                  <Box
++                                    key={getGoogleProximityTargetIdentity(target)}
++                                    sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 1, p: 1.25, border: 1, borderColor: "divider", borderRadius: 1.5 }}
++                                  >
++                                    <Box sx={{ minWidth: 0 }}>
++                                      <Typography variant="body2" fontWeight={600}>
++                                        {target.address.streetAddress || target.address.postalCode}, {target.address.cityName}
++                                      </Typography>
++                                      <Typography variant="caption" color="text.secondary">
++                                        {[target.address.provinceName, target.address.countryCode].filter(Boolean).join(", ")} · {target.radius} {target.radiusUnits === "KILOMETERS" ? "km" : "mi"} radius
++                                      </Typography>
++                                    </Box>
++                                    <Button
++                                      size="small"
++                                      color="error"
++                                      onClick={() => {
++                                        setGoogleProximityTargets((current) => current.filter((_, itemIndex) => itemIndex !== index));
++                                        clearPreview();
++                                      }}
++                                      sx={{ flexShrink: 0, textTransform: "none" }}
++                                    >
++                                      Remove
++                                    </Button>
++                                  </Box>
++                                ))}
++                              </Stack>
++                            )}
++                          </Box>
++                        )}
++                        {googleProximityTargets.length > 0 && !supportsGoogleProximityTargeting && (
++                          <Typography color="warning.main" variant="caption" sx={{ display: "block", mt: 1.5 }}>
++                            You have radius targets saved in this draft, but the current Google campaign type does not apply them in this creation flow. Switch to Search, Display or Performance Max to use them, or remove them before continuing.
++                          </Typography>
++                        )}
+                       </Box>
+ 
+                       {/* ================= LANGUAGES ================= */}
+@@ -17393,10 +17686,27 @@
+                   <strong>Budget API:</strong> CampaignBudgetService →
+                   Campaign.campaign_budget
+                 </p>
+-                {(geoResources.length > 0 || excludedGeoResources.length > 0) && (
++                {(geoResources.length > 0 || excludedGeoResources.length > 0 || googleProximityTargets.length > 0) && (
+                   <p>
+-                    <strong>Location targeting:</strong> {geoResources.length} included · {excludedGeoResources.length} excluded
++                    <strong>Location targeting:</strong> {geoResources.length} included · {excludedGeoResources.length} excluded · {googleProximityTargets.length} radius targets
+                   </p>
++                )}
++                {googleProximityTargets.length > 0 && (
++                  <div className="mt-2 space-y-1">
++                    <strong>Radius target details:</strong>
++                    <ul className="list-disc space-y-1 pl-5">
++                      {googleProximityTargets.map((target, index) => (
++                        <li key={`${getGoogleProximityTargetIdentity(target)}-${index}`}>
++                          {[target.address.streetAddress || target.address.postalCode, target.address.cityName, target.address.provinceName, target.address.countryCode].filter(Boolean).join(", ")} — {target.radius} {target.radiusUnits === "KILOMETERS" ? "km" : "mi"}
++                        </li>
++                      ))}
++                    </ul>
++                    {!supportsGoogleProximityTargeting && (
++                      <p className="text-amber-700">
++                        These radius targets are saved in the draft but are not applied by the selected Google campaign creation flow.
++                      </p>
++                    )}
++                  </div>
+                 )}
+                 <p>
+                   <strong>Bidding Scope:</strong> {effectiveGoogleBiddingScope}
+--- a/api/src/routes/campaign.routes.ts
++++ b/api/src/routes/campaign.routes.ts
+@@ -53,6 +53,7 @@
+     CreateGoogleAdsDisplayCampaignFlowInput,
+     CreateGoogleAdsSearchCampaignFlowInput,
+     CreateGoogleAdsPerformanceMaxCampaignFlowInput,
++    GoogleAdsProximityTargetInput,
+ } from "../interfaces/campaign-creation.js";
+ import {
+     searchMetaLocations,
+@@ -942,6 +943,106 @@
+     return value.map((item) => item.trim()).filter(Boolean);
+ }
+ 
++function readGoogleProximityTargets(value: unknown): GoogleAdsProximityTargetInput[] {
++    if (value === undefined || value === null) return [];
++    if (!Array.isArray(value) || value.length > 1000) {
++        throw new CampaignRequestValidationError(
++            "Google Ads proximities must be an array containing no more than 1000 entries.",
++        );
++    }
++
++    return value.map((rawTarget, index) => {
++        if (!isRecord(rawTarget)) {
++            throw new CampaignRequestValidationError(
++                `Google Ads proximities[${index}] must be an object.`,
++            );
++        }
++        if (rawTarget.negative !== undefined) {
++            throw new CampaignRequestValidationError(
++                "Google Ads proximity targets cannot be excluded. Use a regular location exclusion instead.",
++            );
++        }
++        if (!isRecord(rawTarget.address)) {
++            throw new CampaignRequestValidationError(
++                `Google Ads proximities[${index}].address must be an object.`,
++            );
++        }
++
++        const address = rawTarget.address;
++        const readAddressField = (field: string, required = false): string | undefined => {
++            const fieldValue = address[field];
++            if (fieldValue === undefined || fieldValue === null || fieldValue === "") {
++                if (required) {
++                    throw new CampaignRequestValidationError(
++                        `Google Ads proximities[${index}].address.${field} is required.`,
++                    );
++                }
++                return undefined;
++            }
++            if (typeof fieldValue !== "string" || !fieldValue.trim()) {
++                throw new CampaignRequestValidationError(
++                    `Google Ads proximities[${index}].address.${field} must be a non-empty string.`,
++                );
++            }
++            return fieldValue.trim();
++        };
++
++        const cityName = readAddressField("cityName", true)!;
++        const countryCode = readAddressField("countryCode", true)!.toUpperCase();
++        const streetAddress = readAddressField("streetAddress");
++        const streetAddress2 = readAddressField("streetAddress2");
++        const provinceName = readAddressField("provinceName");
++        const provinceCode = readAddressField("provinceCode")?.toUpperCase();
++        const postalCode = readAddressField("postalCode");
++
++        if (!/^[A-Z]{2}$/.test(countryCode)) {
++            throw new CampaignRequestValidationError(
++                `Google Ads proximities[${index}].address.countryCode must be a two-letter ISO country code.`,
++            );
++        }
++        if (!streetAddress && !postalCode) {
++            throw new CampaignRequestValidationError(
++                `Google Ads proximities[${index}] requires a streetAddress or postalCode.`,
++            );
++        }
++
++        const radius = rawTarget.radius;
++        if (typeof radius !== "number" || !Number.isFinite(radius) || radius <= 0) {
++            throw new CampaignRequestValidationError(
++                `Google Ads proximities[${index}].radius must be a positive number.`,
++            );
++        }
++        const radiusUnits = rawTarget.radiusUnits;
++        if (radiusUnits !== "KILOMETERS" && radiusUnits !== "MILES") {
++            throw new CampaignRequestValidationError(
++                `Google Ads proximities[${index}].radiusUnits must be KILOMETERS or MILES.`,
++            );
++        }
++        const isBelowMinimumRadius = radiusUnits === "MILES"
++            ? radius < 1 / 1.609344
++            : radius < 1;
++        if (isBelowMinimumRadius) {
++            throw new CampaignRequestValidationError(
++                `Google Ads proximities[${index}].radius must be at least 1 km (or the equivalent in miles).`,
++            );
++        }
++
++        return {
++            address: {
++                ...(streetAddress ? { streetAddress } : {}),
++                ...(streetAddress2 ? { streetAddress2 } : {}),
++                cityName,
++                ...(provinceName ? { provinceName } : {}),
++                ...(provinceCode ? { provinceCode } : {}),
++                ...(postalCode ? { postalCode } : {}),
++                countryCode,
++            },
++            radius,
++            radiusUnits,
++        };
++    });
++}
++
+ function normalizePmaxDate(value: unknown, fieldName: string): string | undefined {
+     if (value === undefined || value === null || value === "") return undefined;
+     if (typeof value !== "string") {
+@@ -2066,6 +2167,21 @@
+                     validateOnly: execution.validateOnly,
+                     confirm: execution.confirm,
+                 };
++
++                // Validate Search/Display radius targets before any provider image
++                // uploads, so invalid targeting cannot leave avoidable orphan assets.
++                if (campaignType === "SEARCH" || campaignType === "DISPLAY") {
++                    const proximities = readGoogleProximityTargets(flowInput.proximities);
++                    const locationCount = Array.isArray(flowInput.locations)
++                        ? flowInput.locations.length
++                        : 0;
++                    if (locationCount + proximities.length > 1000) {
++                        throw new CampaignRequestValidationError(
++                            "Google Ads supports no more than 1000 combined location and proximity targets.",
++                        );
++                    }
++                    flowInput.proximities = proximities;
++                }
+ 
+                 // Campaign-generated Display images are stored privately in the
+                 // AdSyntra Asset Library. Upload them to this selected Google Ads
+@@ -2620,6 +2736,14 @@
+                                 };
+                             });
+                         })();
++                    const proximities = readGoogleProximityTargets(
++                        rawCampaignCriteria.proximities,
++                    );
++                    if (locationTargets.length + proximities.length > 1000) {
++                        throw new CampaignRequestValidationError(
++                            "Performance Max supports no more than 1000 combined location and proximity targets.",
++                        );
++                    }
+                     const languageResourceNames = readPmaxStringArray(
+                         rawCampaignCriteria.languageResourceNames,
+                         "Performance Max languageResourceNames",
+@@ -2886,6 +3010,7 @@
+                             ...(locationTargets.length > 0
+                                 ? { locations: locationTargets }
+                                 : {}),
++                            ...(proximities.length > 0 ? { proximities } : {}),
+                             ...(languageResourceNames.length > 0
+                                 ? { languages: languageResourceNames.map((languageConstantResourceName) => ({ languageConstantResourceName })) }
+                                 : {}),
+@@ -3033,6 +3158,10 @@
+                                     resourceName,
+                                 }),
+                             ),
++                            ...resources.proximityCriteria.map((resourceName: string) => ({
++                                resourceType: "proximityCriterion",
++                                resourceName,
++                            })),
+                             ...resources.positiveKeywords.map(
+                                 (resourceName: string) => ({
+                                     resourceType: "positiveKeyword",
+@@ -3064,6 +3193,10 @@
+                                     resourceName,
+                                 }),
+                             ),
++                            ...resources.proximityCriteria.map((resourceName: string) => ({
++                                resourceType: "proximityCriterion",
++                                resourceName,
++                            })),
+                             ...resources.languageCriteria.map(
+                                 (resourceName: string) => ({
+                                     resourceType: "languageCriterion",
+@@ -3123,6 +3256,10 @@
+                                 resourceType: "locationCriterion",
+                                 resourceName,
+                             })),
++                            ...resources.proximityCriteria.map((resourceName: string) => ({
++                                resourceType: "proximityCriterion",
++                                resourceName,
++                            })),
+                             ...resources.languageCriteria.map((resourceName: string) => ({
+                                 resourceType: "languageCriterion",
+                                 resourceName,
+--- a/api/src/googleadsAPI/services/campaign-creation.ts
++++ b/api/src/googleadsAPI/services/campaign-creation.ts
+@@ -28,6 +28,7 @@
+     GoogleAdsCreationContext,
+     GoogleAdsKeywordCreationResult,
+     GoogleAdsKeywordInput,
++    GoogleAdsProximityTargetInput,
+     GoogleAdsMutateResponse,
+     GoogleAdsSearchCampaignFlowResult,
+     CreateGoogleAdsDisplayCampaignFlowInput,
+@@ -350,6 +351,185 @@
+ 
+ function isRecord(value: unknown): value is Record<string, unknown> {
+     return typeof value === "object" && value !== null && !Array.isArray(value);
++}
++
++type NormalizedGoogleAdsProximityTarget = {
++    address: GoogleAdsProximityTargetInput["address"];
++    radius: number;
++    radiusUnits: GoogleAdsProximityTargetInput["radiusUnits"];
++};
++
++/**
++ * Normalize address-based radius targets before any Google Ads mutation.
++ * Google requires a geocodable address and a radius of at least 1 km.
++ */
++function normalizeGoogleAdsProximityTargets(
++    value: unknown,
++): NormalizedGoogleAdsProximityTarget[] {
++    if (value === undefined || value === null) return [];
++
++    if (!Array.isArray(value) || value.length > 1000) {
++        throw new GoogleAdsCreationError(
++            "Provide no more than 1000 Google Ads proximity targets.",
++            400,
++        );
++    }
++
++    const seen = new Set<string>();
++
++    return value.map((target, index) => {
++        if (!isRecord(target)) {
++            throw new GoogleAdsCreationError(
++                `Proximity target ${index + 1} must be an object.`,
++                400,
++            );
++        }
++
++        if (target.negative !== undefined) {
++            throw new GoogleAdsCreationError(
++                "Google Ads proximity targets cannot be excluded. Use a regular location exclusion instead.",
++                400,
++            );
++        }
++
++        const addressInput = target.address;
++        if (!isRecord(addressInput)) {
++            throw new GoogleAdsCreationError(
++                `Proximity target ${index + 1} requires an address object.`,
++                400,
++            );
++        }
++
++        const readOptionalAddressField = (field: string): string | undefined => {
++            const fieldValue = addressInput[field];
++            if (fieldValue === undefined || fieldValue === null || fieldValue === "") {
++                return undefined;
++            }
++            if (typeof fieldValue !== "string") {
++                throw new GoogleAdsCreationError(
++                    `Proximity target ${index + 1} address.${field} must be a string.`,
++                    400,
++                );
++            }
++            const normalized = fieldValue.trim();
++            return normalized || undefined;
++        };
++
++        const cityName = readOptionalAddressField("cityName");
++        const countryCode = readOptionalAddressField("countryCode")?.toUpperCase();
++        const streetAddress = readOptionalAddressField("streetAddress");
++        const streetAddress2 = readOptionalAddressField("streetAddress2");
++        const provinceName = readOptionalAddressField("provinceName");
++        const provinceCode = readOptionalAddressField("provinceCode")?.toUpperCase();
++        const postalCode = readOptionalAddressField("postalCode");
++
++        if (!cityName || !countryCode || !/^[A-Z]{2}$/.test(countryCode)) {
++            throw new GoogleAdsCreationError(
++                `Proximity target ${index + 1} requires a city and a valid two-letter ISO country code.`,
++                400,
++            );
++        }
++
++        if (!streetAddress && !postalCode) {
++            throw new GoogleAdsCreationError(
++                `Proximity target ${index + 1} requires a street address or postal code so Google can resolve its centre point.`,
++                400,
++            );
++        }
++
++        const radiusUnits = target.radiusUnits;
++        if (radiusUnits !== "KILOMETERS" && radiusUnits !== "MILES") {
++            throw new GoogleAdsCreationError(
++                `Proximity target ${index + 1} radiusUnits must be KILOMETERS or MILES.`,
++                400,
++            );
++        }
++
++        const radius = target.radius;
++        if (typeof radius !== "number" || !Number.isFinite(radius) || radius <= 0) {
++            throw new GoogleAdsCreationError(
++                `Proximity target ${index + 1} radius must be a positive number.`,
++                400,
++            );
++        }
++
++        const isBelowMinimumRadius = radiusUnits === "MILES"
++            ? radius < 1 / 1.609344
++            : radius < 1;
++        if (isBelowMinimumRadius) {
++            throw new GoogleAdsCreationError(
++                `Proximity target ${index + 1} radius must be at least 1 km (or the equivalent in miles).`,
++                400,
++            );
++        }
++        const radiusInKilometers = radiusUnits === "MILES"
++            ? radius * 1.609344
++            : radius;
++
++        const address: GoogleAdsProximityTargetInput["address"] = {
++            ...(streetAddress ? { streetAddress } : {}),
++            ...(streetAddress2 ? { streetAddress2 } : {}),
++            cityName,
++            ...(provinceName ? { provinceName } : {}),
++            ...(provinceCode ? { provinceCode } : {}),
++            ...(postalCode ? { postalCode } : {}),
++            countryCode,
++        };
++
++        const identity = JSON.stringify({
++            streetAddress: streetAddress?.toLowerCase() ?? "",
++            streetAddress2: streetAddress2?.toLowerCase() ?? "",
++            cityName: cityName.toLowerCase(),
++            provinceName: provinceName?.toLowerCase() ?? "",
++            provinceCode: provinceCode ?? "",
++            postalCode: postalCode?.toLowerCase() ?? "",
++            countryCode,
++            radiusKilometers: Math.round(radiusInKilometers * 1_000_000) / 1_000_000,
++        });
++
++        if (seen.has(identity)) {
++            throw new GoogleAdsCreationError(
++                `Duplicate Google Ads proximity target: ${streetAddress ?? postalCode}, ${cityName}, ${countryCode}.`,
++                400,
++            );
++        }
++        seen.add(identity);
++
++        return { address, radius, radiusUnits };
++    });
++}
++
++/** Build campaign-level inclusion criteria for Google Ads radius targets. */
++function buildGoogleAdsProximityTargetOperations(
++    context: GoogleAdsCreationContext,
++    campaignResourceName: string,
++    proximities: GoogleAdsProximityTargetInput[],
++): GoogleAdsMutateOperation[] {
++    const campaignPrefix = `customers/${context.customerId}/campaigns/`;
++    const campaignId = campaignResourceName?.startsWith(campaignPrefix)
++        ? campaignResourceName.slice(campaignPrefix.length)
++        : "";
++
++    if (!/^(?:[1-9]\d*|-[1-9]\d*)$/.test(campaignId)) {
++        throw new GoogleAdsCreationError(
++            "Invalid Campaign resource name or account mismatch for proximity targeting.",
++            400,
++        );
++    }
++
++    const normalized = normalizeGoogleAdsProximityTargets(proximities);
++    return normalized.map((target) => ({
++        campaignCriterionOperation: {
++            create: {
++                campaign: campaignResourceName,
++                proximity: {
++                    address: target.address,
++                    radius: target.radius,
++                    radiusUnits: target.radiusUnits,
++                },
++            },
++        },
++    }));
+ }
+ 
+ // ==========================================
+@@ -1766,6 +1946,14 @@
+         throw new GoogleAdsCreationError("Provide no more than 1000 location targets.", 400);
+     }
+ 
++    const proximities = normalizeGoogleAdsProximityTargets(input.proximities);
++    if (locations.length + proximities.length > 1000) {
++        throw new GoogleAdsCreationError(
++            "Provide no more than 1000 combined Google Ads location and proximity targets.",
++            400,
++        );
++    }
++
+     const seenLocations = new Set<string>();
+     const normalizedLocations = locations.map((location) => {
+         const resourceName = location?.geoTargetConstantResourceName?.trim();
+@@ -1912,6 +2100,7 @@
+         assetGroupAssets: validatedGroups.map(() => [] as number[]),
+         assetGroupSignals: validatedGroups.map(() => [] as number[]),
+         locations: [] as number[],
++        proximities: [] as number[],
+         languages: [] as number[],
+         negativeKeywords: [] as number[],
+         urlExclusions: [] as number[],
+@@ -2092,6 +2281,22 @@
+                     negative: location.negative,
+                     location: {
+                         geoTargetConstant: location.resourceName,
++                    },
++                },
++            },
++        });
++    }
++
++    for (const proximity of proximities) {
++        operationIndexes.proximities.push(operations.length);
++        operations.push({
++            campaignCriterionOperation: {
++                create: {
++                    campaign: campaignResourceName,
++                    proximity: {
++                        address: proximity.address,
++                        radius: proximity.radius,
++                        radiusUnits: proximity.radiusUnits,
+                     },
+                 },
+             },
+@@ -2310,6 +2515,7 @@
+             ),
+         })),
+         locationCriteria: extractMultipleResources(operationIndexes.locations, "Performance Max Location Criterion"),
++        proximityCriteria: extractMultipleResources(operationIndexes.proximities, "Performance Max Proximity Criterion"),
+         languageCriteria: extractMultipleResources(operationIndexes.languages, "Performance Max Language Criterion"),
+         negativeKeywords: extractMultipleResources(operationIndexes.negativeKeywords, "Performance Max Negative Keyword Criterion"),
+         urlExclusions: extractMultipleResources(operationIndexes.urlExclusions, "Performance Max URL Exclusion Criterion"),
+@@ -4318,6 +4524,21 @@
+         })
+         : [];
+ 
++    const normalizedProximities = normalizeGoogleAdsProximityTargets(input.proximities);
++    if ((input.locations?.length ?? 0) + normalizedProximities.length > 1000) {
++        throw new GoogleAdsCreationError(
++            "Provide no more than 1000 combined Google Ads location and proximity targets.",
++            400,
++        );
++    }
++    const proximityOperations = normalizedProximities.length
++        ? buildGoogleAdsProximityTargetOperations(
++            context,
++            campaignBuilt.resourceName,
++            normalizedProximities,
++        )
++        : [];
++
+     // ======================================
+     // 7. BUILD POSITIVE KEYWORD OPERATIONS
+     // ======================================
+@@ -4369,6 +4590,7 @@
+         budget: -1,
+         campaign: -1,
+         locationCriteria: [] as number[],
++        proximityCriteria: [] as number[],
+         adGroup: -1,
+         positiveKeywords: [] as number[],
+         negativeKeywords: [] as number[],
+@@ -4389,7 +4611,11 @@
+ 
+     for (const operation of locationOperations) {
+         operationIndexes.locationCriteria.push(operations.length);
+-
++        operations.push(operation);
++    }
++
++    for (const operation of proximityOperations) {
++        operationIndexes.proximityCriteria.push(operations.length);
+         operations.push(operation);
+     }
+ 
+@@ -4493,6 +4719,10 @@
+         locationCriteria: extractMultipleResourceNames(
+             operationIndexes.locationCriteria,
+             "Location Criterion",
++        ),
++        proximityCriteria: extractMultipleResourceNames(
++            operationIndexes.proximityCriteria,
++            "Proximity Criterion",
+         ),
+ 
+         positiveKeywords: extractMultipleResourceNames(
+@@ -4785,6 +5015,14 @@
+         seenLocations.add(resourceName);
+     }
+ 
++    const normalizedProximities = normalizeGoogleAdsProximityTargets(input.proximities);
++    if (locations.length + normalizedProximities.length > 1000) {
++        throw new GoogleAdsCreationError(
++            "Provide no more than 1000 combined Google Ads location and proximity targets.",
++            400,
++        );
++    }
++
+     // 8. Validate language targets.
+ 
+     const languages = input.languages ?? [];
+@@ -5020,6 +5258,7 @@
+         campaign: -1,
+         adGroup: -1,
+         locations: [] as number[],
++        proximities: [] as number[],
+         languages: [] as number[],
+         audiences: [] as number[],
+         ad: -1,
+@@ -5082,6 +5321,24 @@
+                     location: {
+                         geoTargetConstant:
+                             location.geoTargetConstantResourceName,
++                    },
++                },
++            },
++        });
++    }
++
++    // Campaign proximity targets (inclusion-only).
++
++    for (const proximity of normalizedProximities) {
++        operationIndexes.proximities.push(operations.length);
++        operations.push({
++            campaignCriterionOperation: {
++                create: {
++                    campaign: campaignResourceName,
++                    proximity: {
++                        address: proximity.address,
++                        radius: proximity.radius,
++                        radiusUnits: proximity.radiusUnits,
+                     },
+                 },
+             },
+@@ -5277,6 +5534,10 @@
+                 operationIndexes.locations,
+                 "Location Criterion",
+             ),
++            proximityCriteria: extractMultipleResources(
++                operationIndexes.proximities,
++                "Proximity Criterion",
++            ),
+             languageCriteria: extractMultipleResources(
+                 operationIndexes.languages,
+                 "Language Criterion",
+--- a/api/src/interfaces/campaign-creation.ts
++++ b/api/src/interfaces/campaign-creation.ts
+@@ -192,6 +192,7 @@
+ 
+     assetGroups: GoogleAdsPerformanceMaxAssetGroupInput[];
+     locations?: GoogleAdsLocationTargetInput[];
++    proximities?: GoogleAdsProximityTargetInput[];
+     languages?: Array<{
+         languageConstantResourceName: string;
+     }>;
+@@ -221,6 +222,7 @@
+     campaignAssets: string[];
+     assetGroups: GoogleAdsPerformanceMaxAssetGroupCreatedResource[];
+     locationCriteria: string[];
++    proximityCriteria: string[];
+     languageCriteria: string[];
+     negativeKeywords: string[];
+     urlExclusions: string[];
+@@ -313,6 +315,21 @@
+     negative?: boolean;
+ }
+ 
++/** Address-based Google Ads radius targeting. Proximity criteria are inclusion-only. */
++export interface GoogleAdsProximityTargetInput {
++    address: {
++        streetAddress?: string;
++        streetAddress2?: string;
++        cityName: string;
++        provinceName?: string;
++        provinceCode?: string;
++        postalCode?: string;
++        countryCode: string;
++    };
++    radius: number;
++    radiusUnits: "KILOMETERS" | "MILES";
++}
++
+ export interface CreateGoogleAdsCampaignLocationTargetsInput {
+     campaignResourceName: string;
+     locations: GoogleAdsLocationTargetInput[];
+@@ -387,6 +404,7 @@
+     };
+ 
+     locations?: GoogleAdsLocationTargetInput[];
++    proximities?: GoogleAdsProximityTargetInput[];
+ 
+     ad: {
+         finalUrl: string;
+@@ -427,6 +445,7 @@
+     };
+ 
+     locations?: GoogleAdsLocationTargetInput[];
++    proximities?: GoogleAdsProximityTargetInput[];
+ 
+     languages?: Array<{
+         languageConstantResourceName: string;
+@@ -472,6 +491,7 @@
+         campaign: string;
+         adGroup: string;
+         locationCriteria: string[];
++        proximityCriteria: string[];
+         languageCriteria: string[];
+         audienceCriteria: string[];
+         responsiveDisplayAd: string | null;
+@@ -499,6 +519,7 @@
+         campaign: string;
+         adGroup: string;
+         locationCriteria: string[];
++        proximityCriteria: string[];
+         positiveKeywords: string[];
+         negativeKeywords: string[];
+         responsiveSearchAd: string;

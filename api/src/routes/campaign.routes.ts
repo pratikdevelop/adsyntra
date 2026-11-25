@@ -53,6 +53,7 @@ import type {
     CreateGoogleAdsDisplayCampaignFlowInput,
     CreateGoogleAdsSearchCampaignFlowInput,
     CreateGoogleAdsPerformanceMaxCampaignFlowInput,
+    GoogleAdsProximityTargetInput,
 } from "../interfaces/campaign-creation.js";
 import {
     searchMetaLocations,
@@ -94,8 +95,7 @@ import {
     getGoogleMerchantCenterDataSources,
     getGoogleMerchantCenterFeedLabels,
     getGoogleMerchantCenterProducts,
-    registerGoogleMerchantCenterGcp,
-    getGoogleAdsHotelCenterLinks
+    registerGoogleMerchantCenterGcp
 } from "../googleadsAPI/services/google-ads-resource-lookups.service.js";
 import {
     listMetaFacebookPages,
@@ -941,6 +941,106 @@ function readPmaxStringArray(value: unknown, fieldName: string): string[] {
         throw new CampaignRequestValidationError(`${fieldName} must be an array of strings.`);
     }
     return value.map((item) => item.trim()).filter(Boolean);
+}
+
+function readGoogleProximityTargets(value: unknown): GoogleAdsProximityTargetInput[] {
+    if (value === undefined || value === null) return [];
+    if (!Array.isArray(value) || value.length > 1000) {
+        throw new CampaignRequestValidationError(
+            "Google Ads proximities must be an array containing no more than 1000 entries.",
+        );
+    }
+
+    return value.map((rawTarget, index) => {
+        if (!isRecord(rawTarget)) {
+            throw new CampaignRequestValidationError(
+                `Google Ads proximities[${index}] must be an object.`,
+            );
+        }
+        if (rawTarget.negative !== undefined) {
+            throw new CampaignRequestValidationError(
+                "Google Ads proximity targets cannot be excluded. Use a regular location exclusion instead.",
+            );
+        }
+        if (!isRecord(rawTarget.address)) {
+            throw new CampaignRequestValidationError(
+                `Google Ads proximities[${index}].address must be an object.`,
+            );
+        }
+
+        const address = rawTarget.address;
+        const readAddressField = (field: string, required = false): string | undefined => {
+            const fieldValue = address[field];
+            if (fieldValue === undefined || fieldValue === null || fieldValue === "") {
+                if (required) {
+                    throw new CampaignRequestValidationError(
+                        `Google Ads proximities[${index}].address.${field} is required.`,
+                    );
+                }
+                return undefined;
+            }
+            if (typeof fieldValue !== "string" || !fieldValue.trim()) {
+                throw new CampaignRequestValidationError(
+                    `Google Ads proximities[${index}].address.${field} must be a non-empty string.`,
+                );
+            }
+            return fieldValue.trim();
+        };
+
+        const cityName = readAddressField("cityName", true)!;
+        const countryCode = readAddressField("countryCode", true)!.toUpperCase();
+        const streetAddress = readAddressField("streetAddress");
+        const streetAddress2 = readAddressField("streetAddress2");
+        const provinceName = readAddressField("provinceName");
+        const provinceCode = readAddressField("provinceCode")?.toUpperCase();
+        const postalCode = readAddressField("postalCode");
+
+        if (!/^[A-Z]{2}$/.test(countryCode)) {
+            throw new CampaignRequestValidationError(
+                `Google Ads proximities[${index}].address.countryCode must be a two-letter ISO country code.`,
+            );
+        }
+        if (!streetAddress && !postalCode) {
+            throw new CampaignRequestValidationError(
+                `Google Ads proximities[${index}] requires a streetAddress or postalCode.`,
+            );
+        }
+
+        const radius = rawTarget.radius;
+        if (typeof radius !== "number" || !Number.isFinite(radius) || radius <= 0) {
+            throw new CampaignRequestValidationError(
+                `Google Ads proximities[${index}].radius must be a positive number.`,
+            );
+        }
+        const radiusUnits = rawTarget.radiusUnits;
+        if (radiusUnits !== "KILOMETERS" && radiusUnits !== "MILES") {
+            throw new CampaignRequestValidationError(
+                `Google Ads proximities[${index}].radiusUnits must be KILOMETERS or MILES.`,
+            );
+        }
+        const isBelowMinimumRadius = radiusUnits === "MILES"
+            ? radius < 1 / 1.609344
+            : radius < 1;
+        if (isBelowMinimumRadius) {
+            throw new CampaignRequestValidationError(
+                `Google Ads proximities[${index}].radius must be at least 1 km (or the equivalent in miles).`,
+            );
+        }
+
+        return {
+            address: {
+                ...(streetAddress ? { streetAddress } : {}),
+                ...(streetAddress2 ? { streetAddress2 } : {}),
+                cityName,
+                ...(provinceName ? { provinceName } : {}),
+                ...(provinceCode ? { provinceCode } : {}),
+                ...(postalCode ? { postalCode } : {}),
+                countryCode,
+            },
+            radius,
+            radiusUnits,
+        };
+    });
 }
 
 function normalizePmaxDate(value: unknown, fieldName: string): string | undefined {
@@ -2068,6 +2168,21 @@ router.post("/", async (req: Request, res: Response) => {
                     confirm: execution.confirm,
                 };
 
+                // Validate Search/Display radius targets before any provider image
+                // uploads, so invalid targeting cannot leave avoidable orphan assets.
+                if (campaignType === "SEARCH" || campaignType === "DISPLAY") {
+                    const proximities = readGoogleProximityTargets(flowInput.proximities);
+                    const locationCount = Array.isArray(flowInput.locations)
+                        ? flowInput.locations.length
+                        : 0;
+                    if (locationCount + proximities.length > 1000) {
+                        throw new CampaignRequestValidationError(
+                            "Google Ads supports no more than 1000 combined location and proximity targets.",
+                        );
+                    }
+                    flowInput.proximities = proximities;
+                }
+
                 // Campaign-generated Display images are stored privately in the
                 // AdSyntra Asset Library. Upload them to this selected Google Ads
                 // account before the Display campaign flow uses their resource names.
@@ -2565,6 +2680,70 @@ router.post("/", async (req: Request, res: Response) => {
                         rawCampaignCriteria.locationResourceNames,
                         "Performance Max locationResourceNames",
                     );
+                    const rawLocationTargets = rawCampaignCriteria.locationTargets;
+                    const locationTargets: Array<{
+                        geoTargetConstantResourceName: string;
+                        negative: boolean;
+                    }> = rawLocationTargets === undefined
+                        ? locationResourceNames.map((geoTargetConstantResourceName) => ({
+                            geoTargetConstantResourceName,
+                            negative: false,
+                        }))
+                        : (() => {
+                            if (!Array.isArray(rawLocationTargets) || rawLocationTargets.length > 1000) {
+                                throw new CampaignRequestValidationError(
+                                    "Performance Max locationTargets must be an array containing no more than 1000 entries.",
+                                );
+                            }
+
+                            const seenLocationTargets = new Set<string>();
+                            return rawLocationTargets.map((rawTarget, index) => {
+                                if (!isRecord(rawTarget)) {
+                                    throw new CampaignRequestValidationError(
+                                        `Performance Max locationTargets[${index}] must be an object.`,
+                                    );
+                                }
+
+                                const geoTargetConstantResourceName =
+                                    typeof rawTarget.geoTargetConstantResourceName === "string"
+                                        ? rawTarget.geoTargetConstantResourceName.trim()
+                                        : "";
+                                if (!/^geoTargetConstants\/\d+$/.test(geoTargetConstantResourceName)) {
+                                    throw new CampaignRequestValidationError(
+                                        `Performance Max locationTargets[${index}] has an invalid Geo Target Constant resource name.`,
+                                    );
+                                }
+
+                                const negative = rawTarget.negative === undefined
+                                    ? false
+                                    : rawTarget.negative;
+                                if (typeof negative !== "boolean") {
+                                    throw new CampaignRequestValidationError(
+                                        `Performance Max locationTargets[${index}].negative must be a boolean.`,
+                                    );
+                                }
+
+                                if (seenLocationTargets.has(geoTargetConstantResourceName)) {
+                                    throw new CampaignRequestValidationError(
+                                        `Performance Max location target ${geoTargetConstantResourceName} is duplicated or both included and excluded.`,
+                                    );
+                                }
+                                seenLocationTargets.add(geoTargetConstantResourceName);
+
+                                return {
+                                    geoTargetConstantResourceName,
+                                    negative,
+                                };
+                            });
+                        })();
+                    const proximities = readGoogleProximityTargets(
+                        rawCampaignCriteria.proximities,
+                    );
+                    if (locationTargets.length + proximities.length > 1000) {
+                        throw new CampaignRequestValidationError(
+                            "Performance Max supports no more than 1000 combined location and proximity targets.",
+                        );
+                    }
                     const languageResourceNames = readPmaxStringArray(
                         rawCampaignCriteria.languageResourceNames,
                         "Performance Max languageResourceNames",
@@ -2828,9 +3007,10 @@ router.post("/", async (req: Request, res: Response) => {
                                     ...(searchThemes.length > 0 ? { searchThemes } : {}),
                                 },
                             ],
-                            ...(locationResourceNames.length > 0
-                                ? { locations: locationResourceNames.map((geoTargetConstantResourceName) => ({ geoTargetConstantResourceName })) }
+                            ...(locationTargets.length > 0
+                                ? { locations: locationTargets }
                                 : {}),
+                            ...(proximities.length > 0 ? { proximities } : {}),
                             ...(languageResourceNames.length > 0
                                 ? { languages: languageResourceNames.map((languageConstantResourceName) => ({ languageConstantResourceName })) }
                                 : {}),
@@ -2978,6 +3158,10 @@ router.post("/", async (req: Request, res: Response) => {
                                     resourceName,
                                 }),
                             ),
+                            ...resources.proximityCriteria.map((resourceName: string) => ({
+                                resourceType: "proximityCriterion",
+                                resourceName,
+                            })),
                             ...resources.positiveKeywords.map(
                                 (resourceName: string) => ({
                                     resourceType: "positiveKeyword",
@@ -3009,6 +3193,10 @@ router.post("/", async (req: Request, res: Response) => {
                                     resourceName,
                                 }),
                             ),
+                            ...resources.proximityCriteria.map((resourceName: string) => ({
+                                resourceType: "proximityCriterion",
+                                resourceName,
+                            })),
                             ...resources.languageCriteria.map(
                                 (resourceName: string) => ({
                                     resourceType: "languageCriterion",
@@ -3066,6 +3254,10 @@ router.post("/", async (req: Request, res: Response) => {
                             ]),
                             ...resources.locationCriteria.map((resourceName: string) => ({
                                 resourceType: "locationCriterion",
+                                resourceName,
+                            })),
+                            ...resources.proximityCriteria.map((resourceName: string) => ({
+                                resourceType: "proximityCriterion",
                                 resourceName,
                             })),
                             ...resources.languageCriteria.map((resourceName: string) => ({
@@ -5886,16 +6078,6 @@ router.get("/lookups/google/merchant-center-links", async (req, res) =>
     ),
 );
 
-// ==========================================
-// GOOGLE ADS HOTEL CENTER LINK / INVITATION LOOKUP
-// ==========================================
-
-router.get("/lookups/google/hotel-center-links", async (req, res) =>
-    withGoogleAdsLookup(req, res, (context) =>
-        getGoogleAdsHotelCenterLinks(context),
-    ),
-);
-
 
 async function getSelectedMetaPixelLookupAccount(
     userId: string,
@@ -6165,16 +6347,6 @@ router.get(
             ),
         );
     },
-);
-
-// ==========================================
-// GOOGLE ADS HOTEL CENTER LINK / INVITATION LOOKUP
-// ==========================================
-
-router.get("/lookups/google/hotel-center-links", async (req, res) =>
-    withGoogleAdsLookup(req, res, (context) =>
-        getGoogleAdsHotelCenterLinks(context),
-    ),
 );
 // ==========================================
 // META CUSTOM CONVERSION LOOKUP

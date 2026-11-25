@@ -7,6 +7,9 @@
 
 ---
 
+
+
+
 ## 1. Executive summary
 
 The current project is more advanced than the October and November 20 research notes describe. The current ZIP contains a combined Next.js + Express application, per-user provider connections, encrypted provider credentials, MongoDB persistence, provider lookup routes, campaign creation, asset management, conversion management, billing, audience screens and reporting foundations.

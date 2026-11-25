@@ -7,7 +7,7 @@ import {
 } from "../metaadsAPI/services/campaign-creation.js";
 
 
-const META_API_VERSION = "v25.0";
+const META_API_VERSION = "v26.0";
 const META_CAMPAIGN_ID = "120249490875360775";
 
 

@@ -18,6 +18,7 @@ import conversionsRouter from './routes/conversions.routes.js';
 
 import userSettingsRouter from "./routes/user-settings.routes.js";
 import billingRouter from "./routes/billing.routes.js";
+import campaignCapabilitiesRouter from "./routes/campaign-capabilities.routes.js";
 
 
 const app = express();
@@ -80,6 +81,7 @@ app.get("/health", (_req, res) => {
 // User connections and advertising account selection.
 app.use("/api/connections", connectionRouter);
 app.use("/api/campaigns", campaignRouter);
+app.use("/api/campaign-capabilities", campaignCapabilitiesRouter);
 app.use("/api/ads", adsRouter);
 app.use("/api/assets", assetRouter);
 app.use("/api/auth", providerAuthRoutes);

@@ -459,7 +459,7 @@ GET /google-ads/accounts
 The backend obtains a fresh access token and calls:
 
 ```text
-GET https://googleads.googleapis.com/v25/customers:listAccessibleCustomers
+GET https://googleads.googleapis.com/v26/customers:listAccessibleCustomers
 ```
 
 The response can contain:
@@ -615,7 +615,7 @@ ORDER BY metrics.cost_micros DESC
 The backend sends the query to:
 
 ```text
-POST https://googleads.googleapis.com/v25/customers/{customerId}/googleAds:search
+POST https://googleads.googleapis.com/v26/customers/{customerId}/googleAds:search
 ```
 
 The Google Ads REST request contains the OAuth bearer token and developer token.
@@ -1347,7 +1347,7 @@ Use the official Google documentation as the final source of truth because API v
 - Campaigns: https://developers.google.com/google-ads/api/docs/campaigns/overview
 - Campaign creation: https://developers.google.com/google-ads/api/docs/campaigns/create-campaigns
 - Campaign budgets: https://developers.google.com/google-ads/api/docs/campaigns/budgets/overview
-- v25 reference: https://developers.google.com/google-ads/api/reference/rpc/v25/overview
+- v26 reference: https://developers.google.com/google-ads/api/reference/rpc/v26/overview
 - Google Ads Delivery_method \_deperaction status : ads-developers.googleblog.com/2020/01/complete-sunset-of-accelerated-budget.html
 
 ---
@@ -1516,7 +1516,7 @@ The complete learning architecture is:
                 access/refresh token
                            |
                            v
-                 Google Ads API v25
+                 Google Ads API v26
                            |
             +--------------+--------------+
             |                             |

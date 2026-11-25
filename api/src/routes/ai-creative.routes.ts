@@ -272,8 +272,9 @@ function hasValidCapabilityCopies(
                 return false;
             }
 
+            // GeneratedCapabilityCopyText is scoped by its parent copy, so
+            // capabilityId belongs on `copy`, not on each nested text item.
             return (
-                typeof item.capabilityId === "string" &&
                 typeof item.requirementId === "string" &&
                 typeof item.field === "string" &&
                 typeof item.textIndex === "number" &&
@@ -395,18 +396,22 @@ router.post(
             const validCapabilityCopies =
                 result.generatedCapabilityCopies === undefined ||
                 hasValidCapabilityCopies(result.generatedCapabilityCopies);
+            // The service contract explicitly returns null when this workflow
+            // has no campaign-aware brand identity. Null is a valid empty state.
             const validBrandIdentity =
                 result.brandIdentity === undefined ||
+                result.brandIdentity === null ||
                 hasValidBrandIdentity(result.brandIdentity);
 
-            if (
-                !validVariations ||
-                !validAssets ||
-                !validCapabilityCopies ||
-                !validBrandIdentity
-            ) {
+            const invalidResponseParts: string[] = [];
+            if (!validVariations) invalidResponseParts.push("variations");
+            if (!validAssets) invalidResponseParts.push("generatedAssets");
+            if (!validCapabilityCopies) invalidResponseParts.push("generatedCapabilityCopies");
+            if (!validBrandIdentity) invalidResponseParts.push("brandIdentity");
+
+            if (invalidResponseParts.length > 0) {
                 throw new Error(
-                    "Creative generation completed with an invalid response structure.",
+                    `Creative generation completed, but its response failed validation: ${invalidResponseParts.join(", ")}.`,
                 );
             }
 

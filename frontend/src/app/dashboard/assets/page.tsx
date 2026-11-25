@@ -1708,7 +1708,7 @@ export default function AssetLibraryPage() {
               onChange={(event) => setSearchInput(event.target.value)}
               placeholder="Search assets, headlines or copy"
               aria-label="Search assets"
-              sx={{ width: { xs: "100%", xl: 350 }, "& .MuiOutlinedInput-root": { borderRadius: 2, bgcolor: "#fff" } }}
+              sx={{ width: { xs: "40%", xl: 100 }, "& .MuiOutlinedInput-root": { borderRadius: 2, bgcolor: "#fff" } }}
               InputProps={{
                 startAdornment: <InputAdornment position="start"><SearchRounded sx={{ color: "#80868b" }} /></InputAdornment>,
                 endAdornment: searchInput ? (

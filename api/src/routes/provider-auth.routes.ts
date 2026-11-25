@@ -77,6 +77,341 @@ interface GoogleAccessibleCustomersResponse {
   [key: string]: unknown;
 }
 
+interface GoogleAdsApiErrorBody {
+  error?: {
+    message?: string;
+    status?: string;
+    code?: number;
+    details?: unknown[];
+  };
+}
+
+interface GoogleAdsSearchResponse {
+  results?: Array<{
+    customer?: {
+      id?: string | number;
+      descriptiveName?: string;
+      currencyCode?: string;
+      timeZone?: string;
+      manager?: boolean;
+      status?: string;
+    };
+    customerClient?: {
+      id?: string | number;
+      clientCustomer?: string;
+      level?: number;
+      manager?: boolean;
+      descriptiveName?: string;
+      currencyCode?: string;
+      timeZone?: string;
+      status?: string;
+    };
+  }>;
+  nextPageToken?: string;
+}
+
+interface GoogleDiscoveredAccount {
+  id: string;
+  resourceName: string;
+  customerId: string;
+  name: string;
+  currency?: string | null;
+  currencyCode?: string | null;
+  timezone?: string | null;
+  timeZone?: string | null;
+  isManager: boolean | null;
+  accountStatus?: string | null;
+  source: "DIRECT_ACCESS" | "MANAGER_HIERARCHY";
+}
+
+const GOOGLE_ADS_API_VERSION = "v26";
+const MAX_GOOGLE_ROOT_CUSTOMERS = 500;
+const MAX_GOOGLE_DISCOVERED_ACCOUNTS = 2000;
+
+function normalizeGoogleCustomerId(value: string | number | undefined): string | null {
+  if (value === undefined || value === null) return null;
+
+  const raw = String(value).trim();
+  const match = raw.match(/^(?:customers\/)?(\d{6,20})$/);
+
+  return match?.[1] ?? null;
+}
+
+function googleResourceName(customerId: string): string {
+  return `customers/${customerId}`;
+}
+
+function getGoogleApiErrorMessage(body: unknown, fallback: string): string {
+  if (body && typeof body === "object" && "error" in body) {
+    const error = (body as GoogleAdsApiErrorBody).error;
+
+    if (typeof error?.message === "string" && error.message.trim()) {
+      return error.message.trim();
+    }
+  }
+
+  return fallback;
+}
+
+async function searchGoogleAds<T>(
+  accessToken: string,
+  developerToken: string,
+  customerId: string,
+  query: string,
+): Promise<T[]> {
+  const normalizedCustomerId = normalizeGoogleCustomerId(customerId);
+
+  if (!normalizedCustomerId) {
+    throw new Error("Google Ads customer ID is invalid.");
+  }
+
+  const results: T[] = [];
+  let pageToken: string | undefined;
+
+  while (true) {
+    const response = await fetch(
+      `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}/customers/${normalizedCustomerId}/googleAds:search`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "developer-token": developerToken,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          query,
+          ...(pageToken ? { pageToken } : {}),
+        }),
+        signal: AbortSignal.timeout(30_000),
+      },
+    );
+
+    const body: unknown = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      throw new Error(
+        `Google Ads account lookup failed for ${normalizedCustomerId}: ${getGoogleApiErrorMessage(
+          body,
+          `HTTP ${response.status}`,
+        )}`,
+      );
+    }
+
+    const page = (body ?? {}) as {
+      results?: T[];
+      nextPageToken?: string;
+    };
+
+    if (Array.isArray(page.results)) {
+      results.push(...page.results);
+    }
+
+    if (!page.nextPageToken) break;
+
+    if (results.length >= MAX_GOOGLE_DISCOVERED_ACCOUNTS) {
+      throw new Error(
+        `Google Ads account discovery exceeded the ${MAX_GOOGLE_DISCOVERED_ACCOUNTS} account safety limit.`,
+      );
+    }
+
+    pageToken = page.nextPageToken;
+  }
+
+  return results;
+}
+
+function mapGoogleAccount(
+  customerId: string,
+  fields: {
+    descriptiveName?: string;
+    currencyCode?: string;
+    timeZone?: string;
+    manager?: boolean;
+    status?: string;
+  },
+  source: "DIRECT_ACCESS" | "MANAGER_HIERARCHY",
+): GoogleDiscoveredAccount {
+  const resourceName = googleResourceName(customerId);
+
+  return {
+    id: resourceName,
+    resourceName,
+    customerId,
+    name: fields.descriptiveName?.trim() || `Google Ads ${customerId}`,
+    currency: fields.currencyCode ?? null,
+    currencyCode: fields.currencyCode ?? null,
+    timezone: fields.timeZone ?? null,
+    timeZone: fields.timeZone ?? null,
+    isManager: typeof fields.manager === "boolean" ? fields.manager : null,
+    accountStatus: fields.status ?? null,
+    source,
+  };
+}
+
+/**
+ * List customers directly accessible to the OAuth identity, then expand
+ * manager-account hierarchies to include advertiser/client accounts.
+ *
+ * ListAccessibleCustomers intentionally returns only direct access roots.
+ * It does not enumerate indirect clients under a manager account.
+ */
+async function discoverGoogleAdsAccounts(
+  accessToken: string,
+  developerToken: string,
+): Promise<{
+  accessibleCustomerResourceNames: string[];
+  accounts: GoogleDiscoveredAccount[];
+  managerAccountsExpanded: number;
+  warnings: string[];
+}> {
+  const accessibleResponse = await fetch(
+    `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}/customers:listAccessibleCustomers`,
+    {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "developer-token": developerToken,
+        Accept: "application/json",
+      },
+      signal: AbortSignal.timeout(30_000),
+    },
+  );
+
+  const accessibleBody: unknown = await accessibleResponse.json().catch(() => null);
+
+  if (!accessibleResponse.ok) {
+    throw new Error(
+      `Google Ads could not list accessible customers: ${getGoogleApiErrorMessage(
+        accessibleBody,
+        `HTTP ${accessibleResponse.status}`,
+      )}`,
+    );
+  }
+
+  const accessibleData = (accessibleBody ?? {}) as GoogleAccessibleCustomersResponse;
+  const accessibleCustomerResourceNames = Array.isArray(accessibleData.resourceNames)
+    ? accessibleData.resourceNames.filter(
+        (value): value is string =>
+          typeof value === "string" && Boolean(normalizeGoogleCustomerId(value)),
+      )
+    : [];
+
+  if (accessibleCustomerResourceNames.length > MAX_GOOGLE_ROOT_CUSTOMERS) {
+    throw new Error(
+      `Google returned more than ${MAX_GOOGLE_ROOT_CUSTOMERS} directly accessible customers. Narrow account access before syncing.`,
+    );
+  }
+
+  const accountMap = new Map<string, GoogleDiscoveredAccount>();
+  const warnings: string[] = [];
+  let managerAccountsExpanded = 0;
+
+  for (const resourceName of accessibleCustomerResourceNames) {
+    const customerId = normalizeGoogleCustomerId(resourceName);
+    if (!customerId) continue;
+
+    let customerDetails: Array<{
+      customer?: NonNullable<GoogleAdsSearchResponse["results"]>[number]["customer"];
+    }> = [];
+
+    try {
+      customerDetails = await searchGoogleAds<
+        NonNullable<GoogleAdsSearchResponse["results"]>[number]
+      >(
+        accessToken,
+        developerToken,
+        customerId,
+        [
+          "SELECT customer.id, customer.descriptive_name,",
+          "customer.currency_code, customer.time_zone,",
+          "customer.manager, customer.status",
+          "FROM customer",
+        ].join(" "),
+      );
+    } catch (error) {
+      warnings.push(
+        `Could not load details for Google Ads account ${customerId}: ${
+          error instanceof Error ? error.message : "Unknown lookup error."
+        }`,
+      );
+    }
+
+    const customer = customerDetails?.[0]?.customer;
+
+    accountMap.set(
+      customerId,
+      mapGoogleAccount(customerId, customer ?? {}, "DIRECT_ACCESS"),
+    );
+
+    if (customer?.manager !== true) {
+      continue;
+    }
+
+    managerAccountsExpanded += 1;
+
+    try {
+      const hierarchyRows = await searchGoogleAds<
+        NonNullable<GoogleAdsSearchResponse["results"]>[number]
+      >(
+        accessToken,
+        developerToken,
+        customerId,
+        [
+          "SELECT customer_client.id, customer_client.client_customer,",
+          "customer_client.level, customer_client.manager,",
+          "customer_client.descriptive_name, customer_client.currency_code,",
+          "customer_client.time_zone, customer_client.status",
+          "FROM customer_client",
+        ].join(" "),
+      );
+
+      for (const row of hierarchyRows) {
+        const client = row.customerClient;
+        const clientId =
+          normalizeGoogleCustomerId(client?.id) ??
+          normalizeGoogleCustomerId(client?.clientCustomer);
+
+        if (!clientId) continue;
+
+        accountMap.set(
+          clientId,
+          mapGoogleAccount(
+            clientId,
+            {
+              descriptiveName: client?.descriptiveName,
+              currencyCode: client?.currencyCode,
+              timeZone: client?.timeZone,
+              manager: client?.manager,
+              status: client?.status,
+            },
+            "MANAGER_HIERARCHY",
+          ),
+        );
+
+        if (accountMap.size > MAX_GOOGLE_DISCOVERED_ACCOUNTS) {
+          throw new Error(
+            `Google Ads account discovery exceeded the ${MAX_GOOGLE_DISCOVERED_ACCOUNTS} account safety limit.`,
+          );
+        }
+      }
+    } catch (error) {
+      warnings.push(
+        `Manager account ${customerId} was found, but its client-account hierarchy could not be fully loaded: ${
+          error instanceof Error ? error.message : "Unknown hierarchy error."
+        }`,
+      );
+    }
+  }
+
+  return {
+    accessibleCustomerResourceNames,
+    accounts: Array.from(accountMap.values()),
+    managerAccountsExpanded,
+    warnings,
+  };
+}
+
 // ------------------------------------------------------------------
 // OAUTH STATE
 // ------------------------------------------------------------------
@@ -286,7 +621,8 @@ router.get("/google", (req, res) => {
       access_type: "offline",
       scope: [GOOGLE_ADS_SCOPE, "https://www.googleapis.com/auth/content"],
       include_granted_scopes: true,
-      prompt: "consent",
+      // Force an account chooser for users with multiple Google identities.
+      prompt: "select_account consent",
       state,
     });
 
@@ -384,64 +720,75 @@ router.get("/google/accounts", async (req, res) => {
 
     if (!userId) {
       return res.status(401).json({
+        success: false,
         message: "Unauthorized",
       });
     }
 
-    const developerToken =
-      process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
+    const developerToken = process.env.GOOGLE_ADS_DEVELOPER_TOKEN;
 
     if (!developerToken) {
       return res.status(500).json({
+        success: false,
         message: "Google Ads developer token is not configured.",
       });
     }
 
-    // This helper handles access-token expiry and refresh for the
-    // authenticated user's own Google connection.
-    const accessToken = await getProviderAccessToken(
-      userId,
-      "googleAds"
-    );
+    const accessToken = await getProviderAccessToken(userId, "googleAds");
+    const discovery = await discoverGoogleAdsAccounts(accessToken, developerToken);
 
-    const response = await fetch(
-      "https://googleads.googleapis.com/v25/customers:listAccessibleCustomers",
-      {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-          "developer-token": developerToken,
+    // The newly authorized Google identity is authoritative. Persist exactly
+    // the accounts it can access so accounts from a previous Google identity
+    // are not incorrectly displayed under the new connection.
+    await saveProviderAccounts(userId, "googleAds", discovery.accounts);
+
+    if (discovery.accounts.length === 0) {
+      return res.status(200).json({
+        success: true,
+        connected: true,
+        status: "no_accounts",
+        hasAccounts: false,
+        accountCount: 0,
+        message:
+          "Google authorization succeeded, but this Google user has no directly accessible Google Ads accounts. Create a Google Ads account or ask an administrator to grant this email access to an existing Ads account, then refresh account discovery.",
+        nextSteps: [
+          "Open https://ads.google.com/ while signed in with the same Google email.",
+          "Create a Google Ads account and complete its initial setup if this is a new Google login.",
+          "If an Ads account already exists, ask its administrator to add this exact Google email under Access and security.",
+          "If access is only through a manager account, make sure the manager account itself is directly accessible to this Google login.",
+        ],
+        accessibleCustomers: {
+          resourceNames: discovery.accessibleCustomerResourceNames,
         },
-        signal: AbortSignal.timeout(30_000),
-      }
-    );
-
-    const data = (await response.json().catch(() => ({}))) as
-      GoogleAccessibleCustomersResponse;
-
-    if (!response.ok) {
-      return res.status(response.status).json(data);
+        accounts: [],
+        warnings: discovery.warnings,
+      });
     }
 
-    const resourceNames = Array.isArray(data.resourceNames)
-      ? data.resourceNames
-      : [];
-
-    await saveProviderAccounts(
-      userId,
-      "googleAds",
-      resourceNames
-    );
-
-    return res.json({
-      message: "Google Ads account discovery successful.",
-      accessibleCustomers: data,
+    return res.status(200).json({
+      success: true,
+      connected: true,
+      status: discovery.warnings.length > 0 ? "partial" : "success",
+      hasAccounts: true,
+      accountCount: discovery.accounts.length,
+      message:
+        discovery.warnings.length > 0
+          ? "Google Ads accounts were discovered, but some account details or manager clients could not be loaded."
+          : "Google Ads account discovery successful.",
+      accessibleCustomers: {
+        resourceNames: discovery.accessibleCustomerResourceNames,
+      },
+      managerAccountsExpanded: discovery.managerAccountsExpanded,
+      accounts: discovery.accounts,
+      warnings: discovery.warnings,
     });
   } catch (error) {
     console.error("Google Ads account discovery error:", error);
 
     return res.status(500).json({
+      success: false,
+      connected: true,
+      status: "discovery_error",
       message:
         error instanceof Error
           ? error.message
@@ -752,5 +1099,6 @@ router.get("/meta/accounts", async (req, res) => {
     });
   }
 });
+
 
 export default router;

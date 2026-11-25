@@ -90,6 +90,11 @@ import {
 } from "@mui/material";
 
 import { googleAdsLookups } from "@/lib/googleAdsLookups";
+import { fetchCampaignCapabilityRegistry } from "@/lib/campaign-capabilities-api";
+import {
+  formatCapabilityStatus,
+  type CampaignCapabilityRegistry,
+} from "@/interfaces/campaign-capability.interface";
 import Popper from "@mui/material/Popper";
 import Fade from "@mui/material/Fade";
 import { useRef, useState } from "react";
@@ -1687,6 +1692,40 @@ function getHotelCenterLinkId(link: GoogleHotelCenterLink): string {
 
 export default function CreateCampaignPage() {
   const { getToken, isLoaded, isSignedIn } = useAuth();
+  const [campaignCapabilityRegistry, setCampaignCapabilityRegistry] =
+    useState<CampaignCapabilityRegistry | null>(null);
+  const [campaignCapabilityRegistryError, setCampaignCapabilityRegistryError] =
+    useState("");
+  const [campaignCapabilityRegistryLoading, setCampaignCapabilityRegistryLoading] =
+    useState(false);
+
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn) return;
+
+    const controller = new AbortController();
+    setCampaignCapabilityRegistryLoading(true);
+    setCampaignCapabilityRegistryError("");
+
+    fetchCampaignCapabilityRegistry(controller.signal)
+      .then((registry) => {
+        setCampaignCapabilityRegistry(registry);
+      })
+      .catch((error: unknown) => {
+        if (controller.signal.aborted) return;
+        setCampaignCapabilityRegistryError(
+          error instanceof Error
+            ? error.message
+            : "Unable to load campaign capability information.",
+        );
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setCampaignCapabilityRegistryLoading(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [isLoaded, isSignedIn]);
   const [googleLocationOptionsOpen, setGoogleLocationOptionsOpen] =
     useState(false);
   const [connections, setConnections] = useState<any>({
@@ -3549,6 +3588,18 @@ useEffect(() => {
     availableGooglePerformanceGoals.find(
       (item) => item.value === effectiveGooglePerformanceGoal,
     ) || null;
+  const selectedGoogleCampaignCapability =
+    campaignCapabilityRegistry?.providers
+      .find((provider) => provider.provider === "googleAds")
+      ?.campaignTypes.find(
+        (capability) => capability.builderCampaignType === googleCampaignType,
+      ) ?? null;
+  const selectedMetaCampaignCapability =
+    campaignCapabilityRegistry?.providers
+      .find((provider) => provider.provider === "metaAds")
+      ?.campaignTypes.find(
+        (capability) => capability.builderCampaignType === "CAMPAIGN",
+      ) ?? null;
   const availableGoogleBiddingModes: GoogleBiddingMode[] =
     googleCampaignType === "SEARCH"
       ? ["AUTOMATED", "MANUAL_CPC"]
@@ -11288,6 +11339,40 @@ const handleRegisterGoogleMerchantCenter = async () => {
                       </option>
                     ))}
                   </select>
+                  {campaignCapabilityRegistryLoading && (
+                    <p className="mt-2 text-xs text-slate-500">
+                      Loading campaign capability status...
+                    </p>
+                  )}
+                  {selectedGoogleCampaignCapability && (
+                    <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs leading-5 text-slate-700">
+                      <p className="font-semibold">
+                        Registry status: {formatCapabilityStatus(
+                          selectedGoogleCampaignCapability.operations.create?.status,
+                        )}
+                      </p>
+                      <p className="mt-1">
+                        {selectedGoogleCampaignCapability.operations.create?.summary}
+                      </p>
+                      {selectedGoogleCampaignCapability.operations.create?.limitations?.map(
+                        (limitation) => (
+                          <p key={limitation} className="mt-1 text-amber-800">
+                            • {limitation}
+                          </p>
+                        ),
+                      )}
+                      {selectedGoogleCampaignCapability.migration?.message && (
+                        <p className="mt-2 border-t border-slate-200 pt-2 text-slate-600">
+                          {selectedGoogleCampaignCapability.migration.message}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                  {campaignCapabilityRegistryError && (
+                    <p className="mt-2 text-xs text-amber-700">
+                      Capability status could not be loaded: {campaignCapabilityRegistryError}
+                    </p>
+                  )}
                 </div>
                 {googleCampaignType !== "APP" &&
                   googleCampaignType !== "HOTEL" && (
@@ -13051,6 +13136,23 @@ googleMerchantCenterProducts.length > 0 ? (
                   </p>
                 </div>
               </div>
+              {selectedMetaCampaignCapability && (
+                <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
+                  <p className="font-semibold">
+                    Registry status: {formatCapabilityStatus(
+                      selectedMetaCampaignCapability.operations.create?.status,
+                    )}
+                  </p>
+                  <p className="mt-1">
+                    {selectedMetaCampaignCapability.operations.create?.summary}
+                  </p>
+                  {selectedMetaCampaignCapability.operations.create?.limitations?.map(
+                    (limitation) => (
+                      <p key={limitation} className="mt-1">• {limitation}</p>
+                    ),
+                  )}
+                </div>
+              )}
               {!objective ? (
                 <p className="mt-5 rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
                   Choose a shared campaign objective in Campaign Basics first.

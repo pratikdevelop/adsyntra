@@ -2396,6 +2396,10 @@ export async function generateCreativeVariations(
         brandIdentity: campaignTargetMode
             ? {
                 businessName,
+                // Keep the generated response aligned with CreativeBrandIdentity.
+                // This value records that the identity came from the user; it is
+                // not a claim that the business or website was independently verified.
+                source: "USER_INPUT",
                 ...(body.brandContext?.websiteUrl?.trim()
                     ? { websiteUrl: body.brandContext.websiteUrl.trim() }
                     : {}),

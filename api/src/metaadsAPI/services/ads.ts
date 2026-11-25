@@ -176,7 +176,7 @@ export class MetaAdsServiceError extends Error {
 /* Constants and helpers                                                      */
 /* -------------------------------------------------------------------------- */
 
-const DEFAULT_API_VERSION = process.env.META_GRAPH_API_VERSION || "v25.0";
+const DEFAULT_API_VERSION = process.env.META_GRAPH_API_VERSION || "v26.0";
 const DEFAULT_AD_FIELDS = [
     "id",
     "name",

@@ -1,7 +1,7 @@
 # AdSyntra — Pending Features & Implementation Gaps
 
-**Audit date:** 24 November 2026  
-**Audit basis:** `AdSyntra-project(1).zip` supplied in this conversation  
+**Audit date:** 25 November 2026  
+**Audit basis:** `AdSyntra.zip` supplied in this conversation, plus the Campaign Capability Registry Phase 1 integration prepared from that source snapshot  
 **Scope:** Existing frontend, backend routes/services, campaign creation wizard, project notes and included research documents.  
 **Purpose:** Keep a reliable list of what is complete, what exists only partially, what is not implemented, and what should receive priority later. This is a source-code audit, not a live API certification.
 
@@ -15,13 +15,13 @@ The main risk is no longer simply “missing modules”. Several screens expose 
 
 1. **Meta Ad Creative has a hard-coded existing-post fallback.** In `api/src/metaadsAPI/services/campaign-creation.ts`, the creative service assigns an existing Page post ID when the request does not provide one. This makes the normal new-creative path unreachable by default. Fix this before relying on live Meta creative creation.
 2. **Google's global campaign creation route only dispatches Search, Display and Performance Max.** Other visible or partially prepared campaign types are rejected by the global execution route. Some lower-level Demand Gen helpers exist, but that is not a complete campaign workflow.
-3. **Google Proximity Radius Targeting is not present in the current source.** Pass 4.1A and 4.1B are present; Pass 4.1C remains pending.
+3. **Google Proximity Radius Targeting is now present in the supplied source.** The API route, Search / Display / Performance Max target mapping and campaign-wizard radius controls are present. The user confirmed the integrated radius input works. A Google Ads validate-only or live provider call is not evidenced by this source audit.
 4. **Meta Catalog and Product Set lookup routes exist in the backend, but the Campaign Creation page does not yet call them.** The selector workflow is therefore incomplete.
 5. **Meta video and carousel controls are visible in the form, but the current Meta Ad Creative service only models an image/link creative or an existing post.** Video, carousel and catalog creative execution need complete provider-native workflows or must be disabled for live submission until implemented.
-6. **Automated tests are absent from the supplied source snapshot.** No `*.test.*` / `*.spec.*` files were found, and neither package has a test script.
+6. **Automated test coverage remains limited.** Campaign Capability Registry Phase 1 adds a focused API registry test file and `test:capabilities` script. The broader campaign, provider mutation, retry and frontend flows still lack a comprehensive automated test suite.
 7. **Google Ads API versions are inconsistent across code paths.** The shared utility hard-codes v25 while the newer campaign-creation service defaults to v26.
 
-The immediate agreed next feature can still be **Pass 4.1C — Google Proximity Radius Targeting**. The Meta creative blocker is a separate high-priority item and does not prevent continuing the Google targeting work.
+Pass 4.1C is now treated as **DONE / USER CONFIRMED**. Campaign Capability Registry Phase 1 has been added as a read-only backend source of truth and is surfaced in the campaign wizard. Its next phase is server-side operation enforcement and fuller form-option integration. The Meta creative blocker remains a separate P0 item before relying on live Meta creative creation.
 
 > **Document status: DRAFT FOR SENIOR REVIEW**  
 > The implementation findings below are based on a static review of the supplied project ZIP. The proposed priorities and implementation order are recommendations for discussion, not approved commitments. Please validate them against the product's MVP goals, business impact, engineering risk, provider constraints and release plans before work is scheduled.
@@ -170,12 +170,13 @@ These were also tested in earlier work discussions. Keep them as existing functi
 |---|---|---|
 | 4.1A — Meta location exclusions | DONE / USER CONFIRMED | Include/exclude location handling and excluded geography are present in the current wizard. |
 | 4.1B — Google location exclusions | DONE / USER CONFIRMED | Google location targets carry `negative` flags; Search, Display and Performance Max payload paths include structured location targets. |
-| 4.1C — Google Proximity Radius Targeting | NOT IMPLEMENTED | No Google proximity/radius fields, input types, UI state, route mapping or `ProximityInfo` mutation construction were found in the supplied project source. |
+| 4.1C — Google Proximity Radius Targeting | DONE / USER CONFIRMED | The supplied source contains the proximity target input, radius UI state, validation, Search / Display / Performance Max mutation mapping and route handling. The user confirmed the radius input works. Google provider validate-only/live execution remains a separate verification step. |
 
 ### 3.5 Other existing modules
 
 | Module | Current status | What is present |
 |---|---|---|
+| Campaign Capability Registry | PHASE 1 IMPLEMENTED IN SOURCE; runtime verification pending | Backend registry types/data/lookups, authenticated API endpoints and Next.js proxy are present. The campaign wizard displays the selected type status. Server-side create-operation enforcement and comprehensive capability-driven option/gating integration are still pending. The existing creative-specific registry was preserved. |
 | Asset Library | IMPLEMENTED IN SOURCE | Local image/video/text assets, listing, preview/content retrieval, review, update and delete routes; provider asset listing routes also exist. |
 | AI Creative | PARTIAL | Copy and image-generation foundations exist. Video generation is explicitly rejected by the AI creative service as not available yet. |
 | Audiences | PARTIAL | Audience overview plus Google User List/reusable audience creation and Meta website Custom Audience creation are present. Broader lifecycle/Lookalike workflows are not complete. |
@@ -243,7 +244,9 @@ The current Meta creative service does not accept a video ID, carousel card coll
 - Hotel — linked Hotel Center prerequisite, eligible property inventory, hotel ad group/ad resources and account allowlisting.
 - Any other type visible in the UI or capability registry but not dispatched by the global route.
 
-**Required work:** Maintain one authoritative provider capability registry shared by UI and backend. Show a campaign type as live-creatable only when its full resource hierarchy, validation and route dispatch are connected. Preview-only types must be labelled clearly.
+**Capability Registry Phase 1:** Implemented in source under `api/src/campaign-capabilities/`, mounted through `GET /api/campaign-capabilities`, proxied by `frontend/src/app/api/campaign-capabilities`, and displayed in the Campaign Creation wizard. The existing frontend `campaign-capability-registry.ts` remains the creative media/text requirements registry and was not overwritten.
+
+**Remaining work:** Enforce operation eligibility on the backend before campaign persistence/mutation, make the campaign wizard options and live/preview modes consume the registry, add account-specific prerequisite checks, and test each provider flow. The current Phase 1 registry is informational; it does not yet block unsupported create requests.
 
 ### GOOGLE-02 — Complete Google targeting coverage beyond location include/exclude
 
@@ -480,30 +483,31 @@ These are valid future product features, but they should not interrupt the curre
 
 ## 6. Recommended implementation order
 
-This is the suggested order based on dependencies and risk. It is a proposal for senior review, not a final approved roadmap. It does not mean every item must be completed before the next independent pass.
+This sequence reflects the current project source and the agreed product direction as of 25 November 2026. It is a practical dependency order, not a requirement to stop all parallel work.
 
-| Order | Work item | Priority | Reason |
+| Order | Work item | Priority | Reason / status |
 |---:|---|---|---|
-| 1 | Continue **Pass 4.1C — Google Proximity Radius Targeting** | P1 / next agreed pass | It is the next geographic-targeting task and does not depend on Meta creative work. |
-| 2 | Fix **META-01** hard-coded existing-post fallback | P0 | Prevents the normal new Meta creative path from operating as intended. |
-| 3 | Add server/UI campaign capability gates for Google and Meta formats | P0/P1 | Prevents unsupported campaign types and creative formats from appearing live-ready. |
-| 4 | Complete Meta single-image live path, then video and carousel pipelines | P1 | Align the actual backend with the visible creative form. |
-| 5 | Connect Meta Catalog and Product Set selectors | P1 | Backend routes already exist; complete the missing frontend and campaign attachment path. |
-| 6 | Correct Meta placement catalogue and add distinct Advantage+ Audience controls | P1 | Remove stale/free-text values and apply objective/format/version constraints. |
-| 7 | Unblock Google Merchant Center and verify feed/product lookups; verify Hotel Center separately | P1 / external | Requires website verification, Merchant API registration, linked provider accounts and eligibility. |
-| 8 | Complete Google Demand Gen, Shopping, App and Hotel execution workflows one by one | P1/P2 | Separate campaign hierarchies and prerequisites; do not treat one generic flow as sufficient. |
-| 9 | Add ad-level management actions | P1/P2 | The current Ads API route family is read-oriented. |
-| 10 | Complete conversion event delivery and advanced audience workflows | P2 | Build on the existing conversion and audience foundations. |
-| 11 | Add automated tests, route smoke tests and release checks continuously | P0/P1 | Required while each item is implemented, not only at the end. |
-| 12 | Complete production security, reporting accuracy and billing account-matrix checks | P0/P1/P2 by area | Needed before any wider external release. |
+| 1 | **Campaign Capability Registry — Phase 1** | DONE IN SOURCE | Static provider/type capability definitions, authenticated read API, frontend proxy and wizard status display are prepared. Full builds and runtime endpoint checks remain pending. |
+| 2 | **Campaign Capability Registry — Phase 2: execution gates** | P0/P1 | Make backend campaign creation reject unsupported operations before persisting/mutating; drive preview/live availability and form options from the registry; add account-specific prerequisite checks. |
+| 3 | **Migration Center foundation** | P1 | Build migration assessment, eligibility, prerequisite and guidance screens. Do not claim Google native migration tools are API-callable, and do not claim performance-history transfer for an AdSyntra rebuild. |
+| 4 | **Destination campaign support: Demand Gen and Search for Travel** | P1 | Complete target campaign hierarchies and creation/editing/targeting/assets/reporting as appropriate before offering API-assisted migrations. Keep Hotel Center requirements separate. |
+| 5 | **Unified Campaign Creation Field Research phases** | P1 | Complete account-safe selectors, identity/measurement, commerce, targeting/delivery, creative resource integration and execution release gates. Skip work already completed, including Pass 4.1A/B/C. |
+| 6 | Fix **META-01** hard-coded existing-post fallback and verify Meta single-image creation | P0 | The known creative issue must be fixed before relying on live Meta creative creation. It does not need to block independent registry foundation work. |
+| 7 | Complete Meta video, carousel and Catalog / Product Set pipelines | P1 | Keep each format and product-set path tied to a complete typed backend workflow; do not expose incomplete formats as live-ready. |
+| 8 | Correct Meta placement catalogue and add distinct Advantage+ Audience controls | P1 | Use the v26.0 catalogue, remove incompatible Explore manual placement and apply objective/format compatibility checks. |
+| 9 | Unblock Google Merchant Center and verify feed/product lookups; verify Hotel Center separately | P1 / external | Requires website verification, Merchant API registration, linked provider accounts and eligibility. |
+| 10 | Add ad-level management actions | P1/P2 | The current Ads API route family is read-oriented. |
+| 11 | Complete conversion event delivery and advanced audience workflows | P2 | Build on the existing conversion and audience foundations. |
+| 12 | Add automated tests, route smoke tests and release checks continuously | P0/P1 | Registry-focused tests now exist; add campaign execution, provider validation, partial-failure, retry and duplicate-prevention tests. |
+| 13 | Complete production security, reporting accuracy and billing account-matrix checks | P0/P1/P2 by area | Needed before any wider external release. |
 
-**Important:** The P0 Meta creative issue must be fixed before relying on a live Meta ad creation test. It does not need to block the independent Google Pass 4.1C work.
+**Important:** Registry status `IMPLEMENTED_IN_SOURCE` means the source path exists; it does not certify live provider behaviour, account eligibility or production readiness. The Meta creative blocker remains a release gate for the affected live creative path. For migration, assessment/guidance may be built before destination campaign workflows, but automated rebuild execution must wait until each destination type is complete and tested.
 
 ---
 
 ## 7. Documentation that should be kept in sync
 
-The following documents predate some of the current code and should not be used as the only status source:
+The following documents predate some of the current code and should not be used as the only status source. The new Campaign Capability Registry is also a source-code status snapshot, not runtime certification:
 
 - `docs/ADSyntra_Campaign_Creation_Google_Meta_Unified_Field_Research.md` (20 November 2026) still describes several Meta selectors as disconnected, while the current 24 November campaign page now calls Page, Pixel, event, Custom Conversion, Instant Form, messaging, application, Custom/Saved Audience, location and detailed-targeting lookups.
 - `docs/unified_ads_platform_project_notes.md` contains the earlier prototype-first decision and V4 status. The current ZIP now has substantial API-backed product modules; update the project direction/status sections when the user confirms the current product milestone.
@@ -516,8 +520,8 @@ Update this backlog when a feature is genuinely completed and tested. Record the
 
 ## 8. Audit limitations
 
-- The ZIP was inspected statically; no source files in the user's local project were modified.
-- No `npm install`, frontend build, API typecheck, lint run or automated test run was performed during this audit.
+- The original user ZIP and local working project were not modified in place; the Phase 1 integration files are supplied as a separate overlay bundle.
+- The new registry core passed an isolated TypeScript compile and smoke assertions, and all changed TS/TSX files passed TypeScript syntax transpilation. A full API typecheck, frontend build, lint run and the package `test:capabilities` command were not run because project dependencies were not installed in this inspection environment.
 - No OAuth flow, live lookup, validate-only call or campaign mutation was executed.
 - Provider permissions, account eligibility, Google Merchant API registration, Hotel Center allowlisting and the accuracy of live reporting still require authorized runtime verification.
 - File presence and TypeScript structure were used to classify implementation status; they are not treated as proof of production readiness.

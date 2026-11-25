@@ -8,7 +8,8 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
-    "pack:source": "git archive --format=zip --output=source-only.zip HEAD"
+    "pack:source": "git archive --format=zip --output=source-only.zip HEAD",
+    "test:capabilities": "tsx --test src/campaign-capabilities/campaign-capability.registry.test.ts"
   },
   "keywords": [],
   "author": "",

@@ -1,5 +1,5 @@
 /**
- * Shared Google Ads API v25 campaign bidding configuration.
+ * Shared Google Ads API v26 campaign bidding configuration.
  *
  * This helper builds the campaign-level `campaign_bidding_strategy` fields.
  * It does not create or assign portfolio BiddingStrategy resources; those are

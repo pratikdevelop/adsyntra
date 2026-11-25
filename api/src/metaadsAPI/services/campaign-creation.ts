@@ -2844,7 +2844,7 @@ export async function createMetaAdsAdCreative(
   // 5. Validate image and destination
   // Existing-post creatives do not require a new image or destination URL.
   // const existingPostId = input.existingPostId?.trim();
-  const existingPostId = input.existingPostId?.trim() || "1383140784881581_122114448579513879".trim();
+  const existingPostId = input.existingPostId?.trim();
 
   let imageUrl;
   let imageHash: string | undefined;

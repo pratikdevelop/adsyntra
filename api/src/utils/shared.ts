@@ -1,6 +1,6 @@
 import { type Response } from 'express'
 import { getProviderAccessToken } from "../../utils/provider-token.utils.js";
-export const GOOGLE_ADS_API_VERSION = "v25";
+export const GOOGLE_ADS_API_VERSION = "v26";
 export const GOOGLE_ADS_BASE_URL =
     `https://googleads.googleapis.com/${GOOGLE_ADS_API_VERSION}/customers`;
 

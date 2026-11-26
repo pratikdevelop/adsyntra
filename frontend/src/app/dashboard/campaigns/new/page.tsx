@@ -5450,7 +5450,39 @@ useEffect(() => {
     return true;
   };
 
+  const validateMetaPageIdentityStep = (): boolean => {
+    if (!selectedPlatforms.includes("metaAds")) {
+      return true;
+    }
 
+    const pageId = metaPageId.trim();
+
+    // Check that the user selected a real Facebook Page.
+    if (
+      !isRealMetaId(pageId) ||
+      !selectedPage ||
+      selectedPage.id !== pageId
+    ) {
+      setError(
+        "Select a Facebook Page returned by your connected Meta account.",
+      );
+      return false;
+    }
+
+    // Check that the selected Page has advertising permission.
+    if (
+      selectedPage.tasks?.length &&
+      !selectedPage.tasks.includes("ADVERTISE")
+    ) {
+      setError(
+        "The selected Facebook Page does not include the ADVERTISE task. Choose a Page with advertising access.",
+      );
+      return false;
+    }
+
+    setError("");
+    return true;
+  };
 
   const validatePlatformSettings = () => {
     if (
@@ -5913,95 +5945,10 @@ useEffect(() => {
         setError("Included and excluded city radius values must be greater than zero.");
         return false;
       }
-      const metaObjective = metaObjectiveMap[objective];
+      // Account currency belongs to Platform Settings (Step 2).
+      // Meta Pixel / conversion validation is handled in Ad Set setup (Step 3).
+      // Page identity and creative media validation are handled in Ad Creation (Step 4).
       const metaCurrency = selectedCurrency(connections.metaAds);
-
-      const pageId = metaPageId.trim();
-      const instagramActorId = metaInstagramActorId.trim();
-
-      const hasRealPageId = isRealMetaId(pageId);
-      const hasRealInstagramActorId = isRealMetaId(instagramActorId);
-
-      const metaDestination = metaDestinationUrl.trim() || websiteUrl.trim();
-      const metaImageUrl = metaCreativeImageUrl.trim();
-
-      const metaPixel = metaPixelId.trim();
-      const metaConversionEventValue = metaConversionEvent.trim();
-
-      const hasRealPixel = isRealMetaId(metaPixel);
-
-      const requiresWebsiteConversionPixel = [
-        "OFFSITE_CONVERSIONS",
-        "VALUE",
-      ].includes(effectiveMetaOptimizationGoal);
-
-      const isHttpsUrl = (value: string) => {
-        try {
-          return new URL(value).protocol === "https:";
-        } catch {
-          return false;
-        }
-      };
-
-      if (step === 3 && !hasRealPageId) {
-        setError(
-          "Select a Facebook Page returned by your connected Meta account.",
-        );
-        return false;
-      }
-
-      const selectedMetaCustomConversion =
-        metaCustomConversionOptions.find(
-          (conversion) =>
-            conversion.id === metaCustomConversionId,
-        );
-
-      const hasValidMetaCustomConversion = Boolean(
-        selectedMetaCustomConversion &&
-        !selectedMetaCustomConversion.isArchived &&
-        !selectedMetaCustomConversion.isUnavailable &&
-        selectedMetaCustomConversion.sourcePixelId ===
-        metaPixel,
-      );
-
-      if (
-        metaCustomConversionId &&
-        !hasValidMetaCustomConversion
-      ) {
-        setError(
-          "The selected Meta Custom Conversion is unavailable or does not belong to the selected Pixel. Select another conversion.",
-        );
-        return false;
-      }
-      const selectedPage = metaPageOptions.find((page) => page.id === pageId);
-
-      if (
-        selectedPage?.tasks?.length &&
-        !selectedPage.tasks.includes("ADVERTISE")
-      ) {
-        setError(
-          "The selected Facebook Page does not include the ADVERTISE task. Choose a Page with advertising access.",
-        );
-        return false;
-      }
-      if (instagramActorId && !hasRealInstagramActorId) {
-        setError(
-          "Choose the Instagram professional account linked to the selected Facebook Page.",
-        );
-        return false;
-      }
-
-      if (
-        step === 3 &&
-        requiresWebsiteConversionPixel &&
-        !hasValidMetaCustomConversion &&
-        (!hasRealPixel || !metaConversionEventValue)
-      ) {
-        setError(
-          "Website conversion optimization requires either a valid Pixel with a standard conversion event or an available Custom Conversion.",
-        );
-        return false;
-      }
       if (!/^[A-Z]{3}$/.test(metaCurrency)) {
         setError(
           "Unable to determine a valid three-letter currency for the selected Meta account.",
@@ -6009,21 +5956,8 @@ useEffect(() => {
         return false;
       }
 
-      if (
-        metaCreativeFormat === "SINGLE_IMAGE" &&
-        !selectedMetaPrivateImageAsset &&
-        !isHttpsUrl(metaImageUrl)
-      ) {
-        setError("Choose an image from the Asset Library or enter a valid HTTPS image URL for the Meta creative.");
-        return false;
-      }
-
-      if (!isHttpsUrl(metaDestination)) {
-        setError(
-          "Enter a valid HTTPS URL for the Meta website destination.",
-        );
-        return false;
-      }
+      // Creative image/video and destination URL checks are intentionally
+      // deferred to validateAdCreation() (Step 4).
       const metaBudgetAmount =
         metaBudgetMode === "DAILY"
           ? Number(metaDailyBudget)
@@ -6131,9 +6065,48 @@ useEffect(() => {
       }
     }
 
-    if (selectedPlatforms.includes("metaAds") && !metaAdSetName.trim()) {
-      setError("Enter a Meta Ad Set name.");
-      return false;
+    if (selectedPlatforms.includes("metaAds")) {
+      if (!metaAdSetName.trim()) {
+        setError("Enter a Meta Ad Set name.");
+        return false;
+      }
+
+      const metaPixel = metaPixelId.trim();
+      const metaConversionEventValue = metaConversionEvent.trim();
+      const selectedMetaCustomConversion =
+        metaCustomConversionOptions.find(
+          (conversion) => conversion.id === metaCustomConversionId,
+        );
+      const hasValidMetaCustomConversion = Boolean(
+        selectedMetaCustomConversion &&
+        !selectedMetaCustomConversion.isArchived &&
+        !selectedMetaCustomConversion.isUnavailable &&
+        selectedMetaCustomConversion.sourcePixelId === metaPixel,
+      );
+
+      if (metaCustomConversionId && !hasValidMetaCustomConversion) {
+        setError(
+          "The selected Meta Custom Conversion is unavailable or does not belong to the selected Pixel. Select another conversion.",
+        );
+        return false;
+      }
+
+      const requiresWebsiteConversionPixel = [
+        "OFFSITE_CONVERSIONS",
+        "VALUE",
+      ].includes(effectiveMetaOptimizationGoal);
+
+      if (
+        metaDestinationType === "WEBSITE" &&
+        requiresWebsiteConversionPixel &&
+        !hasValidMetaCustomConversion &&
+        (!isRealMetaId(metaPixel) || !metaConversionEventValue)
+      ) {
+        setError(
+          "Website conversion optimization requires either a valid Pixel with a standard conversion event or an available Custom Conversion.",
+        );
+        return false;
+      }
     }
 
     setError("");
@@ -6535,8 +6508,31 @@ useEffect(() => {
     }
 
     if (selectedPlatforms.includes("metaAds")) {
-      if (!metaPageId.trim() || !metaPageOptions.some((page) => page.id === metaPageId)) {
+      const selectedPageForCreative = metaPageOptions.find(
+        (page) => page.id === metaPageId.trim(),
+      );
+      if (!metaPageId.trim() || !selectedPageForCreative) {
         setError("Select a Facebook Page available to your connected Meta account.");
+        return false;
+      }
+      if (
+        selectedPageForCreative.tasks?.length &&
+        !selectedPageForCreative.tasks.includes("ADVERTISE")
+      ) {
+        setError(
+          "The selected Facebook Page does not include the ADVERTISE task. Choose a Page with advertising access.",
+        );
+        return false;
+      }
+      const instagramActorId = metaInstagramActorId.trim();
+      if (
+        instagramActorId &&
+        (!isRealMetaId(instagramActorId) ||
+          instagramActorId !== selectedPageForCreative.instagram_business_account?.id)
+      ) {
+        setError(
+          "Choose the Instagram professional account linked to the selected Facebook Page.",
+        );
         return false;
       }
       if (metaDestinationType === "APP" && objective !== "APP_PROMOTION") {
@@ -6549,33 +6545,7 @@ useEffect(() => {
         setError("Instant Form destination requires the Leads objective.");
         return false;
       }
-      const stepCustomConversion =
-        metaCustomConversionOptions.find(
-          (conversion) =>
-            conversion.id === metaCustomConversionId,
-        );
-
-      const hasValidStepCustomConversion = Boolean(
-        stepCustomConversion &&
-        !stepCustomConversion.isArchived &&
-        !stepCustomConversion.isUnavailable &&
-        stepCustomConversion.sourcePixelId ===
-        metaPixelId.trim(),
-      );
-
-      if (
-        metaDestinationType === "WEBSITE" &&
-        ["OFFSITE_CONVERSIONS", "VALUE"].includes(
-          effectiveMetaOptimizationGoal,
-        ) &&
-        !hasValidStepCustomConversion &&
-        (!metaPixelId.trim() || !metaConversionEvent.trim())
-      ) {
-        setError(
-          "Website conversion optimization requires either a Pixel with a standard event or an available Custom Conversion.",
-        );
-        return false;
-      }
+      // Pixel / conversion selection is validated in Step 3 with the Ad Set fields.
       if (!metaPrimaryText.trim() || !metaAdHeadline.trim()) {
         setError("Enter the Meta ad primary text and headline.");
         return false;

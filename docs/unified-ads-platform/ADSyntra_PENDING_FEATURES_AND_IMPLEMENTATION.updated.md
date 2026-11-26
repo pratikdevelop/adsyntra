@@ -13,15 +13,15 @@ The current project is more advanced than the October and November 20 research n
 
 The main risk is no longer simply “missing modules”. Several screens expose more functionality than the live provider execution path can safely deliver. The Campaign Capability Registry is being extended in incremental phases. The user has directed that feature development continue without per-phase testing cycles; consolidated test/build/provider verification will occur when the product feature set is complete. The most important examples are:
 
-1. **Meta Ad Creative has a hard-coded existing-post fallback.** In `api/src/metaadsAPI/services/campaign-creation.ts`, the creative service assigns an existing Page post ID when the request does not provide one. This makes the normal new-creative path unreachable by default. Fix this before relying on live Meta creative creation.
+1. **META-01 was a source blocker in the original supplied ZIP; a correction is now prepared.** Phase 2C2B2 removes the implicit existing-Page-post fallback, fixes supplied image URL validation, and keeps existing-post mode explicit. The latest standalone creative service reflects the prepared correction; local integration and final provider verification remain unconfirmed.
 2. **Google's global campaign creation route only dispatches Search, Display and Performance Max.** Other visible or partially prepared campaign types are rejected by the global execution route. Some lower-level Demand Gen helpers exist, but that is not a complete campaign workflow.
 3. **Google Proximity Radius Targeting is now present in the supplied source.** The API route, Search / Display / Performance Max target mapping and campaign-wizard radius controls are present. The user confirmed the integrated radius input works. A Google Ads validate-only or live provider call is not evidenced by this source audit.
-4. **Meta Catalog and Product Set lookup routes exist in the backend, and the Phase 2B2 overlay now connects the wizard to those account-scoped routes.** The selectors remain discovery-only; native Catalog/Dynamic Product Ad creation is still incomplete.
-5. **Meta video and carousel controls are visible in the form, but the current Meta Ad Creative service only models an image/link creative or an existing post.** Video, carousel and catalog creative execution need complete provider-native workflows or must be disabled for live submission until implemented.
+4. **Meta Catalog and Product Set discovery exists, but native Catalog/Dynamic Product Ad execution is still incomplete.** Account-scoped lookup routes and wizard selectors are prepared; selected Catalog/Product Set values are not yet sent into a provider-native catalog creative workflow.
+5. **Meta creative coverage is being added in staged source slices.** Single Video + Website, Carousel + Website, and Instant Form + Single Image/Single Video have prepared implementations. Messaging, App and Catalog/Product Set creative execution remain open. None of these prepared source changes is provider-certified; Meta Live remains gated until consolidated product-readiness checks.
 6. **Automated test coverage remains limited.** Campaign Capability Registry Phase 1 adds a focused API registry test file and `test:capabilities` script. The broader campaign, provider mutation, retry and frontend flows still lack a comprehensive automated test suite.
 7. **Google Ads API versions are inconsistent across code paths.** The shared utility hard-codes v25 while the newer campaign-creation service defaults to v26.
 
-Pass 4.1C is treated as **DONE / USER CONFIRMED**. Campaign Capability Registry Phase 1 has been added as a read-only backend source of truth and is surfaced in the campaign wizard. Phase 2A, Phase 2B1, Phase 2B2, Phase 2C1, Phase 2C2A and Phase 2C2B1 have prepared overlays; their integration into the user's current local working tree is not confirmed here. The Meta creative blocker remains a separate P0 item before relying on live Meta creative creation.
+Pass 4.1C is treated as **DONE / USER CONFIRMED**. Campaign Capability Registry Phase 1 is user-confirmed integrated. Phase 2A, 2B1, 2B2, 2C1, 2C2A, 2C2B1, 2C2B2, 2C2B3A, 2C2B3B and 2C2B3C1 are prepared in separate incremental source deliveries; integration into the user's current local working tree is not confirmed unless separately reported. The Meta creative implementation remains gated from Live execution until final release verification.
 
 > **Document status: DRAFT FOR SENIOR REVIEW**  
 > The implementation findings below are based on a static review of the supplied project ZIP. The proposed priorities and implementation order are recommendations for discussion, not approved commitments. Please validate them against the product's MVP goals, business impact, engineering risk, provider constraints and release plans before work is scheduled.
@@ -208,26 +208,25 @@ The source previously set an existing-post ID when `input.existingPostId` was em
 - The source removes the default sample image, demo video ID and example carousel URLs from the campaign builder.
 - Keep the Meta create capability `PARTIAL` and Meta Live blocked until final validate-only, authorised live and regression checks are complete.
 
-**Acceptance criteria:** Source path prepared: no implicit existing post is used; a new creative uses the selected Page and an account-uploaded image hash or valid HTTPS image URL; create and retry both enforce Single Image + Website; an existing-post creative works only with an explicitly supplied valid post. Release acceptance remains pending consolidated final QA and authorised provider checks.
+**Acceptance criteria:** Prepared source removes implicit existing-post substitution and checks supplied image URLs correctly. The Single Image + Website path supports an account-uploaded image hash or valid HTTPS image URL. Existing-post mode is explicit opt-in. Follow-on phases extend destination/format coverage; integration and release acceptance remain pending consolidated final QA and authorised provider checks.
 
 ### META-02 — Make the creative UI match the real backend capability
 
 **Status:** PARTIAL  
 **Priority:** P0/P1  
-**Evidence:** The frontend exposes Single Image, Single Video and Carousel choices; `CreateMetaAdsAdCreativeInput` currently models image hash/URL, text, Page identity and destination URL, while `createMetaAdsAdCreative` builds a link-based image creative or an existing-post creative.
-
-The current Meta creative service does not accept a video ID, carousel card collection or catalog Product Set structure. The UI therefore offers formats which do not have a matching complete provider-native execution contract.
+**Evidence:** The original supplied source exposed Single Image, Single Video and Carousel controls without a complete matching provider-native execution contract. Subsequent prepared source slices add the explicit new-image path, private-video upload and `video_data` construction, Carousel `child_attachments`, and Page-owned Instant Form CTAs for Single Image/Single Video. The current working delivery is still a set of standalone source replacements, not a user-confirmed local integration.
 
 **Required work:**
 
-- Complete single-image creation and uploaded image-hash attachment first.
-- Implement Meta video upload, processing-status polling and `video_data` creative creation.
-- Implement ordered carousel child attachments with card-level media, headline, destination and CTA validation.
-- Implement catalog/dynamic product creative using a selected Catalog and Product Set, with the correct promoted object / creative structure.
-- Keep existing Page-post creation as a separate explicit mode.
-- Phase 2C2B2 adds a visible frontend notice and backend guards that reject Video, Carousel and non-Website destinations from the current global live create/retry path. Complete the media/destination pipelines in Phase 2C2B3 before enabling them.
+- Preserve the corrected Single Image + Website path, including private Asset Library image upload and explicit existing-Page-post mode.
+- Keep the prepared Single Video + Website upload/processing/`video_data` path and its creative retry support.
+- Keep the prepared Carousel + Website path with ordered private card images and native `child_attachments`.
+- Keep the prepared Instant Form path for Single Image and Single Video, including Page-owned form resolution, `OUTCOME_LEADS`, `LEAD_GENERATION`, `ON_AD`, Page `promoted_object` and `lead_gen_form_id` CTA mapping.
+- Implement separate Messenger, Instagram Direct and WhatsApp creative flows; do not flatten them into the Website or Instant Form payload.
+- Implement App destination creative and native Catalog/Product Set execution as separate workflows.
+- Continue to reject unsupported combinations in both the frontend and backend. Keep Meta Live gated until final consolidated release checks.
 
-**Acceptance criteria:** Each enabled format has its own typed request contract, server validation, media upload/processing path, provider creative payload, returned IDs and successful end-to-end test.
+**Acceptance criteria:** Each exposed workflow has its own typed request contract, account/Page prerequisite validation, provider-native creative payload, safe private-media upload/reuse, correct resource persistence and retry behaviour. Final provider acceptance, returned-ID verification and end-to-end tests are reserved for the consolidated product-readiness gate.
 
 ## 4.2 Google campaign-type execution coverage
 
@@ -345,7 +344,7 @@ The current Meta creative service does not accept a video ID, carousel card coll
 - `adsyntra_campaign_capability_registry_phase2c2b2_meta01.patch`
 - `CAMPAIGN_CAPABILITY_REGISTRY_PHASE2C2B2_META01_INTEGRATION_GUIDE.md`
 
-**Next slice:** CAP-02C2B3B — complete Meta Carousel provider-native card media and `child_attachments`. Single Video + Website support is prepared in CAP-02C2B3A but remains under the final verification gate.
+**Follow-on slices:** CAP-02C2B3A adds Single Video + Website; CAP-02C2B3B prepares Carousel + Website; CAP-02C2B3C1 adds Page-owned Instant Form with Single Image/Single Video. Messaging is the next destination-specific workflow. All remain subject to final consolidated verification.
 
 ### CAP-02C2B3A — Meta Single Video + Website creative pipeline
 
@@ -370,7 +369,7 @@ The current Meta creative service does not accept a video ID, carousel card coll
 - Removes the manual Meta Video ID text field; the user selects one private video from Asset Library instead.
 - Validation-only verifies the selected private file but does not upload media or create provider objects. The existing Campaign Capability Registry still marks Meta Create `PARTIAL`, so Meta Live stays blocked until the consolidated final checks pass.
 
-**Limits:** Single Video + Website only; MP4/MOV/WebM; 100 MB maximum; current private storage implementation is LOCAL. Carousel, Instant Form, Messaging and App remain blocked. This source work is not proof of Meta API acceptance or processing success. The project remains on Meta Graph API v26.0.
+**Limits for this base slice:** Single Video + Website only; MP4/MOV/WebM; 100 MB maximum; current private storage implementation is LOCAL. The later Phase 2C2B3C1 slice reuses this video upload path for Page-owned Instant Form ads. Messaging, App and Catalog/Product Set remain outside these slices. This source work is not proof of Meta API acceptance or processing success. The project remains on Meta Graph API v26.0.
 
 **Official Meta references:**
 - `https://developers.facebook.com/docs/marketing-api/reference/ad-account/advideos/v26.0` — account video upload edge and accepted upload parameters.
@@ -381,6 +380,44 @@ The current Meta creative service does not accept a video ID, carousel card coll
 - `AdSyntra_Campaign_Capability_Registry_Phase2C2B3A_Meta_Single_Video_Overlay.zip`
 - `adsyntra_campaign_capability_registry_phase2c2b3a_single_video.patch`
 - `CAMPAIGN_CAPABILITY_REGISTRY_PHASE2C2B3A_SINGLE_VIDEO_INTEGRATION_GUIDE.md`
+
+### CAP-02C2B3C1 — Meta Instant Form + Single Image/Single Video
+
+**Status:** PREPARED STANDALONE FRONTEND + API SOURCE FILES — local integration not confirmed; provider verification deferred to final product readiness  
+**Priority:** P1, with Meta Live still blocked by the consolidated release gate  
+**Prepared:** 26 November 2026  
+**API version:** Meta Graph API v26.0  
+**Testing policy:** No tests, lint, typechecks, builds or live provider calls were run for this feature pass.
+
+**Prepared standalone files:**
+- `frontend/src/app/dashboard/campaigns/new/page.tsx`
+- `api/src/routes/campaign.routes.ts`
+- `api/src/metaadsAPI/services/campaign-creation.ts`
+- Dependency: `api/src/metaadsAPI/services/meta-special-ad-category.constants.ts` (created separately to resolve a missing-module import; keep the `.js` import suffix in NodeNext TypeScript source)
+
+**Implementation prepared:**
+- Reuses the existing authenticated Page-owned Instant Form lookup. The selected form must be available, active and associated with the selected Facebook Page; no free-text form ID input is added.
+- Supports Instant Form destination with `SINGLE_IMAGE` and `SINGLE_VIDEO` only. Carousel + Instant Form remains a separate unimplemented mapping because each card needs its own form-aware CTA structure.
+- Enforces the Meta `OUTCOME_LEADS` Campaign objective and `LEAD_GENERATION` Ad Set optimization goal. The destination is mapped to `ON_AD`, and the Ad Set `promoted_object` uses the selected Facebook `page_id`.
+- Builds the Ad Creative CTA with `value.link = "https://fb.me/"` and the selected `lead_gen_form_id`. The supported CTA set is restricted to `APPLY_NOW`, `DOWNLOAD`, `GET_QUOTE`, `LEARN_MORE`, `SIGN_UP` and `SUBSCRIBE`.
+- Website URL validation is bypassed only for Instant Form. Website conversion Pixel/Custom Conversion checks remain applicable only to Website conversion destinations.
+- Single Image continues to use the private Asset Library image upload/hash path or a validated HTTPS image URL. Single Video reuses the private Asset Library video upload, processing-ready polling, thumbnail resolution and account-scoped upload reuse prepared in Phase 2C2B3A.
+- Creative retry rebuilds the effective creative config, then repeats Page/Form ownership and availability validation after overrides. Retry also checks the saved Leads objective and `LEAD_GENERATION` optimization before creating the creative.
+- The wizard keeps step-scoped validation: Campaign Basics (1), Platform Settings (2), Ad Set / structure (3), Ad Creation (4), and Review (5). Creative media and destination checks run in Step 4; final submission still validates the complete configuration.
+- Validation-only does not upload media or create external Meta Campaign, Ad Set, Ad Creative or Ad resources. A `validateOnly: true` success is local preflight success, not provider-created status.
+
+**Not included:** Messenger, Instagram Direct and WhatsApp messaging creatives; App destination; Carousel Instant Form; native Catalog/Product Set ads; broad objective × creative × placement matrix. These remain separate implementation tasks. Meta Live remains gated.
+
+**Official Meta references:**
+- `https://developers.facebook.com/docs/marketing-api/guides/lead-ads/` — Lead Ad creation and lead form CTA value structure.
+- `https://developers.facebook.com/docs/marketing-api/reference/ad-creative-object-story-spec/` — `link_data` / `video_data` creative structure.
+- `https://developers.facebook.com/docs/marketing-api/reference/adcampaigngroup/` — campaign objective and campaign resource fields.
+
+### CAP-02C2B3C2 — Meta Messaging creatives (NEXT)
+
+**Status:** PENDING DEVELOPMENT  
+**Scope:** Implement distinct Messenger, Instagram Direct and WhatsApp identity/destination paths. Use each destination's provider-native creative schema and validate the selected Page/identity, destination eligibility, objective, optimization goal, billing event and placements. Preserve separate request contracts and retry rules; never reuse Website or Instant Form CTA payloads.  
+**Next:** After Messaging, implement App destination, then Catalog/Product Set native creative execution and remaining compatibility coverage.
 
 ### CAP-02C2B1 — Meta objective/destination-aware manual placement compatibility
 
@@ -691,19 +728,22 @@ This sequence reflects the current project source and the agreed product directi
 | 5 | **Campaign Capability Registry — Phase 2C2A: Special Ad Category country mapping** | PREPARED — PENDING LOCAL INTEGRATION | Maps included campaign countries to `special_ad_category_country` on the Meta Campaign create request. |
 | 6 | **Campaign Capability Registry — Phase 2C2B1: objective/destination placement gating** | PREPARED — PENDING LOCAL INTEGRATION | Adds conservative frontend and backend manual-placement compatibility for documented Meta objective/destination combinations. |
 | 7 | **Campaign Capability Registry — Phase 2C2B2: META-01 Single Image + Website creative repair** | PREPARED — PENDING LOCAL INTEGRATION; FINAL QA PENDING | Removes the implicit existing-post fallback, corrects image URL validation and gates unsupported formats/destinations. Meta Live remains disabled. |
-| 8 | **Campaign Capability Registry — Phase 2C2B3A: Meta Single Video + Website pipeline** | PREPARED — PENDING LOCAL INTEGRATION; FINAL QA DEFERRED | Adds private Asset Library video upload, processing/thumbnail readiness, video ID persistence/reuse and `video_data` creative creation/retry. Meta Live remains gated. |
-| 9 | **Campaign Capability Registry — Phase 2C2B3B: Meta Carousel pipeline** | NEXT | Adds ordered private card media uploads and provider-native `child_attachments`; then Phase 2C2B3C handles remaining destinations and full compatibility. |
-| 3 | **Migration Center foundation** | P1 | Build migration assessment, eligibility, prerequisite and guidance screens. Do not claim Google native migration tools are API-callable, and do not claim performance-history transfer for an AdSyntra rebuild. |
-| 4 | **Destination campaign support: Demand Gen and Search for Travel** | P1 | Complete target campaign hierarchies and creation/editing/targeting/assets/reporting as appropriate before offering API-assisted migrations. Keep Hotel Center requirements separate. |
-| 5 | **Unified Campaign Creation Field Research phases** | P1 | Complete account-safe selectors, identity/measurement, commerce, targeting/delivery, creative resource integration and execution release gates. Skip work already completed, including Pass 4.1A/B/C. |
-| 6 | **FINAL RELEASE GATE — META-01** single-image creative path | P0 | Phase 2C2B2 source correction is prepared. Keep Meta Live disabled until consolidated validate-only, authorised paused live-create, resource persistence, retry and regression checks confirm the path. |
-| 7 | Complete Meta Carousel, remaining destination and Catalog / Product Set pipelines | P1 | Single Video + Website source pipeline is prepared in Phase 2C2B3A. Complete Carousel and destination-specific workflows before exposing them as live-ready. |
-| 8 | Correct Meta placement catalogue and add distinct Advantage+ Audience controls | P1 | Use the v26.0 catalogue, remove incompatible Explore manual placement and apply objective/format compatibility checks. |
-| 9 | Unblock Google Merchant Center and verify feed/product lookups; verify Hotel Center separately | P1 / external | Requires website verification, Merchant API registration, linked provider accounts and eligibility. |
-| 10 | Add ad-level management actions | P1/P2 | The current Ads API route family is read-oriented. |
-| 11 | Complete conversion event delivery and advanced audience workflows | P2 | Build on the existing conversion and audience foundations. |
-| 12 | Add automated tests, route smoke tests and release checks | P0/P1 — FINAL GATE | Capture acceptance criteria while developing; execute the consolidated suite, provider checks and regression matrix only after the planned feature set is complete. |
-| 13 | Complete production security, reporting accuracy and billing account-matrix checks | P0/P1/P2 by area | Needed before any wider external release. |
+| 8 | **Campaign Capability Registry — Phase 2C2B3A: Meta Single Video + Website** | PREPARED — PENDING LOCAL INTEGRATION; FINAL QA DEFERRED | Adds private Asset Library video upload, readiness polling, thumbnail resolution, account-scoped upload reuse and `video_data` creative create/retry. |
+| 9 | **Campaign Capability Registry — Phase 2C2B3B: Meta Carousel + Website** | PREPARED INCREMENTAL SOURCE — PENDING LOCAL INTEGRATION | Adds ordered private card media and native `link_data.child_attachments` create/retry; do not assume it is present in the current local branch until integrated. |
+| 10 | **Campaign Capability Registry — Phase 2C2B3C1: Meta Instant Form + Single Image/Video** | PREPARED STANDALONE FILES — PENDING LOCAL INTEGRATION | Reuses Page-owned forms; enforces Leads / `LEAD_GENERATION` / `ON_AD` and Page `promoted_object`; maps `lead_gen_form_id` in the CTA. |
+| 11 | **Campaign Capability Registry — Phase 2C2B3C2: Meta Messaging creatives** | NEXT | Implement separate Messenger, Instagram Direct and WhatsApp identity/destination payloads and objective/placement validation. |
+| 12 | **Campaign Capability Registry — Phase 2C2B3C3: Meta App destination** | PENDING | Implement provider-native app identity, store destination and promoted-object rules for eligible App Promotion workflows. |
+| 13 | **Native Meta Catalog / Product Set ads** | PENDING | Build provider-native Catalog/Product Set creative and promoted-object flow; current selectors remain discovery-only. |
+| 14 | **Migration Center foundation** | P1 | Build migration assessment, eligibility, prerequisite and guidance screens. Do not claim Google native migration tools are API-callable, and do not claim performance-history transfer for an AdSyntra rebuild. |
+| 15 | **Destination campaign support: Demand Gen and Search for Travel** | P1 | Complete target campaign hierarchies and creation/editing/targeting/assets/reporting as appropriate before offering API-assisted migrations. Keep Hotel Center requirements separate. |
+| 16 | **Unified Campaign Creation Field Research phases** | P1 | Complete account-safe selectors, identity/measurement, commerce, targeting/delivery, creative resource integration and execution release gates. Skip work already completed, including Pass 4.1A/B/C. |
+| 17 | **FINAL RELEASE GATE — META-01 and all Meta creative flows** | P0 | Keep Meta Live disabled until consolidated validate-only, authorised paused live-create, resource persistence, retry, permissions, and regression checks pass for every enabled destination/format. |
+| 18 | Correct Meta placement catalogue and add distinct Advantage+ Audience controls | P1 | Use the v26.0 catalogue, remove incompatible Explore manual placement and apply objective/format compatibility checks. |
+| 19 | Unblock Google Merchant Center and verify feed/product lookups; verify Hotel Center separately | P1 / external | Requires website verification, Merchant API registration, linked provider accounts and eligibility. |
+| 20 | Add ad-level management actions | P1/P2 | The current Ads API route family is read-oriented. |
+| 21 | Complete conversion event delivery and advanced audience workflows | P2 | Build on the existing conversion and audience foundations. |
+| 22 | Add automated tests, route smoke tests and release checks | P0/P1 — FINAL GATE | Capture acceptance criteria while developing; execute the consolidated suite, provider checks and regression matrix only after the planned feature set is complete. |
+| 23 | Complete production security, reporting accuracy and billing account-matrix checks | P0/P1/P2 by area | Needed before any wider external release. |
 
 **Important:** Registry status `IMPLEMENTED_IN_SOURCE` means the source path exists; it does not certify live provider behaviour, account eligibility or production readiness. The Meta creative blocker remains a release gate for the affected live creative path. For migration, assessment/guidance may be built before destination campaign workflows, but automated rebuild execution must wait until each destination type is complete and tested.
 
@@ -726,8 +766,9 @@ Update this backlog when a feature is genuinely completed and tested. Record the
 
 - The original user ZIP and local working project were not modified in place; the Phase 1 integration files are supplied as a separate overlay bundle.
 - Phase 1 was user-confirmed integrated, but exact local build/runtime output was not retained. The Phase 2A patch was prepared against the available 24 November project ZIP plus the 25 November Phase 1 overlay; the user's current local working tree was not supplied.
-- Phase 2A capability tests were transpiled and run in isolation: 15 passed. All changed TypeScript/TSX files passed syntax transpilation. A full API typecheck/build, frontend build, lint run and provider live tests were not run because project dependencies were not installed in this inspection environment.
-- No OAuth flow, live lookup, validate-only call or campaign mutation was executed.
+- Campaign Capability Registry Phase 2A previously had an isolated test run recorded in its separate delivery (15 passed); this does not replace final project validation. For all subsequent creative slices described here, tests, lint, typechecks, builds and provider calls are deliberately deferred under the user's feature-first development instruction.
+- The user's 26 November Meta backend response had `validateOnly: true`, `confirm: false`, no provider Campaign/Ad Set/Creative/Ad IDs, and `creationStatus: validated`. It confirms local validation-only completion, not provider creation.
+- No additional OAuth flow, live lookup, provider validate-only call or campaign mutation was executed for Phase 2C2B3C1.
 - Provider permissions, account eligibility, Google Merchant API registration, Hotel Center allowlisting and the accuracy of live reporting still require authorized runtime verification.
 - File presence and TypeScript structure were used to classify implementation status; they are not treated as proof of production readiness.
 

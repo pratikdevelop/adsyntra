@@ -3695,7 +3695,7 @@ router.post("/", async (req: Request, res: Response) => {
                     (reference) => reference.kind === "VIDEO",
                 );
 
-                if (selectedMetaVideos.length > 0) {
+                if (selectedMetaVideos.length > 0 && execution.validateOnly !== true && requestedMetaCreativeFormat === "SINGLE_IMAGE") {
                     throw new CampaignRequestValidationError(
                         "Video assets are not supported by the current Meta single-image creative upload flow. Select a JPEG or PNG image instead.",
                     );

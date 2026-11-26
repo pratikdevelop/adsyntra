@@ -1,0 +1,227 @@
+--- a/frontend/src/app/dashboard/campaigns/new/page.tsx
++++ b/frontend/src/app/dashboard/campaigns/new/page.tsx
+@@ -2278,9 +2278,10 @@
+   const [metaAdDescription, setMetaAdDescription] = useState(
+     "New arrivals and seasonal offers.",
+   );
+-  // No sample media URL is preselected. Require an advertiser-owned URL or
+-  // an image selected from the Asset Library before campaign submission.
++  // No sample media URL is preselected. A Meta Single Image creative can use
++  // either an advertiser-owned HTTPS URL or a private Asset Library image ID.
+   const [metaCreativeImageUrl, setMetaCreativeImageUrl] = useState("");
++  const [metaCreativeImageAssetId, setMetaCreativeImageAssetId] = useState<string | null>(null);
+   const [metaCreativeFormat, setMetaCreativeFormat] = useState<
+     "SINGLE_IMAGE" | "SINGLE_VIDEO" | "CAROUSEL"
+   >("SINGLE_IMAGE");
+@@ -2621,6 +2622,44 @@
+   const [campaignAssetAssignments, setCampaignAssetAssignments] = useState<
+     Record<string, CampaignCreativeTargetReference>
+   >({});
++  const selectedMetaPrivateImageAsset = useMemo(() => {
++    if (!metaCreativeImageAssetId || !attachedCreativeAssetIds.includes(metaCreativeImageAssetId)) {
++      return null;
++    }
++    return assetLibrary.find((asset) =>
++      asset.id === metaCreativeImageAssetId &&
++      asset.kind === "IMAGE" &&
++      Boolean(asset.contentUrl),
++    ) ?? null;
++  }, [assetLibrary, attachedCreativeAssetIds, metaCreativeImageAssetId]);
++
++  // A Meta Single Image creative uses exactly the explicitly selected private
++  // image. Other attached images remain available to their other provider
++  // targets but are not accidentally uploaded as additional Meta creatives.
++  const getCampaignAssetIntendedPlatforms = (asset: CampaignLibraryAsset) => {
++    const configuredPlatforms = asset.platformTargets?.length
++      ? asset.platformTargets
++      : selectedPlatforms;
++    const platforms = new Set([
++      ...configuredPlatforms.filter((platform) => selectedPlatforms.includes(platform)),
++      ...(campaignAssetAssignments[asset.id]?.platform
++        ? [campaignAssetAssignments[asset.id].platform]
++        : []),
++    ]);
++
++    if (
++      selectedPlatforms.includes("metaAds") &&
++      metaCreativeFormat === "SINGLE_IMAGE" &&
++      asset.kind === "IMAGE"
++    ) {
++      platforms.delete("metaAds");
++      if (asset.id === metaCreativeImageAssetId && selectedMetaPrivateImageAsset) {
++        platforms.add("metaAds");
++      }
++    }
++
++    return Array.from(platforms);
++  };
+   const [creativeStudioNotice, setCreativeStudioNotice] = useState("");
+   const [managedStatuses, setManagedStatuses] = useState<
+     Record<string, ManagedStatus>
+@@ -5977,8 +6016,12 @@
+         return false;
+       }
+ 
+-      if (!isHttpsUrl(metaImageUrl)) {
+-        setError("Enter a valid HTTPS URL for the Meta creative image.");
++      if (
++        metaCreativeFormat === "SINGLE_IMAGE" &&
++        !selectedMetaPrivateImageAsset &&
++        !isHttpsUrl(metaImageUrl)
++      ) {
++        setError("Choose an image from the Asset Library or enter a valid HTTPS image URL for the Meta creative.");
+         return false;
+       }
+ 
+@@ -6546,9 +6589,10 @@
+       }
+       if (
+         metaCreativeFormat === "SINGLE_IMAGE" &&
++        !selectedMetaPrivateImageAsset &&
+         !isValidHttpUrl(metaCreativeImageUrl)
+       ) {
+-        setError("Enter a valid image URL for the Meta single-image creative.");
++        setError("Choose an image from the Asset Library or enter a valid HTTPS image URL for the Meta single-image creative.");
+         return false;
+       }
+       if (metaCreativeFormat === "SINGLE_VIDEO") {
+@@ -6815,17 +6859,7 @@
+           prompt: asset.prompt || null,
+           textContent: asset.textContent || null,
+           aspectRatio: asset.aspectRatio || null,
+-          intendedPlatforms: Array.from(
+-            new Set([
+-              ...(asset.platformTargets?.length
+-                ? asset.platformTargets
+-                : selectedPlatforms
+-              ).filter((platform) => selectedPlatforms.includes(platform)),
+-              ...(campaignAssetAssignments[asset.id]?.platform
+-                ? [campaignAssetAssignments[asset.id].platform]
+-                : []),
+-            ]),
+-          ),
++          intendedPlatforms: getCampaignAssetIntendedPlatforms(asset),
+           approvalStatus: "APPROVED_DEMO_ASSET",
+           providerUploadRequired:
+             asset.kind !== "TEXT" && Boolean(asset.contentUrl),
+@@ -7772,17 +7806,7 @@
+         prompt: asset.prompt || null,
+         textContent: asset.textContent || null,
+         aspectRatio: asset.aspectRatio || null,
+-        intendedPlatforms: Array.from(
+-          new Set([
+-            ...(asset.platformTargets?.length
+-              ? asset.platformTargets
+-              : selectedPlatforms
+-            ).filter((platform) => selectedPlatforms.includes(platform)),
+-            ...(campaignAssetAssignments[asset.id]?.platform
+-              ? [campaignAssetAssignments[asset.id].platform]
+-              : []),
+-          ]),
+-        ),
++        intendedPlatforms: getCampaignAssetIntendedPlatforms(asset),
+         approvalStatus: "APPROVED_BY_CAMPAIGN_USER",
+         providerUploadRequired:
+           asset.kind !== "TEXT" && Boolean(asset.contentUrl),
+@@ -8796,8 +8820,12 @@
+         }
+       };
+ 
+-      if (metaCreativeFormat === "SINGLE_IMAGE" && !isHttpsUrl(metaImageUrl)) {
+-        throw new Error("Enter a valid HTTPS URL for the Meta creative image.");
++      if (
++        metaCreativeFormat === "SINGLE_IMAGE" &&
++        !selectedMetaPrivateImageAsset &&
++        !isHttpsUrl(metaImageUrl)
++      ) {
++        throw new Error("Choose an image from the Asset Library or enter a valid HTTPS image URL for the Meta creative.");
+       }
+       if (metaCreativeFormat === "SINGLE_VIDEO") {
+         const selectedPrivateMetaVideos = assetLibrary.filter((asset) =>
+@@ -8868,7 +8896,9 @@
+       if (
+         executionMode === "LIVE" &&
+         (usesExampleDomain(metaDestination) ||
+-          (metaCreativeFormat === "SINGLE_IMAGE" && usesExampleDomain(metaImageUrl)))
++          (metaCreativeFormat === "SINGLE_IMAGE" &&
++            !selectedMetaPrivateImageAsset &&
++            usesExampleDomain(metaImageUrl)))
+       ) {
+         throw new Error(
+           "Replace the example.com Meta creative and destination URLs before live execution.",
+@@ -9541,8 +9571,9 @@
+       return;
+     }
+ 
+-    const isPrivateAdSyntraAsset =
+-      Boolean(asset.contentUrl) && !asset.url.trim();
++    // contentUrl identifies an Asset Library item backed by private AdSyntra
++    // storage, even when a legacy/public URL field is also populated.
++    const isPrivateAdSyntraAsset = Boolean(asset.contentUrl);
+     if (isPrivateAdSyntraAsset) {
+       if (!["IMAGE", "LOGO", "VIDEO"].includes(asset.kind)) {
+         setAssetNotice(
+@@ -9550,11 +9581,21 @@
+         );
+         return;
+       }
++      if (target === "meta") {
++        if (asset.kind !== "IMAGE") {
++          setAssetNotice("Meta Single Image requires an IMAGE asset from the Asset Library.");
++          return;
++        }
++        setMetaCreativeImageAssetId(asset.id);
++        setMetaCreativeImageUrl("");
++      }
+       setAttachedCreativeAssetIds((current) =>
+         current.includes(asset.id) ? current : [...current, asset.id],
+       );
+       setAssetNotice(
+-        `${asset.name} is attached by its saved asset ID. It remains in private AdSyntra storage and needs the provider-specific upload step before a live ad can use it.`,
++        target === "meta"
++          ? `${asset.name} is selected for the Meta Single Image creative. AdSyntra will upload the private image to the selected Meta Ad Account during LIVE execution.`
++          : `${asset.name} is attached by its saved asset ID. It remains in private AdSyntra storage and needs the provider-specific upload step before a live ad can use it.`,
+       );
+       clearPreview();
+       return;
+@@ -9571,6 +9612,7 @@
+     switch (target) {
+       case "meta":
+         if (isImage) {
++          setMetaCreativeImageAssetId(null);
+           setMetaCreativeImageUrl(asset.url);
+           applied = true;
+         }
+@@ -17713,15 +17755,18 @@
+                   </div>
+                   {metaCreativeFormat === "SINGLE_IMAGE" && (
+                     <div>
+-                      <label className={labelClass}>Creative Image URL *</label>
++                      <label className={labelClass}>
++                        Creative Image (Asset Library or HTTPS URL) *
++                      </label>
+                       <input
+                         type="url"
+                         value={metaCreativeImageUrl}
+                         onChange={(e) => {
++                          setMetaCreativeImageAssetId(null);
+                           setMetaCreativeImageUrl(e.target.value);
+                           clearPreview();
+                         }}
+-                        placeholder="https://.../ad-image.jpg"
++                        placeholder="Optional when an Asset Library image is selected"
+                         className={inputClass}
+                       />
+                       <button
+@@ -17736,6 +17781,11 @@
+                       >
+                         Choose from Asset Library
+                       </button>
++                      {selectedMetaPrivateImageAsset && (
++                        <p className="mt-2 text-xs font-medium text-emerald-700">
++                          Selected Asset Library image: {selectedMetaPrivateImageAsset.name}
++                        </p>
++                      )}
+                     </div>
+                   )}
+                   {metaCreativeFormat === "SINGLE_VIDEO" && (

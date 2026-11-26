@@ -2278,11 +2278,11 @@ const [googleShoppingProductGroupValue, setGoogleShoppingProductGroupValue] =
   const [metaAdDescription, setMetaAdDescription] = useState(
     "New arrivals and seasonal offers.",
   );
-  // No sample media URL is preselected. Require an advertiser-owned URL or
-  // an image selected from the Asset Library before campaign submission.
+  // No sample media URL is preselected. A Meta Single Image creative can use
+  // either an advertiser-owned HTTPS URL or a private Asset Library image ID.
   const [metaCreativeImageUrl, setMetaCreativeImageUrl] = useState("");
- const [metaCreativeImageAssetId, setMetaCreativeImageAssetId] = useState<string | null>(null);
-
+  const [metaCreativeImageAssetId, setMetaCreativeImageAssetId] = useState<string | null>(null);
+  const [metaCreativeVideoAssetId, setMetaCreativeVideoAssetId] = useState<string | null>(null);
   const [metaCreativeFormat, setMetaCreativeFormat] = useState<
     "SINGLE_IMAGE" | "SINGLE_VIDEO" | "CAROUSEL"
   >("SINGLE_IMAGE");
@@ -2623,8 +2623,7 @@ const [
   const [campaignAssetAssignments, setCampaignAssetAssignments] = useState<
     Record<string, CampaignCreativeTargetReference>
   >({});
-
-   const selectedMetaPrivateImageAsset = useMemo(() => {
+  const selectedMetaPrivateImageAsset = useMemo(() => {
     if (!metaCreativeImageAssetId || !attachedCreativeAssetIds.includes(metaCreativeImageAssetId)) {
       return null;
     }
@@ -2634,6 +2633,17 @@ const [
       Boolean(asset.contentUrl),
     ) ?? null;
   }, [assetLibrary, attachedCreativeAssetIds, metaCreativeImageAssetId]);
+  const selectedMetaPrivateVideoAsset = useMemo(() => {
+    if (!metaCreativeVideoAssetId || !attachedCreativeAssetIds.includes(metaCreativeVideoAssetId)) {
+      return null;
+    }
+    return assetLibrary.find((asset) =>
+      asset.id === metaCreativeVideoAssetId &&
+      asset.kind === "VIDEO" &&
+      Boolean(asset.contentUrl) &&
+      (!asset.platformTargets?.length || asset.platformTargets.includes("metaAds")),
+    ) ?? null;
+  }, [assetLibrary, attachedCreativeAssetIds, metaCreativeVideoAssetId]);
 
   // A Meta Single Image creative uses exactly the explicitly selected private
   // image. Other attached images remain available to their other provider
@@ -2649,13 +2659,26 @@ const [
         : []),
     ]);
 
-    if (
-      selectedPlatforms.includes("metaAds") &&
-      metaCreativeFormat === "SINGLE_IMAGE" &&
-      asset.kind === "IMAGE"
-    ) {
+    if (selectedPlatforms.includes("metaAds") && asset.kind === "IMAGE") {
       platforms.delete("metaAds");
-      if (asset.id === metaCreativeImageAssetId && selectedMetaPrivateImageAsset) {
+      if (
+        metaCreativeFormat === "SINGLE_IMAGE" &&
+        asset.id === metaCreativeImageAssetId &&
+        selectedMetaPrivateImageAsset
+      ) {
+        platforms.add("metaAds");
+      }
+      // A Single Video ad must not accidentally upload any other attached
+      // images as Meta creative media. Carousel support has its own workflow.
+    }
+
+    if (selectedPlatforms.includes("metaAds") && asset.kind === "VIDEO") {
+      platforms.delete("metaAds");
+      if (
+        metaCreativeFormat === "SINGLE_VIDEO" &&
+        asset.id === metaCreativeVideoAssetId &&
+        selectedMetaPrivateVideoAsset
+      ) {
         platforms.add("metaAds");
       }
     }
@@ -5427,39 +5450,7 @@ useEffect(() => {
     return true;
   };
 
-  const validateMetaPageIdentityStep = (): boolean => {
-    if (!selectedPlatforms.includes("metaAds")) {
-      return true;
-    }
 
-    const pageId = metaPageId.trim();
-
-    // Check that the user selected a real Facebook Page.
-    if (
-      !isRealMetaId(pageId) ||
-      !selectedPage ||
-      selectedPage.id !== pageId
-    ) {
-      setError(
-        "Select a Facebook Page returned by your connected Meta account.",
-      );
-      return false;
-    }
-
-    // Check that the selected Page has advertising permission.
-    if (
-      selectedPage.tasks?.length &&
-      !selectedPage.tasks.includes("ADVERTISE")
-    ) {
-      setError(
-        "The selected Facebook Page does not include the ADVERTISE task. Choose a Page with advertising access.",
-      );
-      return false;
-    }
-
-    setError("");
-    return true;
-  };
 
   const validatePlatformSettings = () => {
     if (
@@ -6018,12 +6009,16 @@ useEffect(() => {
         return false;
       }
 
-      if (step === 3 && !isHttpsUrl(metaImageUrl)) {
-        setError("Enter a valid HTTPS URL for the Meta creative image.");
+      if (
+        metaCreativeFormat === "SINGLE_IMAGE" &&
+        !selectedMetaPrivateImageAsset &&
+        !isHttpsUrl(metaImageUrl)
+      ) {
+        setError("Choose an image from the Asset Library or enter a valid HTTPS image URL for the Meta creative.");
         return false;
       }
 
-      if (step === 3 &&  !isHttpsUrl(metaDestination)) {
+      if (!isHttpsUrl(metaDestination)) {
         setError(
           "Enter a valid HTTPS URL for the Meta website destination.",
         );
@@ -6587,24 +6582,17 @@ useEffect(() => {
       }
       if (
         metaCreativeFormat === "SINGLE_IMAGE" &&
+        !selectedMetaPrivateImageAsset &&
         !isValidHttpUrl(metaCreativeImageUrl)
       ) {
-        setError("Enter a valid image URL for the Meta single-image creative.");
+        setError("Choose an image from the Asset Library or enter a valid HTTPS image URL for the Meta single-image creative.");
         return false;
       }
-      if (metaCreativeFormat === "SINGLE_VIDEO") {
-        const selectedPrivateMetaVideos = assetLibrary.filter((asset) =>
-          attachedCreativeAssetIds.includes(asset.id) &&
-          asset.kind === "VIDEO" &&
-          Boolean(asset.contentUrl) &&
-          (!asset.platformTargets?.length || asset.platformTargets.includes("metaAds")),
+      if (metaCreativeFormat === "SINGLE_VIDEO" && !selectedMetaPrivateVideoAsset) {
+        setError(
+          "Choose one private video from the AdSyntra Asset Library for the Meta Single Video creative.",
         );
-        if (selectedPrivateMetaVideos.length !== 1) {
-          setError(
-            "Choose exactly one private video from the AdSyntra Asset Library for the Meta Single Video creative.",
-          );
-          return false;
-        }
+        return false;
       }
       if (metaCreativeFormat === "CAROUSEL") {
         const cards = metaCarouselCards
@@ -6843,43 +6831,39 @@ useEffect(() => {
       platforms: selectedPlatforms,
       creativeAssetReferences: assetLibrary
         .filter((asset) => attachedCreativeAssetIds.includes(asset.id))
-        .map((asset) => ({
-          assetId: asset.id,
-          name: asset.name,
-          kind: asset.kind,
-          sourceUrl: asset.url || null,
-          contentUrl: asset.contentUrl || null,
-          storageReference: asset.contentUrl
-            ? "ADSYNTRA_PRIVATE_STORAGE"
-            : "EXTERNAL_OR_PROVIDER_MEDIA",
-          source: asset.origin || "MANUAL",
-          prompt: asset.prompt || null,
-          textContent: asset.textContent || null,
-          aspectRatio: asset.aspectRatio || null,
-          intendedPlatforms: Array.from(
-            new Set([
-              ...(asset.platformTargets?.length
-                ? asset.platformTargets
-                : selectedPlatforms
-              ).filter((platform) => selectedPlatforms.includes(platform)),
-              ...(campaignAssetAssignments[asset.id]?.platform
-                ? [campaignAssetAssignments[asset.id].platform]
-                : []),
-            ]),
-          ),
-          approvalStatus: "APPROVED_DEMO_ASSET",
-          providerUploadRequired:
-            asset.kind !== "TEXT" && Boolean(asset.contentUrl),
-          ...(campaignAssetAssignments[asset.id]
-            ? { campaignCreativeTarget: campaignAssetAssignments[asset.id] }
-            : {}),
-          note:
-            asset.kind === "TEXT"
-              ? "Copy is stored for reuse; the selected provider copy fields are included in the campaign configuration."
-              : asset.contentUrl
-                ? "This media is in private AdSyntra storage. Resolve the asset ID, upload it to the selected provider, and use the returned provider media ID before creating the ad."
-                : "Verify this external/provider media reference and account ownership before provider mutation.",
-        })),
+        .map((asset) => {
+          const intendedPlatforms = getCampaignAssetIntendedPlatforms(asset);
+          const campaignCreativeTarget = campaignAssetAssignments[asset.id];
+          return {
+            assetId: asset.id,
+            name: asset.name,
+            kind: asset.kind,
+            sourceUrl: asset.url || null,
+            contentUrl: asset.contentUrl || null,
+            storageReference: asset.contentUrl
+              ? "ADSYNTRA_PRIVATE_STORAGE"
+              : "EXTERNAL_OR_PROVIDER_MEDIA",
+            source: asset.origin || "MANUAL",
+            prompt: asset.prompt || null,
+            textContent: asset.textContent || null,
+            aspectRatio: asset.aspectRatio || null,
+            intendedPlatforms,
+            approvalStatus: "APPROVED_DEMO_ASSET",
+            providerUploadRequired:
+              asset.kind !== "TEXT" && Boolean(asset.contentUrl),
+            ...(campaignCreativeTarget &&
+            intendedPlatforms.includes(campaignCreativeTarget.platform)
+              ? { campaignCreativeTarget }
+              : {}),
+            note:
+              asset.kind === "TEXT"
+                ? "Copy is stored for reuse; the selected provider copy fields are included in the campaign configuration."
+                : asset.contentUrl
+                  ? "This media is in private AdSyntra storage. Resolve the asset ID, upload it to the selected provider, and use the returned provider media ID before creating the ad."
+                  : "Verify this external/provider media reference and account ownership before provider mutation.",
+          };
+        })
+        .filter((assetReference) => assetReference.intendedPlatforms.length > 0),
       providerConfigurations: {
         ...(selectedPlatforms.includes("googleAds") && {
           googleAds: {
@@ -7800,40 +7784,36 @@ useEffect(() => {
     setSavedDraft(null);
     const campaignAssetReferences = assetLibrary
       .filter((asset) => attachedCreativeAssetIds.includes(asset.id))
-      .map((asset) => ({
-        assetId: asset.id,
-        name: asset.name,
-        kind: asset.kind,
-        sourceUrl: asset.url || null,
-        contentUrl: asset.contentUrl || null,
-        storageReference: asset.contentUrl
-          ? "ADSYNTRA_PRIVATE_STORAGE"
-          : "EXTERNAL_OR_PROVIDER_MEDIA",
-        source: asset.origin || "MANUAL",
-        prompt: asset.prompt || null,
-        textContent: asset.textContent || null,
-        aspectRatio: asset.aspectRatio || null,
-        intendedPlatforms: Array.from(
-          new Set([
-            ...(asset.platformTargets?.length
-              ? asset.platformTargets
-              : selectedPlatforms
-            ).filter((platform) => selectedPlatforms.includes(platform)),
-            ...(campaignAssetAssignments[asset.id]?.platform
-              ? [campaignAssetAssignments[asset.id].platform]
-              : []),
-          ]),
-        ),
-        approvalStatus: "APPROVED_BY_CAMPAIGN_USER",
-        providerUploadRequired:
-          asset.kind !== "TEXT" && Boolean(asset.contentUrl),
-        ...(campaignAssetAssignments[asset.id]
-          ? { campaignCreativeTarget: campaignAssetAssignments[asset.id] }
-          : {}),
-        note: asset.contentUrl
-          ? "Private AdSyntra media must be uploaded to the selected provider before ad creation."
-          : "Verify the external/provider media reference before ad creation.",
-      }));
+      .map((asset) => {
+        const intendedPlatforms = getCampaignAssetIntendedPlatforms(asset);
+        const campaignCreativeTarget = campaignAssetAssignments[asset.id];
+        return {
+          assetId: asset.id,
+          name: asset.name,
+          kind: asset.kind,
+          sourceUrl: asset.url || null,
+          contentUrl: asset.contentUrl || null,
+          storageReference: asset.contentUrl
+            ? "ADSYNTRA_PRIVATE_STORAGE"
+            : "EXTERNAL_OR_PROVIDER_MEDIA",
+          source: asset.origin || "MANUAL",
+          prompt: asset.prompt || null,
+          textContent: asset.textContent || null,
+          aspectRatio: asset.aspectRatio || null,
+          intendedPlatforms,
+          approvalStatus: "APPROVED_BY_CAMPAIGN_USER",
+          providerUploadRequired:
+            asset.kind !== "TEXT" && Boolean(asset.contentUrl),
+          ...(campaignCreativeTarget &&
+          intendedPlatforms.includes(campaignCreativeTarget.platform)
+            ? { campaignCreativeTarget }
+            : {}),
+          note: asset.contentUrl
+            ? "Private AdSyntra media must be uploaded to the selected provider before ad creation."
+            : "Verify the external/provider media reference before ad creation.",
+        };
+      })
+      .filter((assetReference) => assetReference.intendedPlatforms.length > 0);
     const campaignRequestPayload = {
       ...executionPayload,
       creativeAssetReferences: campaignAssetReferences,
@@ -8837,19 +8817,15 @@ useEffect(() => {
         }
       };
 
-      if (metaCreativeFormat === "SINGLE_IMAGE" && !isHttpsUrl(metaImageUrl)) {
-        throw new Error("Enter a valid HTTPS URL for the Meta creative image.");
+      if (
+        metaCreativeFormat === "SINGLE_IMAGE" &&
+        !selectedMetaPrivateImageAsset &&
+        !isHttpsUrl(metaImageUrl)
+      ) {
+        throw new Error("Choose an image from the Asset Library or enter a valid HTTPS image URL for the Meta creative.");
       }
-      if (metaCreativeFormat === "SINGLE_VIDEO") {
-        const selectedPrivateMetaVideos = assetLibrary.filter((asset) =>
-          attachedCreativeAssetIds.includes(asset.id) &&
-          asset.kind === "VIDEO" &&
-          Boolean(asset.contentUrl) &&
-          (!asset.platformTargets?.length || asset.platformTargets.includes("metaAds")),
-        );
-        if (selectedPrivateMetaVideos.length !== 1) {
-          throw new Error("Choose exactly one private Asset Library video for the Meta Single Video creative.");
-        }
+      if (metaCreativeFormat === "SINGLE_VIDEO" && !selectedMetaPrivateVideoAsset) {
+        throw new Error("Choose one private Asset Library video for the Meta Single Video creative.");
       }
 
       if (!isHttpsUrl(metaDestination)) {
@@ -8909,7 +8885,9 @@ useEffect(() => {
       if (
         executionMode === "LIVE" &&
         (usesExampleDomain(metaDestination) ||
-          (metaCreativeFormat === "SINGLE_IMAGE" && usesExampleDomain(metaImageUrl)))
+          (metaCreativeFormat === "SINGLE_IMAGE" &&
+            !selectedMetaPrivateImageAsset &&
+            usesExampleDomain(metaImageUrl)))
       ) {
         throw new Error(
           "Replace the example.com Meta creative and destination URLs before live execution.",
@@ -9582,8 +9560,9 @@ useEffect(() => {
       return;
     }
 
-    const isPrivateAdSyntraAsset =
-      Boolean(asset.contentUrl) && !asset.url.trim();
+    // contentUrl identifies an Asset Library item backed by private AdSyntra
+    // storage, even when a legacy/public URL field is also populated.
+    const isPrivateAdSyntraAsset = Boolean(asset.contentUrl);
     if (isPrivateAdSyntraAsset) {
       if (!["IMAGE", "LOGO", "VIDEO"].includes(asset.kind)) {
         setAssetNotice(
@@ -9591,11 +9570,21 @@ useEffect(() => {
         );
         return;
       }
+      if (target === "meta") {
+        if (asset.kind !== "IMAGE") {
+          setAssetNotice("Meta Single Image requires an IMAGE asset from the Asset Library.");
+          return;
+        }
+        setMetaCreativeImageAssetId(asset.id);
+        setMetaCreativeImageUrl("");
+      }
       setAttachedCreativeAssetIds((current) =>
         current.includes(asset.id) ? current : [...current, asset.id],
       );
       setAssetNotice(
-        `${asset.name} is attached by its saved asset ID. It remains in private AdSyntra storage and needs the provider-specific upload step before a live ad can use it.`,
+        target === "meta"
+          ? `${asset.name} is selected for the Meta Single Image creative. AdSyntra will upload the private image to the selected Meta Ad Account during LIVE execution.`
+          : `${asset.name} is attached by its saved asset ID. It remains in private AdSyntra storage and needs the provider-specific upload step before a live ad can use it.`,
       );
       clearPreview();
       return;
@@ -9612,6 +9601,7 @@ useEffect(() => {
     switch (target) {
       case "meta":
         if (isImage) {
+          setMetaCreativeImageAssetId(null);
           setMetaCreativeImageUrl(asset.url);
           applied = true;
         }
@@ -9715,6 +9705,51 @@ useEffect(() => {
       `${asset.name} selected for ${target.replace("pmax-", "Performance Max ").replaceAll("-", " ")}. Check the required crop and asset rules before publishing.`,
     );
 
+    setWorkspaceView("builder");
+    markStepReached(4);
+    clearPreview();
+  };
+
+  const selectMetaVideoAsset = (asset: CampaignLibraryAsset) => {
+    if (!selectedPlatforms.includes("metaAds")) {
+      setAssetNotice("Select Meta Ads as a campaign platform before choosing a Meta video.");
+      return;
+    }
+    if (metaCreativeFormat !== "SINGLE_VIDEO" || metaDestinationType !== "WEBSITE") {
+      setAssetNotice("Choose the Meta Single Video format and Website destination before selecting a video.");
+      return;
+    }
+    if (asset.kind !== "VIDEO" || !asset.contentUrl) {
+      setAssetNotice("Meta Single Video requires a private video stored in the AdSyntra Asset Library.");
+      return;
+    }
+    if (asset.platformTargets?.length && !asset.platformTargets.includes("metaAds")) {
+      setAssetNotice("This video is not assigned to Meta Ads. Choose a Meta-compatible Asset Library video.");
+      return;
+    }
+
+    const mimeType = String(asset.mimeType || "").trim().toLowerCase();
+    const supportedVideoMimeTypes = new Set([
+      "video/mp4",
+      "video/quicktime",
+      "video/webm",
+    ]);
+    if (mimeType && !supportedVideoMimeTypes.has(mimeType)) {
+      setAssetNotice("Meta Single Video supports MP4, MOV and WebM files only.");
+      return;
+    }
+    if (typeof asset.sizeBytes === "number" && asset.sizeBytes > 100 * 1024 * 1024) {
+      setAssetNotice("The selected Meta video must be 100 MB or smaller.");
+      return;
+    }
+
+    setMetaCreativeVideoAssetId(asset.id);
+    setAttachedCreativeAssetIds((current) =>
+      current.includes(asset.id) ? current : [...current, asset.id],
+    );
+    setAssetNotice(
+      `${asset.name} is selected for the Meta Single Video creative. AdSyntra will upload the private file to the selected Meta Ad Account during LIVE execution.`,
+    );
     setWorkspaceView("builder");
     markStepReached(4);
     clearPreview();
@@ -16108,9 +16143,34 @@ googleMerchantCenterProducts.length > 0 ? (
                           </div>
                         )}
                         {asset.kind === "VIDEO" && (
-                          <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-[10px] leading-4 text-amber-800">
-                            Video is available for viewing in this library, but direct private-video attachment is not enabled in this Campaign Creation flow yet. Use a supported hosted video ID field where available.
-                          </p>
+                          <div className="mt-2 rounded-lg border border-blue-100 bg-blue-50/70 p-2 text-[10px] leading-4 text-blue-900">
+                            <p>
+                              Private videos can be attached to Meta Single Video campaigns with a Website destination. Supported formats: MP4, MOV and WebM; maximum size: 100 MB.
+                            </p>
+                            {selectedPlatforms.includes("metaAds") &&
+                              metaCreativeFormat === "SINGLE_VIDEO" &&
+                              metaDestinationType === "WEBSITE" && (
+                                <Button
+                                  size="small"
+                                  variant={metaCreativeVideoAssetId === asset.id ? "contained" : "outlined"}
+                                  disabled={
+                                    !asset.contentUrl ||
+                                    Boolean(asset.platformTargets?.length && !asset.platformTargets.includes("metaAds")) ||
+                                    Boolean(asset.mimeType && !["video/mp4", "video/quicktime", "video/webm"].includes(asset.mimeType.toLowerCase())) ||
+                                    Boolean(typeof asset.sizeBytes === "number" && asset.sizeBytes > 100 * 1024 * 1024)
+                                  }
+                                  onClick={() => selectMetaVideoAsset(asset)}
+                                  sx={{ mt: 1, textTransform: "none" }}
+                                >
+                                  {metaCreativeVideoAssetId === asset.id ? "Selected for Meta Video" : "Select for Meta Video"}
+                                </Button>
+                              )}
+                            {!asset.contentUrl && (
+                              <p className="mt-1 text-amber-800">
+                                This item has no private AdSyntra video file attached, so it cannot be uploaded to Meta through this workflow.
+                              </p>
+                            )}
+                          </div>
                         )}
                         <p className="mt-2 break-all text-[10px] text-slate-400">
                           Asset ID: {asset.id}
@@ -17754,15 +17814,18 @@ googleMerchantCenterProducts.length > 0 ? (
                   </div>
                   {metaCreativeFormat === "SINGLE_IMAGE" && (
                     <div>
-                      <label className={labelClass}>Creative Image URL *</label>
+                      <label className={labelClass}>
+                        Creative Image (Asset Library or HTTPS URL) *
+                      </label>
                       <input
                         type="url"
                         value={metaCreativeImageUrl}
                         onChange={(e) => {
+                          setMetaCreativeImageAssetId(null);
                           setMetaCreativeImageUrl(e.target.value);
                           clearPreview();
                         }}
-                        placeholder="https://.../ad-image.jpg"
+                        placeholder="Optional when an Asset Library image is selected"
                         className={inputClass}
                       />
                       <button
@@ -17777,6 +17840,11 @@ googleMerchantCenterProducts.length > 0 ? (
                       >
                         Choose from Asset Library
                       </button>
+                      {selectedMetaPrivateImageAsset && (
+                        <p className="mt-2 text-xs font-medium text-emerald-700">
+                          Selected Asset Library image: {selectedMetaPrivateImageAsset.name}
+                        </p>
+                      )}
                     </div>
                   )}
                   {metaCreativeFormat === "SINGLE_VIDEO" && (
@@ -17796,7 +17864,9 @@ googleMerchantCenterProducts.length > 0 ? (
                         Choose Video from Asset Library
                       </button>
                       <p className="mt-2 text-xs text-slate-500">
-                        {assetLibrary.filter((asset) => attachedCreativeAssetIds.includes(asset.id) && asset.kind === "VIDEO" && Boolean(asset.contentUrl)).length} private video asset(s) currently attached. Exactly one is required for this Meta creative.
+                        {selectedMetaPrivateVideoAsset
+                          ? `Selected video: ${selectedMetaPrivateVideoAsset.name}`
+                          : "No video selected. Choose one private video from the Asset Library."}
                       </p>
                     </div>
                   )}

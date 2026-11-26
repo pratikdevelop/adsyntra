@@ -41,6 +41,18 @@ test("Google live campaign source coverage matches the connected global route", 
     );
   }
 });
+test("Google Search exposes only bidding and performance options accepted by its current builder", () => {
+  const search = findCampaignCapability("googleAds", "SEARCH");
+  assert.deepEqual(
+    search?.options?.performanceGoals?.map((option) => option.value),
+    ["CONVERSIONS", "CONVERSION_VALUE", "CLICKS"],
+  );
+  assert.deepEqual(
+    search?.options?.biddingStrategies?.map((option) => option.value),
+    ["MANUAL_CPC", "MAXIMIZE_CLICKS", "MAXIMIZE_CONVERSIONS", "MAXIMIZE_CONVERSION_VALUE"],
+  );
+});
+
 
 test("Hotel and classic Video are not represented as normal live creation flows", () => {
   const hotel = findCampaignCapability("googleAds", "HOTEL");

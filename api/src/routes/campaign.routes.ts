@@ -106,6 +106,10 @@ import {
     getMetaPixelEventOptions,
     MetaPixelLookupError,
 } from "../metaadsAPI/services/meta-pixel-resource-lookups.service.js";
+import {
+    evaluateCampaignCreateGate,
+    getCapabilityConfigurationError,
+} from "../campaign-capabilities/campaign-capability.enforcement.js";
 
 const router = Router();
 
@@ -2151,6 +2155,30 @@ router.post("/", async (req: Request, res: Response) => {
                     throw new Error("Google Ads provider configuration is missing.");
                 }
 
+
+               const googleCreateGate = evaluateCampaignCreateGate(
+                   "googleAds",
+                   googleRequest.providerCampaignType,
+                   execution.validateOnly,
+               );
+              if (!googleCreateGate.allowed) {
+                   throw new CampaignRequestValidationError(
+                       googleCreateGate.reason ?? "Google Ads campaign creation is not enabled for this campaign type.",
+                   );
+               }
+
+               const googleCapabilityConfigurationError = getCapabilityConfigurationError(
+                   "googleAds",
+                   googleRequest.providerCampaignType,
+                   googleRequest.providerObjective,
+                   googleRequest.configuration,
+               );
+               if (googleCapabilityConfigurationError) {
+                   throw new CampaignRequestValidationError(googleCapabilityConfigurationError);
+                 }
+
+                 
+ 
                 // Search, Display and Standard Performance Max have independent execution paths.
                 const campaignType =
                     googleRequest.providerCampaignType.trim().toUpperCase();
@@ -3073,51 +3101,6 @@ router.post("/", async (req: Request, res: Response) => {
 
                 googleProvider.lastError = null;
 
-                // 5. Save real resources only after live creation.
-
-                /*if (!result.validateOnly && result.createdResources) {
-                    const resources = result.createdResources;
-
-                    googleProvider.providerCampaignResourceName = resources.campaign;
-
-                    googleProvider.providerCampaignId =
-                        resources.campaign.split("/").at(-1) ?? null;
-
-                    googleProvider.providerStatus = "PAUSED";
-                    googleProvider.deliveryStatus = "PAUSED";
-                    googleProvider.lastSyncedAt = new Date();
-
-                    googleProvider.resources = [
-                        {
-                            resourceType: "campaignBudget",
-                            resourceName: resources.budget,
-                        },
-                        {
-                            resourceType: "campaign",
-                            resourceName: resources.campaign,
-                        },
-                        {
-                            resourceType: "adGroup",
-                            resourceName: resources.adGroup,
-                        },
-                        ...resources.locationCriteria.map((resourceName: any) => ({
-                            resourceType: "locationCriterion",
-                            resourceName,
-                        })),
-                        ...resources.positiveKeywords.map((resourceName: any) => ({
-                            resourceType: "positiveKeyword",
-                            resourceName,
-                        })),
-                        ...resources.negativeKeywords.map((resourceName: any) => ({
-                            resourceType: "negativeKeyword",
-                            resourceName,
-                        })),
-                        {
-                            resourceType: "responsiveSearchAd",
-                            resourceName: resources.responsiveSearchAd,
-                        },
-                    ];
-                }*/
 
                 if (!result.validateOnly && result.createdResources) {
                     const resources = result.createdResources;
@@ -3439,6 +3422,27 @@ router.post("/", async (req: Request, res: Response) => {
                         "Meta Ads provider configuration is missing.",
                     );
                 }
+
+               const metaCreateGate = evaluateCampaignCreateGate(
+                   "metaAds",
+                   metaRequest.providerCampaignType,
+                   execution.validateOnly,
+               );
+               if (!metaCreateGate.allowed) {
+                   throw new CampaignRequestValidationError(
+                       metaCreateGate.reason ?? "Meta Ads campaign creation is not enabled for this campaign type.",
+                   );
+               }
+
+               const metaCapabilityConfigurationError = getCapabilityConfigurationError(
+                   "metaAds",
+                   metaRequest.providerCampaignType,
+                   metaRequest.providerObjective,
+                   metaRequest.configuration,
+               );
+               if (metaCapabilityConfigurationError) {
+                   throw new CampaignRequestValidationError(metaCapabilityConfigurationError);
+               }
 
                 // 1. Verify that the submitted account belongs to this user.
                 const ownedMetaAccount = await AdAccountModel.findOne({

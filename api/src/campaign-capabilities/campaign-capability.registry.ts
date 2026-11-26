@@ -5,9 +5,8 @@ import type {
   CampaignOperation,
   CampaignProvider,
 } from "./campaign-capability.types.js";
-
-export const CAMPAIGN_CAPABILITY_REGISTRY_VERSION = "1.0.0";
-export const CAMPAIGN_CAPABILITY_SOURCE_SNAPSHOT_DATE = "2026-11-25";
+export const CAMPAIGN_CAPABILITY_REGISTRY_VERSION = "1.1.0";
+export const CAMPAIGN_CAPABILITY_SOURCE_SNAPSHOT_DATE = "2026-11-26";
 
 function resolveGoogleAdsApiVersion(): string {
   const configured = process.env.GOOGLE_ADS_API_VERSION?.trim();
@@ -69,6 +68,18 @@ export function getCampaignCapabilities(
 
   return getCampaignCapabilityRegistry().providers.flatMap((item) => item.campaignTypes);
 }
+
+/** Resolve an incoming provider-native campaign type to its registry entry. */
+export function findCampaignCapabilityByProviderType(
+  provider: CampaignProvider,
+  providerCampaignType: string,
+): CampaignCapabilityDefinition | undefined {
+  const normalizedType = providerCampaignType.trim().toUpperCase();
+  return getCampaignCapabilities(provider).find((capability) =>
+    capability.providerCampaignType?.toUpperCase() === normalizedType,
+  );
+}
+
 
 export function findCampaignCapability(
   provider: CampaignProvider,

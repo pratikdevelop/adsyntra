@@ -9,7 +9,7 @@
     "start": "node dist/server.js",
     "typecheck": "tsc --noEmit",
     "pack:source": "git archive --format=zip --output=source-only.zip HEAD",
-    "test:capabilities": "tsx --test src/campaign-capabilities/campaign-capability.registry.test.ts"
+    "test:capabilities": "tsx --test src/campaign-capabilities/campaign-capability.registry.test.ts src/campaign-capabilities/campaign-capability.enforcement.test.ts"
   },
   "keywords": [],
   "author": "",

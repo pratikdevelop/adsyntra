@@ -3570,7 +3570,7 @@ useEffect(() => {
       ? "PORTFOLIO"
       : "STANDARD";
 
-  const availableGooglePerformanceGoals =
+  const configuredGooglePerformanceGoals =
     googleCampaignType === "APP"
       ? []
       : googleCampaignType === "PERFORMANCE_MAX"
@@ -3579,7 +3579,20 @@ useEffect(() => {
         )
         : googlePerformanceGoalsByType[googleCampaignType] ||
         googlePerformanceGoalsByType.SEARCH;
-  const effectiveGooglePerformanceGoal = availableGooglePerformanceGoals.some(
+  
+  
+  const selectedGoogleCampaignCapability =
+   campaignCapabilityRegistry?.providers
+     .find((provider) => provider.provider === "googleAds")
+     ?.campaignTypes.find(
+       (capability) => capability.builderCampaignType === googleCampaignType,
+     ) ?? null;
+ const availableGooglePerformanceGoals = configuredGooglePerformanceGoals.filter((item) => {
+   const registryGoals = selectedGoogleCampaignCapability?.options?.performanceGoals;
+   return !registryGoals || registryGoals.some((option) => option.value === item.value);
+ });
+  
+        const effectiveGooglePerformanceGoal = availableGooglePerformanceGoals.some(
     (item) => item.value === googlePerformanceGoal,
   )
     ? googlePerformanceGoal
@@ -3600,6 +3613,74 @@ useEffect(() => {
       ?.campaignTypes.find(
         (capability) => capability.builderCampaignType === "CAMPAIGN",
       ) ?? null;
+  const selectedMetaProviderObjective = objective
+   ? metaObjectiveMap[objective]
+   : "";
+ const availableMetaOptimizationOptions = objective
+   ? metaOptimizationOptions[objective].filter((item) => {
+       const registryGoals = selectedMetaCampaignCapability?.options
+         ?.optimizationGoalsByObjective?.[selectedMetaProviderObjective];
+       return !registryGoals || registryGoals.some((option) => option.value === item.value);
+     })
+   : [];
+ const availableMetaBuyingTypes = metaBuyingTypes.filter((item) => {
+   const registryOptions = selectedMetaCampaignCapability?.options?.buyingTypes;
+   return !registryOptions || registryOptions.some((option) =>
+     option.value === item.value &&
+     (!option.implementationStatus || option.implementationStatus === "IMPLEMENTED_IN_SOURCE"),
+   );
+ });
+ const effectiveMetaBuyingType = availableMetaBuyingTypes.some(
+   (item) => item.value === metaBuyingType,
+ )
+   ? metaBuyingType
+   : (availableMetaBuyingTypes[0]?.value as MetaBuyingType | undefined) ?? "AUCTION";
+ const availableMetaBidStrategies = metaBidStrategies.filter((item) => {
+   const registryOptions = selectedMetaCampaignCapability?.options?.biddingStrategies;
+   return !registryOptions || registryOptions.some((option) =>
+     option.value === item.value &&
+     (!option.implementationStatus || option.implementationStatus === "IMPLEMENTED_IN_SOURCE"),
+   );
+ });
+ const selectedLiveProviderStates = [
+   ...(selectedPlatforms.includes("googleAds")
+     ? [{ provider: "Google Ads", capability: selectedGoogleCampaignCapability }]
+     : []),
+   ...(selectedPlatforms.includes("metaAds")
+     ? [{ provider: "Meta Ads", capability: selectedMetaCampaignCapability }]
+     : []),
+ ];
+ const liveExecutionReadyProviders = selectedLiveProviderStates
+   .filter(({ capability }) =>
+     capability?.operations.create?.status === "IMPLEMENTED_IN_SOURCE",
+   )
+   .map(({ provider }) => provider);
+ const liveExecutionBlockedProviderReasons = selectedLiveProviderStates
+   .filter(({ capability }) =>
+     capability?.operations.create?.status !== "IMPLEMENTED_IN_SOURCE",
+   )
+   .map(({ provider, capability }) => {
+     if (!capability) return `${provider} campaign type is not registered for creation.`;
+     const detail = capability.operations.create;
+     return `${provider} ${capability.label}: ${detail?.summary ?? "Creation is not enabled."}`;
+   });
+ const liveExecutionBlockReason = !campaignCapabilityRegistry && selectedPlatforms.length
+   ? "The Campaign Capability Registry is loading or unavailable. Live execution stays disabled until capability status is available."
+   : liveExecutionReadyProviders.length === 0
+     ? liveExecutionBlockedProviderReasons.join(" ")
+     : "";
+ const liveExecutionWarning = liveExecutionReadyProviders.length > 0 &&
+   liveExecutionBlockedProviderReasons.length > 0
+     ? `Live execution will proceed only for ${liveExecutionReadyProviders.join(" and ")}. The following provider branch(es) will be rejected independently: ${liveExecutionBlockedProviderReasons.join(" ")}`
+     : "";
+
+ useEffect(() => {
+   if (executionMode === "LIVE" && liveExecutionBlockReason) {
+     setExecutionMode("VALIDATE_ONLY");
+     setApiPayloadPreview("");
+   }
+ }, [executionMode, liveExecutionBlockReason]);
+
   const availableGoogleBiddingModes: GoogleBiddingMode[] =
     googleCampaignType === "SEARCH"
       ? ["AUTOMATED", "MANUAL_CPC"]
@@ -3629,9 +3710,7 @@ useEffect(() => {
     (item) => item.value === effectiveGoogleAppGoal,
   )!;
 
-  const availableMetaOptimizationOptions = objective
-    ? metaOptimizationOptions[objective]
-    : [];
+
   const effectiveMetaOptimizationGoal = availableMetaOptimizationOptions.some(
     (item) => item.value === metaOptimizationGoal,
   )
@@ -5331,7 +5410,7 @@ useEffect(() => {
     }
     if (
       selectedPlatforms.includes("metaAds") &&
-      metaBuyingType === "RESERVED"
+      effectiveMetaBuyingType === "RESERVED"
     ) {
       setError(
         "Meta Reserved buying requires a separate Reach & Frequency reservation workflow. This form currently prepares Auction campaigns only; choose Auction until reservation predictions, booking and Ad Set assignment are implemented.",
@@ -6952,7 +7031,7 @@ useEffect(() => {
               name: campaignName.trim(),
               status: "PAUSED",
               objective: metaObjectiveMap[objective],
-              buying_type: metaBuyingType,
+              buying_type: effectiveMetaBuyingType,
               special_ad_categories: metaSpecialAdCategories,
               budgetLevel: metaBudgetLevel,
               ...(metaBudgetLevel === "AD_SET" && {
@@ -8486,7 +8565,7 @@ useEffect(() => {
           campaign: {
             name: campaignName.trim(),
             objective: metaObjective,
-            buyingType: metaBuyingType,
+            buyingType: effectiveMetaBuyingType,
             specialAdCategories: metaSpecialAdCategories,
             budgetLevel: metaBudgetLevel,
             budgetCurrency: metaCurrency,
@@ -8627,7 +8706,7 @@ useEffect(() => {
       campaignType:
         platform === "googleAds"
           ? `Google ${googleCampaignType}`
-          : `Meta ${metaBuyingType}`,
+          : `Meta ${effectiveMetaBuyingType}`,
       googleCampaignType:
         platform === "googleAds" ? googleCampaignType : undefined,
       objective: (objective || "SALES") as Objective,
@@ -11329,15 +11408,28 @@ const handleRegisterGoogleMerchantCenter = async () => {
                     }}
                     className={inputClass}
                   >
-                    {googleCampaignTypes.map((item) => (
-                      <option
-                        key={item.value}
-                        value={item.value}
-                        disabled={Boolean(item.disabled)}
-                      >
-                        {item.label}
-                      </option>
-                    ))}
+                    {googleCampaignTypes.map((item) => {
+                     const capability = campaignCapabilityRegistry?.providers
+                       .find((provider) => provider.provider === "googleAds")
+                       ?.campaignTypes.find(
+                         (entry) => entry.builderCampaignType === item.value,
+                       );
+                     const createStatus = capability?.operations.create?.status;
+                     const blockedByRegistry = Boolean(
+                       campaignCapabilityRegistry &&
+                       createStatus !== "IMPLEMENTED_IN_SOURCE",
+                     );
+                     return (
+                       <option
+                         key={item.value}
+                         value={item.value}
+                         disabled={Boolean(item.disabled) || blockedByRegistry}
+                         title={capability?.operations.create?.summary}
+                       >
+                         {item.label}{blockedByRegistry ? " — not enabled for creation" : ""}
+                       </option>
+                     );
+                   })}
                   </select>
                   {campaignCapabilityRegistryLoading && (
                     <p className="mt-2 text-xs text-slate-500">
@@ -13175,14 +13267,14 @@ googleMerchantCenterProducts.length > 0 ? (
                   <div>
                     <label className={labelClass}>Buying Type *</label>
                     <select
-                      value={metaBuyingType}
+                      value={availableMetaBuyingTypes}
                       onChange={(e) => {
                         setMetaBuyingType(e.target.value as MetaBuyingType);
                         clearPreview();
                       }}
                       className={inputClass}
                     >
-                      {metaBuyingTypes.map((item) => (
+                      {availableMetaBuyingTypes.map((item) => (
                         <option key={item.value} value={item.value}>
                           {item.label}
                         </option>
@@ -13194,12 +13286,12 @@ googleMerchantCenterProducts.length > 0 ? (
                       reservation workflow and may depend on account
                       eligibility.
                     </p>
-                    {metaBuyingType === "RESERVED" && (
+                    {effectiveMetaBuyingType === "RESERVED" && (
                       <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
-                        Reserved is shown as a supported Meta buying type, but
-                        this builder does not yet collect reservation
-                        predictions or assign a reservation to an Ad Set. Choose
-                        Auction to prepare a request in this version.
+                         Reservation buying is not enabled in this version because
+                       the current AdSyntra flow does not collect reservation
+                       predictions or assign a reservation to an Ad Set. Auction
+                       is the enabled buying type.
                       </p>
                     )}
                   </div>
@@ -13429,7 +13521,7 @@ googleMerchantCenterProducts.length > 0 ? (
                       }}
                       className={inputClass}
                     >
-                      {metaBidStrategies.map((item) => (
+                      {availableMetaBidStrategies.map((item) => (
                         <option key={item.value} value={item.value}>
                           {item.label}
                         </option>
@@ -17944,7 +18036,7 @@ googleMerchantCenterProducts.length > 0 ? (
                   <strong>Objective:</strong> {metaObjectiveMap[objective]}
                 </p>
                 <p>
-                  <strong>Buying Type:</strong> {metaBuyingType}
+                  <strong>Buying Type:</strong> {effectiveMetaBuyingType}
                 </p>
                 <p>
                   <strong>Budget Level:</strong>{" "}
@@ -18103,10 +18195,19 @@ googleMerchantCenterProducts.length > 0 ? (
               <option value="VALIDATE_ONLY">
                 Validate only — no provider mutations
               </option>
-              <option value="LIVE">
+               <option value="LIVE" disabled={Boolean(liveExecutionBlockReason)}>
                 Live execution — create paused provider resources
               </option>
             </select>
+                       {liveExecutionBlockReason ? (
+             <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
+               Live execution is currently unavailable for the selected provider configuration. {liveExecutionBlockReason} Validation-only remains available.
+             </p>
+           ) : liveExecutionWarning ? (
+             <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
+               {liveExecutionWarning}. Review the provider results after submission; AdSyntra records each provider branch independently.
+             </p>
+           ) : null}
 
             <p className="mt-2 text-xs leading-5 text-slate-500">
               This setting controls the backend request preview. Preparing the
@@ -18158,296 +18259,7 @@ googleMerchantCenterProducts.length > 0 ? (
                 </p>
               </div>
 
-              {/*
-                MOCK SCENARIO TESTING DISABLED.
-                The previous Prototype simulation panel is kept here as a comment
-                for reference. The result panel below now reads live backend API
-                responses from POST /api/campaigns.
 
-              <div className="rounded-2xl border border-indigo-200 bg-indigo-50/60 p-6">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-bold uppercase tracking-wide text-indigo-700">
-                      Prototype simulation
-                    </p>
-                    <h3 className="mt-1 text-lg font-bold text-slate-900">
-                      Campaign creation results
-                    </h3>
-                    <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
-                      Test how the application should report independent
-                      provider outcomes. These are mock responses only; no
-                      campaign is sent to Google or Meta.
-                    </p>
-                  </div>
-                  <span className="rounded-full border border-indigo-200 bg-white px-3 py-1 text-xs font-semibold text-indigo-700">
-                    Mock API mode
-                  </span>
-                </div>
-
-                <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                  {(
-                    [
-                      {
-                        value: "ALL_SUCCESS",
-                        title: "Both platforms succeed",
-                        description: "All selected resources are created.",
-                      },
-                      {
-                        value: "PROVIDER_FAILURE",
-                        title: "One provider fails",
-                        description:
-                          "Google succeeds while Meta fails (or the only selected provider fails).",
-                      },
-                      {
-                        value: "ALL_FAILURE",
-                        title: "All platforms fail",
-                        description:
-                          "Each selected provider returns a campaign-level error.",
-                      },
-                      {
-                        value: "RESOURCE_FAILURE",
-                        title: "A child resource fails",
-                        description:
-                          "Campaign succeeds, but an Ad Group or Ad Set fails.",
-                      },
-                      {
-                        value: "TIMEOUT",
-                        title: "Request timeout / unknown result",
-                        description:
-                          "A request times out; dependent steps are blocked pending reconciliation.",
-                      },
-                    ] as {
-                      value: DemoScenario;
-                      title: string;
-                      description: string;
-                    }[]
-                  ).map((scenario) => (
-                    <button
-                      key={scenario.value}
-                      type="button"
-                      onClick={() => runDemoScenario(scenario.value)}
-                      className="rounded-xl border border-indigo-200 bg-white p-4 text-left transition hover:border-indigo-400 hover:shadow-sm"
-                    >
-                      <span className="block text-sm font-semibold text-slate-900">
-                        {scenario.title}
-                      </span>
-                      <span className="mt-1 block text-xs leading-5 text-slate-500">
-                        {scenario.description}
-                      </span>
-                      <span className="mt-3 inline-block text-xs font-bold text-indigo-700">
-                        Run scenario →
-                      </span>
-                    </button>
-                  ))}
-                </div>
-
-                {demoJob && (
-                  <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5">
-                    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-4">
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                          Creation job
-                        </p>
-                        <h4 className="mt-1 font-bold text-slate-900">
-                          {demoJob.jobId}
-                        </h4>
-                        <p className="mt-1 text-xs text-slate-500">
-                          {demoJob.createdAt}
-                        </p>
-                      </div>
-                      <span
-                        className={`rounded-full px-3 py-1 text-xs font-bold ${demoJob.overallStatus === "SUCCESS" ? "bg-green-100 text-green-800" : demoJob.overallStatus === "FAILED" ? "bg-red-100 text-red-800" : "bg-amber-100 text-amber-800"}`}
-                      >
-                        {demoJob.overallStatus === "SUCCESS"
-                          ? "Success"
-                          : demoJob.overallStatus === "FAILED"
-                            ? "Failed"
-                            : "Partial success"}
-                      </span>
-                    </div>
-
-                    <div className="mt-4 grid gap-4 lg:grid-cols-2">
-                      {demoJob.providers.map((provider) => {
-                        const providerLabel =
-                          provider.provider === "googleAds"
-                            ? "Google Ads"
-                            : "Meta Ads";
-                        const failedResources = provider.resources.filter(
-                          (resource) => resource.status === "FAILED",
-                        ).length;
-                        const timedOutResources = provider.resources.filter(
-                          (resource) => resource.status === "TIMED_OUT",
-                        ).length;
-                        const pendingResources = provider.resources.filter(
-                          (resource) =>
-                            resource.status === "NOT_STARTED" ||
-                            resource.status === "BLOCKED",
-                        ).length;
-                        return (
-                          <div
-                            key={provider.provider}
-                            className="rounded-xl border border-slate-200 p-4"
-                          >
-                            <div className="flex flex-wrap items-center justify-between gap-2">
-                              <h5 className="font-bold text-slate-900">
-                                {providerLabel}
-                              </h5>
-                              <span
-                                className={`rounded-full px-2.5 py-1 text-xs font-semibold ${provider.status === "SUCCESS" ? "bg-green-100 text-green-800" : provider.status === "FAILED" ? "bg-red-100 text-red-800" : "bg-amber-100 text-amber-800"}`}
-                              >
-                                {provider.status === "SUCCESS"
-                                  ? "Created"
-                                  : provider.status === "FAILED"
-                                    ? "Failed"
-                                    : "Partially created"}
-                              </span>
-                            </div>
-                            <div className="mt-4 space-y-3">
-                              {provider.resources.map((resource) => (
-                                <div
-                                  key={resource.key}
-                                  className="flex items-start gap-3"
-                                >
-                                  <span
-                                    className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-bold ${resource.status === "SUCCESS" ? "bg-green-100 text-green-700" : resource.status === "FAILED" ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-500"}`}
-                                  >
-                                    {resource.status === "SUCCESS"
-                                      ? "✓"
-                                      : resource.status === "FAILED"
-                                        ? "!"
-                                        : resource.status === "TIMED_OUT"
-                                          ? "?"
-                                          : resource.status === "BLOCKED"
-                                            ? "Ⅱ"
-                                            : "–"}
-                                  </span>
-                                  <div className="min-w-0 flex-1">
-                                    <div className="flex flex-wrap items-center justify-between gap-2">
-                                      <span className="text-sm font-semibold text-slate-800">
-                                        {resource.label}
-                                      </span>
-                                      <span
-                                        className={`text-xs font-semibold ${resource.status === "SUCCESS" ? "text-green-700" : resource.status === "FAILED" ? "text-red-700" : "text-slate-500"}`}
-                                      >
-                                        {resource.status === "SUCCESS"
-                                          ? "Success"
-                                          : resource.status === "FAILED"
-                                            ? "Failed"
-                                            : resource.status === "TIMED_OUT"
-                                              ? "Timed out — reconcile"
-                                              : resource.status === "BLOCKED"
-                                                ? "Blocked by dependency"
-                                                : "Not started"}
-                                      </span>
-                                    </div>
-                                    {resource.resourceId && (
-                                      <p className="mt-1 break-all font-mono text-[11px] text-slate-400">
-                                        ID: {resource.resourceId}
-                                      </p>
-                                    )}
-                                    {resource.endpoint && (
-                                      <p className="mt-1 break-all font-mono text-[10px] text-slate-400">
-                                        {resource.endpoint}
-                                      </p>
-                                    )}
-                                    {resource.requestId && (
-                                      <p className="mt-1 font-mono text-[10px] text-slate-400">
-                                        Request: {resource.requestId} · Attempt:{" "}
-                                        {resource.attemptCount ?? 1}
-                                      </p>
-                                    )}
-                                    {resource.responseSummary && (
-                                      <p className="mt-1 text-[11px] text-slate-500">
-                                        {resource.responseSummary}
-                                      </p>
-                                    )}
-                                    {resource.errorMessage && (
-                                      <div className="mt-2 rounded-lg bg-red-50 p-3">
-                                        <p className="text-[11px] font-bold uppercase text-red-700">
-                                          {resource.errorCode}
-                                        </p>
-                                        <p className="mt-1 text-xs leading-5 text-red-700">
-                                          {resource.errorMessage}
-                                        </p>
-                                      </div>
-                                    )}
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                            {(failedResources > 0 ||
-                              timedOutResources > 0 ||
-                              pendingResources > 0) && (
-                              <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-100 pt-4">
-                                {timedOutResources > 0 && (
-                                  <div className="w-full space-y-2">
-                                    <p className="text-xs font-medium text-amber-700">
-                                      Do not retry timed-out requests yet. First
-                                      query the provider account to determine
-                                      whether the resource was created.
-                                    </p>
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        reconcileDemoTimeout(provider.provider)
-                                      }
-                                      className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-100"
-                                    >
-                                      Simulate reconciliation lookup
-                                    </button>
-                                  </div>
-                                )}
-                                {failedResources > 0 && (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      retryDemoFailedSteps(provider.provider)
-                                    }
-                                    className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700"
-                                  >
-                                    Retry failed step
-                                    {failedResources > 1 ? "s" : ""}
-                                  </button>
-                                )}
-                                {pendingResources > 0 &&
-                                  failedResources === 0 &&
-                                  timedOutResources === 0 && (
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        continueDemoProvider(provider.provider)
-                                      }
-                                      className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
-                                    >
-                                      Continue remaining steps
-                                    </button>
-                                  )}
-                              </div>
-                            )}
-                            {failedResources > 0 && pendingResources > 0 && (
-                              <p className="mt-2 text-xs text-slate-500">
-                                Retry the failed resource first. Then continue
-                                the resources that depend on it.
-                              </p>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    <div className="mt-4 rounded-xl bg-slate-50 p-3 text-xs leading-5 text-slate-600">
-                      <strong>Demo behavior:</strong> successful resource IDs
-                      are retained. Failed steps can be retried; blocked steps
-                      wait for their dependency. A timeout is an unknown
-                      outcome, not proof of failure: reconcile by querying the
-                      provider before retrying to avoid duplicate resources.
-                      Endpoint names, IDs and responses are illustrative, not
-                      live provider records.
-                    </div>
-                  </div>
-                )}
-              </div>
-              */}
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                 <p className="text-sm font-semibold text-slate-800">
                   Live provider execution
@@ -18464,7 +18276,7 @@ googleMerchantCenterProducts.length > 0 ? (
                 <button
                   type="button"
                   onClick={submitCampaignRequest}
-                  disabled={campaignSubmitting || !apiPayloadPreview}
+                  disabled={campaignSubmitting || !apiPayloadPreview || (executionMode === "LIVE" && Boolean(liveExecutionBlockReason))}
                   className="w-full rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {campaignSubmitting

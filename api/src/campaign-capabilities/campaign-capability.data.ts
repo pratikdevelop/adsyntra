@@ -348,8 +348,12 @@ const metaCampaign: CampaignCapabilityDefinition = {
     providerObjectives: metaCampaignObjectives,
     buyingTypes: [
       { value: "AUCTION", label: "Auction" },
-      { value: "RESERVED", label: "Reservation" },
-    ],
+ {
+       value: "RESERVED",
+       label: "Reservation",
+       implementationStatus: "PARTIAL",
+       limitation: "The current AdSyntra flow does not collect reservation predictions or assign a reservation to an Ad Set.",
+     },    ],
     biddingStrategies: [
       { value: "LOWEST_COST_WITHOUT_CAP", label: "Highest volume (no bid cap)" },
       { value: "LOWEST_COST_WITH_BID_CAP", label: "Bid cap" },

@@ -1,4 +1,5 @@
 import { getProviderAccessToken } from "../../utils/provider-token.utils.js";
+import { META_SPECIAL_AD_CATEGORY_COUNTRY_CODES } from "./meta-special-ad-category.constants.js";
 
 export interface MetaAdsCreationContext {
   adAccountId: string;
@@ -28,6 +29,7 @@ export interface CreateMetaAdsCampaignInput {
   objective: MetaAdsCampaignObjective;
 
   specialAdCategories?: string[];
+  specialAdCategoryCountries?: string[];
   buyingType?: "AUCTION" | "RESERVED";
 
   isAdsetBudgetSharingEnabled?: boolean;
@@ -53,6 +55,7 @@ interface ValidatedMetaAdsCampaignInput {
   name: string;
   objective: MetaAdsCampaignObjective;
   specialAdCategories: string[];
+  specialAdCategoryCountries: string[];
   buyingType: "AUCTION" | "RESERVED";
   validateOnly: boolean;
   confirm?: boolean;
@@ -66,6 +69,8 @@ interface ValidatedMetaAdsCampaignInput {
   startTime?: string;
   stopTime?: string;
 }
+
+
 const META_OPTIMIZATION_GOALS_BY_OBJECTIVE: Record<
   MetaAdsCampaignObjective,
   readonly string[]
@@ -133,6 +138,10 @@ export type MetaAdsCallToAction =
 export interface CreateMetaAdsAdCreativeInput {
   name: string;
   pageId: string;
+  /** Provider-native AdCreative shape supported by the current workflow. */
+  format?: string;
+  /** Current global workflow supports Website destinations only. */
+  destinationType?: string;
   instagramActorId?: string;
   existingPostId?: string;
   primaryText: string;
@@ -140,6 +149,8 @@ export interface CreateMetaAdsAdCreativeInput {
   description?: string;
   imageUrl?: string;
   imageHash?: string;
+  videoId?: string;
+  videoThumbnailUrl?: string;
   destinationUrl: string;
   callToAction: MetaAdsCallToAction;
   validateOnly?: boolean;
@@ -915,6 +926,47 @@ function validateCreateCampaignInput(
     );
   }
 
+  const rawCategoryCountries = input.specialAdCategoryCountries ?? [];
+  if (
+    !Array.isArray(rawCategoryCountries) ||
+    !rawCategoryCountries.every((country) => typeof country === "string")
+  ) {
+    throw new MetaAdsCampaignCreationError(
+      "specialAdCategoryCountries must be an array of ISO country codes.",
+      400,
+    );
+  }
+  const specialAdCategoryCountries = rawCategoryCountries
+    .map((country) => country.trim().toUpperCase())
+    .filter(Boolean);
+  if (specialAdCategories.length > 0 && specialAdCategoryCountries.length === 0) {
+    throw new MetaAdsCampaignCreationError(
+      "A Meta Special Ad Category requires at least one special_ad_category_country.",
+      400,
+    );
+  }
+  if (specialAdCategories.length === 0 && specialAdCategoryCountries.length > 0) {
+    throw new MetaAdsCampaignCreationError(
+      "specialAdCategoryCountries cannot be supplied when no Special Ad Category is selected.",
+      400,
+    );
+  }
+  if (new Set(specialAdCategoryCountries).size !== specialAdCategoryCountries.length) {
+    throw new MetaAdsCampaignCreationError(
+      "Duplicate Special Ad Category country codes are not allowed.",
+      400,
+    );
+  }
+  const invalidCategoryCountries = specialAdCategoryCountries.filter(
+    (country) => !META_SPECIAL_AD_CATEGORY_COUNTRY_CODES.has(country),
+  );
+  if (invalidCategoryCountries.length > 0) {
+    throw new MetaAdsCampaignCreationError(
+      `Unsupported Meta Special Ad Category country code(s): ${invalidCategoryCountries.join(", ")}.`,
+      400,
+    );
+  }
+
   // 4. Buying type
   const buyingType = input.buyingType ?? "AUCTION";
 
@@ -1090,6 +1142,7 @@ function validateCreateCampaignInput(
     name,
     objective,
     specialAdCategories,
+    specialAdCategoryCountries,
     buyingType,
     validateOnly,
     confirm: input.confirm,
@@ -2799,6 +2852,31 @@ export async function createMetaAdsAdCreative(
   context: MetaAdsCreationContext,
   input: CreateMetaAdsAdCreativeInput,
 ): Promise<MetaAdsAdCreativeCreationResult> {
+  // The creative service uses separate provider-native payloads for image and
+  // video. Never coerce Carousel or destination-specific drafts into either.
+  const creativeFormat = typeof input.format === "string"
+    ? input.format.trim().toUpperCase()
+    : input.format === undefined || input.format === null
+      ? "SINGLE_IMAGE"
+      : "";
+  if (creativeFormat !== "SINGLE_IMAGE" && creativeFormat !== "SINGLE_VIDEO") {
+    throw new MetaAdsCampaignCreationError(
+      "The current Meta creative service supports SINGLE_IMAGE and SINGLE_VIDEO only. Carousel requires its own child-attachment workflow.",
+      400,
+    );
+  }
+  const destinationType = typeof input.destinationType === "string"
+    ? input.destinationType.trim().toUpperCase()
+    : input.destinationType === undefined || input.destinationType === null
+      ? "WEBSITE"
+      : "";
+  if (destinationType !== "WEBSITE") {
+    throw new MetaAdsCampaignCreationError(
+      "The current Meta creative service supports a WEBSITE destination only. Instant Form, Messaging and App require destination-specific creative workflows.",
+      400,
+    );
+  }
+
   // 1. Validate creative name
   const name = input.name?.trim();
 
@@ -2841,34 +2919,74 @@ export async function createMetaAdsAdCreative(
     );
   }
 
-  // 5. Validate image and destination
-  // Existing-post creatives do not require a new image or destination URL.
-  // const existingPostId = input.existingPostId?.trim();
-  const existingPostId = input.existingPostId?.trim();
+  // 5. Validate image and destination.
+  // Existing Page-post mode is available only when a caller explicitly
+  // supplies an existingPostId. Never silently substitute a demo Page Post.
+  if (input.existingPostId !== undefined && input.existingPostId !== null && typeof input.existingPostId !== "string") {
+    throw new MetaAdsCampaignCreationError(
+      "Existing Page Post ID must be a string when supplied explicitly.",
+      400,
+    );
+  }
+  const existingPostId = typeof input.existingPostId === "string"
+    ? input.existingPostId.trim()
+    : "";
 
-  let imageUrl;
+  let imageUrl: string | undefined;
   let imageHash: string | undefined;
-  let destinationUrl;
+  let videoId: string | undefined;
+  let videoThumbnailUrl: string | undefined;
+  let destinationUrl: string | undefined;
+
+  if (creativeFormat === "SINGLE_VIDEO" && existingPostId) {
+    throw new MetaAdsCampaignCreationError(
+      "Existing Page-post mode cannot be combined with a new Single Video creative.",
+      400,
+    );
+  }
 
   if (!existingPostId) {
-    imageHash = input.imageHash?.trim() || undefined;
+    const validationOnlyMode = input.validateOnly ?? true;
+    if (creativeFormat === "SINGLE_IMAGE") {
+      imageHash = input.imageHash?.trim() || undefined;
+      const suppliedImageUrl = input.imageUrl?.trim();
 
-    const suppliedImageUrl = input.imageUrl?.trim();
+      // Validation-only may reference a private AdSyntra Asset Library image;
+      // the route validates ownership but intentionally does not upload it.
+      if (!imageHash && !suppliedImageUrl && !validationOnlyMode) {
+        throw new MetaAdsCampaignCreationError(
+          "Either an uploaded Meta image hash or a valid HTTPS image URL is required for live creation of a new Meta Ad Creative.",
+          400,
+        );
+      }
+      if (!imageHash && suppliedImageUrl) {
+        imageUrl = validateMetaHttpsUrl(suppliedImageUrl, "Creative image URL");
+      }
+    } else {
+      const suppliedVideoId = input.videoId?.trim();
+      if (suppliedVideoId && !/^\d+$/.test(suppliedVideoId)) {
+        throw new MetaAdsCampaignCreationError("Meta Video ID must be numeric.", 400);
+      }
+      if (!suppliedVideoId && !validationOnlyMode) {
+        throw new MetaAdsCampaignCreationError(
+          "A processed Meta video ID is required for live Single Video creative creation.",
+          400,
+        );
+      }
+      videoId = suppliedVideoId || undefined;
 
-    if (!imageHash && !imageUrl && input.validateOnly === false) {
-      throw new MetaAdsCampaignCreationError(
-        "Either imageHash or imageUrl is required for a live Meta Ad Creative.",
-        400,
-      );
-    }
-
-    // Prefer the uploaded Meta image hash when available.
-    // Preserve HTTPS image URL support for existing callers.
-    if (!imageHash) {
-      imageUrl = validateMetaHttpsUrl(
-        suppliedImageUrl!,
-        "Creative image URL",
-      );
+      const suppliedThumbnailUrl = input.videoThumbnailUrl?.trim();
+      if (suppliedThumbnailUrl) {
+        videoThumbnailUrl = validateMetaHttpsUrl(
+          suppliedThumbnailUrl,
+          "Meta video thumbnail URL",
+        );
+      } else if (!validationOnlyMode) {
+        throw new MetaAdsCampaignCreationError(
+          "A processed HTTPS video thumbnail is required before creating a Meta video creative.",
+          400,
+        );
+      }
     }
 
     destinationUrl = validateMetaHttpsUrl(
@@ -2991,24 +3109,35 @@ export async function createMetaAdsAdCreative(
         instagram_actor_id: instagramActorId,
       }),
 
-      link_data: {
-        ...(imageHash
-          ? { image_hash: imageHash }
-          : { picture: imageUrl! }),
-
-        link: destinationUrl!,
-        message: primaryText,
-        name: headline,
-
-        ...(description && { description }),
-
-        call_to_action: {
-          type: input.callToAction,
-          value: {
-            link: destinationUrl!,
-          },
-        },
-      },
+      ...(creativeFormat === "SINGLE_VIDEO"
+        ? {
+            video_data: {
+              video_id: videoId!,
+              image_url: videoThumbnailUrl!,
+              message: primaryText,
+              title: headline,
+              ...(description && { link_description: description }),
+              call_to_action: {
+                type: input.callToAction,
+                value: { link: destinationUrl! },
+              },
+            },
+          }
+        : {
+            link_data: {
+              ...(imageHash
+                ? { image_hash: imageHash }
+                : { picture: imageUrl! }),
+              link: destinationUrl!,
+              message: primaryText,
+              name: headline,
+              ...(description && { description }),
+              call_to_action: {
+                type: input.callToAction,
+                value: { link: destinationUrl! },
+              },
+            },
+          }),
     };
 
     form.set(
@@ -3120,6 +3249,12 @@ export async function createMetaAdsCampaign(
     special_ad_categories: JSON.stringify(validated.specialAdCategories),
   });
 
+  if (validated.specialAdCategoryCountries.length > 0) {
+    form.set(
+      "special_ad_category_country",
+      JSON.stringify(validated.specialAdCategoryCountries),
+    );
+  }
 
   if (validated.startTime) {
     form.set("start_time", validated.startTime);

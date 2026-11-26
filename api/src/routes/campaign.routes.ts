@@ -88,10 +88,15 @@ import sharp from "sharp";
 import { resolveStoredAssetPath } from "../services/asset-storage.service.js";
 import { uploadMetaAdsImageAsset } from "../metaadsAPI/services/meta-ads-image-upload.service.js";
 import {
+    uploadMetaAdsVideoAsset,
+    waitForMetaAdsVideoReady,
+} from "../metaadsAPI/services/meta-ads-video-upload.service.js";
+import {
  getGoogleAdsAudiences,
     getGoogleAdsConversionActions,
     getGoogleAdsPortfolioStrategies,
     getGoogleAdsMerchantCenterLinks,
+    getGoogleAdsHotelCenterLinks,
     getGoogleMerchantCenterDataSources,
     getGoogleMerchantCenterFeedLabels,
     getGoogleMerchantCenterProducts,
@@ -110,6 +115,10 @@ import {
     evaluateCampaignCreateGate,
     getCapabilityConfigurationError,
 } from "../campaign-capabilities/campaign-capability.enforcement.js";
+import {
+    MetaCampaignPrerequisiteError,
+    validateMetaCampaignPrerequisites,
+} from "../metaadsAPI/services/meta-campaign-prerequisites.service.js";
 
 const router = Router();
 
@@ -256,6 +265,93 @@ async function readOwnedCampaignImageAsset(
         mimeType,
         width: swapsDimensions ? metadata.height! : metadata.width,
         height: swapsDimensions ? metadata.width! : metadata.height,
+    };
+}
+
+const META_CAMPAIGN_VIDEO_MIME_TYPES = new Set([
+    "video/mp4",
+    "video/quicktime",
+    "video/webm",
+]);
+const MAX_META_CAMPAIGN_VIDEO_BYTES = 100 * 1024 * 1024;
+
+/**
+ * Reads an authenticated user's private Asset Library video from local storage.
+ * The provider receives the binary upload only; the private storage URL/key is
+ * never forwarded to Meta.
+ */
+async function readOwnedCampaignVideoAsset(
+    userId: string,
+    assetId: string,
+): Promise<{
+    buffer: Buffer;
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+}> {
+    const asset = await AssetModel.findOne({
+        _id: assetId,
+        ownerUserId: userId,
+        kind: "VIDEO",
+    })
+        .select("+storageKey +storageProvider")
+        .lean()
+        .exec();
+
+    if (!asset || !asset.storageKey) {
+        throw new CampaignRequestValidationError(
+            "The selected video is not available in your private Asset Library storage.",
+        );
+    }
+    if (asset.storageProvider !== "LOCAL") {
+        throw new CampaignRequestValidationError(
+            "The selected video uses a storage provider that this Meta upload flow does not support yet.",
+        );
+    }
+
+    const mimeType = String(asset.mimeType ?? "").trim().toLowerCase();
+    if (!META_CAMPAIGN_VIDEO_MIME_TYPES.has(mimeType)) {
+        throw new CampaignRequestValidationError(
+            "Meta video uploads currently support MP4, MOV and WebM Asset Library files.",
+        );
+    }
+    if (typeof asset.sizeBytes === "number" && asset.sizeBytes > MAX_META_CAMPAIGN_VIDEO_BYTES) {
+        throw new CampaignRequestValidationError(
+            "Meta campaign video assets must be 100 MB or smaller.",
+        );
+    }
+
+    let buffer: Buffer;
+    try {
+        buffer = await readFile(resolveStoredAssetPath(asset.storageKey));
+    } catch {
+        throw new CampaignRequestValidationError(
+            "The selected Asset Library video could not be read from private storage.",
+        );
+    }
+    if (!buffer.length || buffer.length > MAX_META_CAMPAIGN_VIDEO_BYTES) {
+        throw new CampaignRequestValidationError(
+            "The selected Meta video must be non-empty and no larger than 100 MB.",
+        );
+    }
+
+    // Container-signature checks prevent a renamed image or arbitrary binary
+    // from being uploaded as a video. Full codec/duration validation remains
+    // part of the final media QA stage.
+    const hasIsoBmffSignature = buffer.length >= 8 && buffer.toString("ascii", 4, 8) === "ftyp";
+    const hasWebmSignature = buffer.length >= 4 && buffer.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
+    if ((mimeType === "video/webm" && !hasWebmSignature) ||
+        ((mimeType === "video/mp4" || mimeType === "video/quicktime") && !hasIsoBmffSignature)) {
+        throw new CampaignRequestValidationError(
+            "The selected video content does not match its declared MP4, MOV or WebM file type.",
+        );
+    }
+
+    return {
+        buffer,
+        fileName: asset.originalFileName || asset.name || `asset-${assetId}`,
+        mimeType,
+        sizeBytes: buffer.length,
     };
 }
 
@@ -1229,6 +1325,7 @@ function buildMetaCampaignBundleInput(
         confirm: boolean;
     },
     uploadedMetaImageHash?: string,
+    uploadedMetaVideo?: { videoId: string; thumbnailUrl: string },
 ): any {
     const campaignConfig = requireConfigObject(
         configuration.campaign,
@@ -1256,6 +1353,27 @@ function buildMetaCampaignBundleInput(
         rawCreative,
         "Meta Creative configuration",
     );
+
+    // Only the two provider-native website creative shapes below are currently
+    // built end-to-end. Carousel and non-website destinations remain blocked.
+    const creativeFormat = String(
+        getConfigValue(creativeConfig, "format", "creativeFormat") ?? "SINGLE_IMAGE",
+    ).trim().toUpperCase();
+    if (creativeFormat !== "SINGLE_IMAGE" && creativeFormat !== "SINGLE_VIDEO") {
+        throw new CampaignRequestValidationError(
+            "The current Meta campaign execution path supports SINGLE_IMAGE and SINGLE_VIDEO website creatives only. Carousel and other destinations remain under development.",
+        );
+    }
+
+    const creativeDestination = getConfigValue(creativeConfig, "destination");
+    const creativeDestinationType = isRecord(creativeDestination)
+        ? String(getConfigValue(creativeDestination, "type") ?? "WEBSITE").trim().toUpperCase()
+        : "WEBSITE";
+    if (creativeDestinationType !== "WEBSITE") {
+        throw new CampaignRequestValidationError(
+            "The current Meta global campaign execution path supports a WEBSITE destination only. Instant Form, Messaging and App creation require their destination-specific creative workflows.",
+        );
+    }
 
     // Campaign objective
     const objective = (
@@ -1322,6 +1440,21 @@ function buildMetaCampaignBundleInput(
     }
 
     const specialAdCategories = rawCategories as string[];
+
+    const rawSpecialAdCategoryCountries = getConfigValue(
+        campaignConfig,
+        "specialAdCategoryCountries",
+        "special_ad_category_country",
+    ) ?? [];
+    if (
+        !Array.isArray(rawSpecialAdCategoryCountries) ||
+        !rawSpecialAdCategoryCountries.every((item: unknown) => typeof item === "string")
+    ) {
+        throw new CampaignRequestValidationError(
+            "Meta specialAdCategoryCountries must be an array of ISO country codes.",
+        );
+    }
+    const specialAdCategoryCountries = rawSpecialAdCategoryCountries as string[];
 
     // Currency is shared by campaign and Ad Set budget settings.
     const budgetCurrency =
@@ -1398,13 +1531,17 @@ function buildMetaCampaignBundleInput(
 
     const creativeImageHash = uploadedMetaImageHash ?? configuredImageHash;
 
-    if (
+    if (creativeFormat === "SINGLE_IMAGE" &&
         !creativeImageHash &&
         !configuredImageUrl &&
-        !execution.validateOnly
-    ) {
+        !execution.validateOnly) {
         throw new CampaignRequestValidationError(
             "A Meta Creative image is required. Select an Asset Library image or provide an HTTPS image URL.",
+        );
+    }
+    if (creativeFormat === "SINGLE_VIDEO" && !uploadedMetaVideo && !execution.validateOnly) {
+        throw new CampaignRequestValidationError(
+            "A Meta video must be uploaded and processed before creating a Single Video creative.",
         );
     }
     return {
@@ -1418,6 +1555,7 @@ function buildMetaCampaignBundleInput(
                 CreateMetaAdsCampaignBundleInput["campaign"]["buyingType"],
 
             specialAdCategories,
+            specialAdCategoryCountries,
 
             budgetLevel,
 
@@ -1567,6 +1705,8 @@ function buildMetaCampaignBundleInput(
 
         creative: {
             name: creativeName,
+            format: creativeFormat,
+            destinationType: creativeDestinationType,
 
             pageId: requireConfigString(
                 creativeConfig,
@@ -1600,6 +1740,8 @@ function buildMetaCampaignBundleInput(
 
             imageUrl: configuredImageUrl,
             imageHash: creativeImageHash,
+            videoId: uploadedMetaVideo?.videoId,
+            videoThumbnailUrl: uploadedMetaVideo?.thumbnailUrl,
             destinationUrl,
 
             callToAction: requireConfigString(
@@ -2155,30 +2297,27 @@ router.post("/", async (req: Request, res: Response) => {
                     throw new Error("Google Ads provider configuration is missing.");
                 }
 
+                const googleCreateGate = evaluateCampaignCreateGate(
+                    "googleAds",
+                    googleRequest.providerCampaignType,
+                    execution.validateOnly,
+                );
+                if (!googleCreateGate.allowed) {
+                    throw new CampaignRequestValidationError(
+                        googleCreateGate.reason ?? "Google Ads campaign creation is not enabled for this campaign type.",
+                    );
+                }
 
-               const googleCreateGate = evaluateCampaignCreateGate(
-                   "googleAds",
-                   googleRequest.providerCampaignType,
-                   execution.validateOnly,
-               );
-              if (!googleCreateGate.allowed) {
-                   throw new CampaignRequestValidationError(
-                       googleCreateGate.reason ?? "Google Ads campaign creation is not enabled for this campaign type.",
-                   );
-               }
+                const googleCapabilityConfigurationError = getCapabilityConfigurationError(
+                    "googleAds",
+                    googleRequest.providerCampaignType,
+                    googleRequest.providerObjective,
+                    googleRequest.configuration,
+                );
+                if (googleCapabilityConfigurationError) {
+                    throw new CampaignRequestValidationError(googleCapabilityConfigurationError);
+                }
 
-               const googleCapabilityConfigurationError = getCapabilityConfigurationError(
-                   "googleAds",
-                   googleRequest.providerCampaignType,
-                   googleRequest.providerObjective,
-                   googleRequest.configuration,
-               );
-               if (googleCapabilityConfigurationError) {
-                   throw new CampaignRequestValidationError(googleCapabilityConfigurationError);
-                 }
-
-                 
- 
                 // Search, Display and Standard Performance Max have independent execution paths.
                 const campaignType =
                     googleRequest.providerCampaignType.trim().toUpperCase();
@@ -3101,6 +3240,51 @@ router.post("/", async (req: Request, res: Response) => {
 
                 googleProvider.lastError = null;
 
+                // 5. Save real resources only after live creation.
+
+                /*if (!result.validateOnly && result.createdResources) {
+                    const resources = result.createdResources;
+
+                    googleProvider.providerCampaignResourceName = resources.campaign;
+
+                    googleProvider.providerCampaignId =
+                        resources.campaign.split("/").at(-1) ?? null;
+
+                    googleProvider.providerStatus = "PAUSED";
+                    googleProvider.deliveryStatus = "PAUSED";
+                    googleProvider.lastSyncedAt = new Date();
+
+                    googleProvider.resources = [
+                        {
+                            resourceType: "campaignBudget",
+                            resourceName: resources.budget,
+                        },
+                        {
+                            resourceType: "campaign",
+                            resourceName: resources.campaign,
+                        },
+                        {
+                            resourceType: "adGroup",
+                            resourceName: resources.adGroup,
+                        },
+                        ...resources.locationCriteria.map((resourceName: any) => ({
+                            resourceType: "locationCriterion",
+                            resourceName,
+                        })),
+                        ...resources.positiveKeywords.map((resourceName: any) => ({
+                            resourceType: "positiveKeyword",
+                            resourceName,
+                        })),
+                        ...resources.negativeKeywords.map((resourceName: any) => ({
+                            resourceType: "negativeKeyword",
+                            resourceName,
+                        })),
+                        {
+                            resourceType: "responsiveSearchAd",
+                            resourceName: resources.responsiveSearchAd,
+                        },
+                    ];
+                }*/
 
                 if (!result.validateOnly && result.createdResources) {
                     const resources = result.createdResources;
@@ -3423,26 +3607,26 @@ router.post("/", async (req: Request, res: Response) => {
                     );
                 }
 
-               const metaCreateGate = evaluateCampaignCreateGate(
-                   "metaAds",
-                   metaRequest.providerCampaignType,
-                   execution.validateOnly,
-               );
-               if (!metaCreateGate.allowed) {
-                   throw new CampaignRequestValidationError(
-                       metaCreateGate.reason ?? "Meta Ads campaign creation is not enabled for this campaign type.",
-                   );
-               }
+                const metaCreateGate = evaluateCampaignCreateGate(
+                    "metaAds",
+                    metaRequest.providerCampaignType,
+                    execution.validateOnly,
+                );
+                if (!metaCreateGate.allowed) {
+                    throw new CampaignRequestValidationError(
+                        metaCreateGate.reason ?? "Meta Ads campaign creation is not enabled for this campaign type.",
+                    );
+                }
 
-               const metaCapabilityConfigurationError = getCapabilityConfigurationError(
-                   "metaAds",
-                   metaRequest.providerCampaignType,
-                   metaRequest.providerObjective,
-                   metaRequest.configuration,
-               );
-               if (metaCapabilityConfigurationError) {
-                   throw new CampaignRequestValidationError(metaCapabilityConfigurationError);
-               }
+                const metaCapabilityConfigurationError = getCapabilityConfigurationError(
+                    "metaAds",
+                    metaRequest.providerCampaignType,
+                    metaRequest.providerObjective,
+                    metaRequest.configuration,
+                );
+                if (metaCapabilityConfigurationError) {
+                    throw new CampaignRequestValidationError(metaCapabilityConfigurationError);
+                }
 
                 // 1. Verify that the submitted account belongs to this user.
                 const ownedMetaAccount = await AdAccountModel.findOne({
@@ -3460,8 +3644,45 @@ router.post("/", async (req: Request, res: Response) => {
                     );
                 }
 
+                // Phase 2B: resolve every Page, Pixel, Custom Conversion,
+                // Instant Form, messaging identity and app reference against
+                // the selected account before any provider resource is created.
+                await validateMetaCampaignPrerequisites(
+                    userId,
+                    metaRequest.accountId,
+                    metaRequest.configuration,
+                );
+
+                const metaConfiguration = isRecord(metaRequest.configuration)
+                    ? metaRequest.configuration
+                    : {};
+                const metaAdDraft = isRecord(metaConfiguration.ad)
+                    ? metaConfiguration.ad
+                    : {};
+                const metaCreativeDraft = isRecord(metaConfiguration.creative)
+                    ? metaConfiguration.creative
+                    : isRecord(metaAdDraft.creativeDraft)
+                        ? metaAdDraft.creativeDraft
+                        : {};
+                const requestedMetaCreativeFormat = String(
+                    getConfigValue(metaCreativeDraft, "format", "creativeFormat") ?? "SINGLE_IMAGE",
+                ).trim().toUpperCase();
+                const requestedMetaDestination = getConfigValue(metaCreativeDraft, "destination");
+                const requestedMetaDestinationType = isRecord(requestedMetaDestination)
+                    ? String(getConfigValue(requestedMetaDestination, "type") ?? "WEBSITE").trim().toUpperCase()
+                    : "WEBSITE";
+                if (
+                    !["SINGLE_IMAGE", "SINGLE_VIDEO"].includes(requestedMetaCreativeFormat) ||
+                    requestedMetaDestinationType !== "WEBSITE"
+                ) {
+                    throw new CampaignRequestValidationError(
+                        "The current Meta global execution path supports SINGLE_IMAGE and SINGLE_VIDEO creatives with a WEBSITE destination. Carousel, Instant Form, Messaging and App execution remain under development.",
+                    );
+                }
+
                 let uploadedMetaImageHash: string | undefined;
                 let uploadedMetaImageRecord: Record<string, unknown> | null = null;
+                let uploadedMetaVideo: { videoId: string; thumbnailUrl: string } | undefined;
 
                 const selectedMetaMedia = selectedAssetReferences.filter(
                     (reference) =>
@@ -3485,13 +3706,132 @@ router.post("/", async (req: Request, res: Response) => {
                         reference.kind === "IMAGE" || reference.kind === "LOGO",
                 );
 
-                if (selectedMetaImages.length > 1) {
-                    throw new CampaignRequestValidationError(
-                        "The current Meta creative flow supports one selected Asset Library image per ad. Select one image and try again.",
+                if (requestedMetaCreativeFormat === "SINGLE_IMAGE") {
+                    if (selectedMetaVideos.length > 0) {
+                        throw new CampaignRequestValidationError(
+                            "A Single Image creative cannot use a selected video asset. Choose an image or change the creative format.",
+                        );
+                    }
+                    if (selectedMetaImages.length > 1) {
+                        throw new CampaignRequestValidationError(
+                            "The current Meta Single Image flow supports one selected Asset Library image per ad.",
+                        );
+                    }
+                } else {
+                    if (selectedMetaVideos.length !== 1) {
+                        throw new CampaignRequestValidationError(
+                            "A Single Video creative requires exactly one private VIDEO asset selected from the AdSyntra Asset Library.",
+                        );
+                    }
+                    if (selectedMetaImages.length > 0) {
+                        throw new CampaignRequestValidationError(
+                            "A Single Video creative cannot include a separate selected image. Choose one video asset only; Meta will use its processed thumbnail.",
+                        );
+                    }
+                    const selectedVideo = selectedMetaVideos[0];
+                    // Validate ownership, file type and private storage on both
+                    // validation-only and live paths. Validation-only must not
+                    // upload media or create provider-side objects.
+                    const videoFile = await readOwnedCampaignVideoAsset(
+                        userId,
+                        selectedVideo.assetId,
                     );
+
+                    if (!execution.validateOnly) {
+                        const metaContext = await getMetaAdsCreationContext(
+                            userId,
+                            metaRequest.accountId,
+                        );
+                        const currentConfiguration = isRecord(metaProvider.configuration)
+                            ? metaProvider.configuration
+                            : {};
+                        const existingUploads = Array.isArray(currentConfiguration.creativeAssetUploads)
+                            ? currentConfiguration.creativeAssetUploads
+                            : [];
+                        const matchingVideoUpload = existingUploads.find(
+                            (item: unknown) =>
+                                isRecord(item) &&
+                                item.provider === "metaAds" &&
+                                item.assetId === selectedVideo.assetId &&
+                                typeof item.videoId === "string" &&
+                                item.videoId.trim() &&
+                                normalizeMetaAccountId(item.adAccountId) === normalizeMetaAccountId(metaRequest.accountId),
+                        ) as Record<string, unknown> | undefined;
+
+                        let videoId = typeof matchingVideoUpload?.videoId === "string"
+                            ? matchingVideoUpload.videoId.trim()
+                            : "";
+                        let videoUploadRecord: Record<string, unknown> = matchingVideoUpload ?? {};
+
+                        if (!videoId) {
+                            const uploadResult = await uploadMetaAdsVideoAsset(
+                                metaContext,
+                                {
+                                    buffer: videoFile.buffer,
+                                    fileName: videoFile.fileName,
+                                    mimeType: videoFile.mimeType,
+                                    title: videoFile.fileName,
+                                },
+                            );
+                            videoId = uploadResult.videoId;
+                            videoUploadRecord = {
+                                provider: "metaAds",
+                                assetId: selectedVideo.assetId,
+                                videoId,
+                                adAccountId: uploadResult.adAccountId,
+                                fileName: uploadResult.fileName,
+                                mimeType: uploadResult.mimeType,
+                                fileSizeBytes: uploadResult.fileSizeBytes,
+                                processingStatus: "PROCESSING",
+                                uploadedAt: new Date(),
+                            };
+                            const retainedUploads = existingUploads.filter(
+                                (item: unknown) =>
+                                    !(
+                                        isRecord(item) &&
+                                        item.provider === "metaAds" &&
+                                        item.assetId === selectedVideo.assetId &&
+                                        normalizeMetaAccountId(item.adAccountId) === normalizeMetaAccountId(uploadResult.adAccountId)
+                                    ),
+                            );
+                            metaProvider.configuration = {
+                                ...currentConfiguration,
+                                creativeAssetUploads: [...retainedUploads, videoUploadRecord],
+                            };
+                            campaign.markModified("providers.metaAds");
+                            await campaign.save();
+                        }
+
+                        const readyVideo = await waitForMetaAdsVideoReady(metaContext, videoId);
+                        uploadedMetaVideo = {
+                            videoId: readyVideo.videoId,
+                            thumbnailUrl: readyVideo.thumbnailUrl,
+                        };
+                        const completedVideoRecord = {
+                            ...videoUploadRecord,
+                            processingStatus: "READY",
+                            thumbnailUrl: readyVideo.thumbnailUrl,
+                            processedAt: new Date(),
+                        };
+                        const retainedUploads = existingUploads.filter(
+                            (item: unknown) =>
+                                !(
+                                    isRecord(item) &&
+                                    item.provider === "metaAds" &&
+                                    item.assetId === selectedVideo.assetId &&
+                                    normalizeMetaAccountId(item.adAccountId) === normalizeMetaAccountId(metaRequest.accountId)
+                                ),
+                        );
+                        metaProvider.configuration = {
+                            ...currentConfiguration,
+                            creativeAssetUploads: [...retainedUploads, completedVideoRecord],
+                        };
+                        campaign.markModified("providers.metaAds");
+                        await campaign.save();
+                    }
                 }
 
-                if (!execution.validateOnly && selectedMetaImages.length === 1) {
+                if (!execution.validateOnly && requestedMetaCreativeFormat === "SINGLE_IMAGE" && selectedMetaImages.length === 1) {
                     const selectedImage: any = selectedMetaImages[0];
                     const imageFile = await readOwnedCampaignImageAsset(
                         userId,
@@ -3569,7 +3909,7 @@ router.post("/", async (req: Request, res: Response) => {
                     metaRequest.configuration,
                     execution,
                     uploadedMetaImageHash,
-
+                    uploadedMetaVideo,
                 );
 
                 // 3. Execute all four Meta creation stages.
@@ -3652,9 +3992,11 @@ router.post("/", async (req: Request, res: Response) => {
                     errorDetails.originalErrorDetails ?? null;
 
                 const providerStatusCode =
-                    error instanceof MetaAdsCampaignCreationError
+                    error instanceof MetaCampaignPrerequisiteError
                         ? error.statusCode
-                        : null;
+                        : error instanceof MetaAdsCampaignCreationError
+                            ? error.statusCode
+                            : null;
 
                 const partialResult = isRecord(errorDetails.partialResult)
                     ? errorDetails.partialResult
@@ -3732,9 +4074,14 @@ router.post("/", async (req: Request, res: Response) => {
                     creationStatus:
                         partialResources.length > 0 ? "partial" : "failed",
                     failedStep:
-                        typeof errorDetails.failedStep === "string"
-                            ? errorDetails.failedStep
-                            : null,
+                        error instanceof MetaCampaignPrerequisiteError
+                            ? "PREREQUISITE_VALIDATION"
+                            : typeof errorDetails.failedStep === "string"
+                                ? errorDetails.failedStep
+                                : null,
+                    errorCode: error instanceof MetaCampaignPrerequisiteError
+                        ? "META_CAMPAIGN_PREREQUISITE_FAILED"
+                        : null,
                     error: message,
                     partialResources,
                     providerStatusCode,
@@ -3839,6 +4186,14 @@ router.post("/", async (req: Request, res: Response) => {
             return res.status(400).json({
                 success: false,
                 message: error.message,
+            });
+        }
+
+        if (error instanceof MetaCampaignPrerequisiteError) {
+            return res.status(error.statusCode).json({
+                success: false,
+                message: error.message,
+                code: "META_CAMPAIGN_PREREQUISITE_FAILED",
             });
         }
 
@@ -4559,6 +4914,19 @@ router.post(
                 ...savedCreativeConfig,
                 ...creativeOverrides,
             };
+            const retryCreativeFormat = String(
+                getConfigValue(effectiveCreativeConfig, "format", "creativeFormat") ?? "SINGLE_IMAGE",
+            ).trim().toUpperCase();
+            const retryDestinationDraft = getConfigValue(effectiveCreativeConfig, "destination");
+            const retryDestinationType = isRecord(retryDestinationDraft)
+                ? String(getConfigValue(retryDestinationDraft, "type") ?? "WEBSITE").trim().toUpperCase()
+                : "WEBSITE";
+            if (!["SINGLE_IMAGE", "SINGLE_VIDEO"].includes(retryCreativeFormat) || retryDestinationType !== "WEBSITE") {
+                return res.status(422).json({
+                    success: false,
+                    message: "Creative retry currently supports SINGLE_IMAGE and SINGLE_VIDEO with a WEBSITE destination only. Carousel and other destinations remain under development.",
+                });
+            }
 
             const adName =
                 optionalConfigString(
@@ -4611,36 +4979,45 @@ router.post(
                     (item.kind === "IMAGE" || item.kind === "LOGO"),
             ) as Array<Record<string, unknown>>;
 
-            const selectedMetaVideos = rawCreativeAssetReferences.some(
+            const selectedPrivateMetaVideos = rawCreativeAssetReferences.filter(
                 (item: unknown) =>
                     isRecord(item) &&
                     item.providerUploadRequired === true &&
-                    item.intendedPlatforms instanceof Array &&
+                    Array.isArray(item.intendedPlatforms) &&
                     item.intendedPlatforms.includes("metaAds") &&
                     item.kind === "VIDEO",
-            );
+            ) as Array<Record<string, unknown>>;
 
-            if (selectedMetaVideos) {
-                return res.status(422).json({
-                    success: false,
-                    message:
-                        "Video assets are not supported by the current Meta single-image creative retry flow. Select a JPEG or PNG image instead.",
-                });
-            }
-
-            if (selectedPrivateMetaImages.length > 1) {
-                return res.status(422).json({
-                    success: false,
-                    message:
-                        "The current Meta creative retry supports one selected Asset Library image per ad.",
-                });
+            if (retryCreativeFormat === "SINGLE_IMAGE") {
+                if (selectedPrivateMetaVideos.length > 0) {
+                    return res.status(422).json({
+                        success: false,
+                        message: "A Single Image creative cannot use a selected video asset.",
+                    });
+                }
+                if (selectedPrivateMetaImages.length > 1) {
+                    return res.status(422).json({
+                        success: false,
+                        message: "The current Meta creative retry supports one selected Asset Library image per ad.",
+                    });
+                }
+            } else {
+                if (selectedPrivateMetaVideos.length !== 1 || selectedPrivateMetaImages.length > 0) {
+                    return res.status(422).json({
+                        success: false,
+                        message: "A Single Video retry requires exactly one private Meta VIDEO asset and no image asset.",
+                    });
+                }
             }
 
             const selectedMetaImage = selectedPrivateMetaImages[0];
-            const selectedMetaAssetId =
-                typeof selectedMetaImage?.assetId === "string"
-                    ? selectedMetaImage.assetId
-                    : null;
+            const selectedMetaAssetId = retryCreativeFormat === "SINGLE_IMAGE" && typeof selectedMetaImage?.assetId === "string"
+                ? selectedMetaImage.assetId
+                : null;
+            const selectedMetaVideo = selectedPrivateMetaVideos[0];
+            const selectedMetaVideoAssetId = retryCreativeFormat === "SINGLE_VIDEO" && typeof selectedMetaVideo?.assetId === "string"
+                ? selectedMetaVideo.assetId
+                : null;
 
             const currentConfiguration = isRecord(metaProvider.configuration)
                 ? metaProvider.configuration
@@ -4651,6 +5028,25 @@ router.post(
             )
                 ? currentConfiguration.creativeAssetUploads
                 : [];
+
+            const matchingSavedVideoUpload = selectedMetaVideoAssetId
+                ? previousUploads.find(
+                    (item: unknown) =>
+                        isRecord(item) &&
+                        item.provider === "metaAds" &&
+                        item.assetId === selectedMetaVideoAssetId &&
+                        typeof item.videoId === "string" &&
+                        item.videoId.trim() &&
+                        normalizeMetaAccountId(item.adAccountId) === normalizeMetaAccountId(metaProvider.accountId),
+                ) as Record<string, unknown> | undefined
+                : undefined;
+
+            let retryVideoId = typeof matchingSavedVideoUpload?.videoId === "string"
+                ? matchingSavedVideoUpload.videoId.trim()
+                : undefined;
+            let retryVideoThumbnailUrl = typeof matchingSavedVideoUpload?.thumbnailUrl === "string"
+                ? matchingSavedVideoUpload.thumbnailUrl.trim()
+                : undefined;
 
             const matchingSavedUpload = selectedMetaAssetId
                 ? previousUploads.find(
@@ -4733,17 +5129,77 @@ router.post(
                 await campaign.save();
             }
 
-            if (!retryImageHash && !configuredImageUrl) {
+            if (retryCreativeFormat === "SINGLE_IMAGE" && !retryImageHash && !configuredImageUrl) {
                 return res.status(422).json({
                     success: false,
-                    message:
-                        "Meta Creative image is missing. Select an Asset Library image or configure an HTTPS image URL before retrying.",
+                    message: "Meta Creative image is missing. Select an Asset Library image or configure an HTTPS image URL before retrying.",
                 });
+            }
+
+            if (retryCreativeFormat === "SINGLE_VIDEO" && selectedMetaVideoAssetId) {
+                const videoFile = await readOwnedCampaignVideoAsset(userId, selectedMetaVideoAssetId);
+                if (!retryVideoId) {
+                    const uploadResult = await uploadMetaAdsVideoAsset(metaContext, {
+                        buffer: videoFile.buffer,
+                        fileName: videoFile.fileName,
+                        mimeType: videoFile.mimeType,
+                        title: videoFile.fileName,
+                    });
+                    retryVideoId = uploadResult.videoId;
+                    const uploadRecord = {
+                        provider: "metaAds",
+                        assetId: selectedMetaVideoAssetId,
+                        videoId: uploadResult.videoId,
+                        adAccountId: uploadResult.adAccountId,
+                        fileName: uploadResult.fileName,
+                        mimeType: uploadResult.mimeType,
+                        fileSizeBytes: uploadResult.fileSizeBytes,
+                        processingStatus: "PROCESSING",
+                        uploadedAt: new Date(),
+                    };
+                    const retainedUploads = previousUploads.filter(
+                        (item: unknown) => !(isRecord(item) && item.provider === "metaAds" && item.assetId === selectedMetaVideoAssetId && normalizeMetaAccountId(item.adAccountId) === normalizeMetaAccountId(metaContext.adAccountId)),
+                    );
+                    metaProvider.configuration = {
+                        ...currentConfiguration,
+                        creativeAssetUploads: [...retainedUploads, uploadRecord],
+                    };
+                    campaign.markModified("providers.metaAds");
+                    await campaign.save();
+                }
+
+                const readyVideo = await waitForMetaAdsVideoReady(metaContext, retryVideoId);
+                retryVideoId = readyVideo.videoId;
+                retryVideoThumbnailUrl = readyVideo.thumbnailUrl;
+                const completedUpload = {
+                    provider: "metaAds",
+                    assetId: selectedMetaVideoAssetId,
+                    videoId: readyVideo.videoId,
+                    thumbnailUrl: readyVideo.thumbnailUrl,
+                    adAccountId: metaContext.adAccountId,
+                    fileName: videoFile.fileName,
+                    mimeType: videoFile.mimeType,
+                    fileSizeBytes: videoFile.sizeBytes,
+                    processingStatus: "READY",
+                    uploadedAt: matchingSavedVideoUpload?.uploadedAt ?? new Date(),
+                    processedAt: new Date(),
+                };
+                const retainedUploads = previousUploads.filter(
+                    (item: unknown) => !(isRecord(item) && item.provider === "metaAds" && item.assetId === selectedMetaVideoAssetId && normalizeMetaAccountId(item.adAccountId) === normalizeMetaAccountId(metaContext.adAccountId)),
+                );
+                metaProvider.configuration = {
+                    ...currentConfiguration,
+                    creativeAssetUploads: [...retainedUploads, completedUpload],
+                };
+                campaign.markModified("providers.metaAds");
+                await campaign.save();
             }
 
             // Build only the Creative input.
             const creativeInput: CreateMetaAdsAdCreativeInput = {
                 name: creativeName,
+                format: retryCreativeFormat,
+                destinationType: retryDestinationType,
 
                 pageId: requireConfigString(
                     effectiveCreativeConfig,
@@ -4775,6 +5231,10 @@ router.post(
                     "Meta Creative description",
                 ),
 
+                ...(retryVideoId && {
+                    videoId: retryVideoId,
+                    videoThumbnailUrl: retryVideoThumbnailUrl,
+                }),
                 ...(retryImageHash
                     ? { imageHash: retryImageHash }
                     : { imageUrl: configuredImageUrl }),
@@ -6079,6 +6539,16 @@ router.get("/lookups/google/portfolio-strategies", async (req, res) =>
 router.get("/lookups/google/merchant-center-links", async (req, res) =>
     withGoogleAdsLookup(req, res, (context) =>
         getGoogleAdsMerchantCenterLinks(context),
+    ),
+);
+
+// ==========================================
+// GOOGLE ADS HOTEL CENTER LINK LOOKUP
+// ==========================================
+
+router.get("/lookups/google/hotel-center-links", async (req, res) =>
+    withGoogleAdsLookup(req, res, (context) =>
+        getGoogleAdsHotelCenterLinks(context),
     ),
 );
 

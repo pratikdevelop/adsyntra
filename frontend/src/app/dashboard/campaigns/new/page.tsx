@@ -1184,6 +1184,47 @@ type MetaCustomConversionLookupResponse = {
   };
 };
 
+type MetaProductCatalogResource = {
+  id: string;
+  name: string;
+  vertical?: string | null;
+  productCount?: number;
+  feedCount?: number;
+  sources?: string[];
+  businesses?: Array<{
+    id: string;
+    name?: string | null;
+    relationship?: string;
+  }>;
+};
+
+type MetaProductSetResource = {
+  id: string;
+  name: string;
+  productCount?: number;
+  filter?: unknown;
+};
+
+type MetaCatalogLookupResponse = {
+  success: boolean;
+  message?: string;
+  adAccountId?: string;
+  count?: number;
+  catalogs?: MetaProductCatalogResource[];
+  truncated?: boolean;
+  warnings?: string[];
+};
+
+type MetaProductSetLookupResponse = {
+  success: boolean;
+  message?: string;
+  adAccountId?: string;
+  catalog?: MetaProductCatalogResource;
+  count?: number;
+  productSets?: MetaProductSetResource[];
+  truncated?: boolean;
+};
+
 async function requestMetaCustomConversions(
   getToken: () => Promise<string | null>,
   pixelId: string,
@@ -1343,6 +1384,15 @@ function appendUniqueValues(current: string, values: string[], separator = "\n")
 
 type MetaCityDistanceUnit = "kilometer" | "mile";
 
+function normalizeMetaCountryCodes(value: string): string[] {
+  return [...new Set(
+    value
+      .split(/[\n,]+/)
+      .map((item) => item.trim().toUpperCase())
+      .filter(Boolean),
+  )];
+}
+
 function buildMetaGeoLocationPayload(input: {
   countries: string;
   regionKeys: string[];
@@ -1409,6 +1459,27 @@ async function fetchMetaCampaignLookupOptions(
     );
   }
   return getMetaLookupRows(payload).filter((item) => Boolean(getMetaLookupId(item)));
+}
+
+async function fetchMetaCommerceLookup<T>(
+  apiBaseUrl: string,
+  token: string,
+  endpoint: string,
+): Promise<T> {
+  const url = `${apiBaseUrl.replace(/\/$/, "")}/api/campaigns/lookups/meta/${endpoint.replace(/^\/+/, "")}`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+    cache: "no-store",
+  });
+  const payload = await response.json().catch(() => null);
+  const root = asObject(payload);
+  if (!response.ok || root.success !== true) {
+    throw new Error(
+      String(root.message ?? root.error ?? `Meta commerce lookup failed (${response.status}).`),
+    );
+  }
+  return payload as T;
 }
 
 function normalizeGoogleCustomerId(value: string): string {
@@ -1690,6 +1761,148 @@ function getHotelCenterLinkId(link: GoogleHotelCenterLink): string {
   return /^\d+$/.test(id) ? id : "";
 }
 
+type MetaPlacementOption = { value: string; label: string };
+
+const META_MANUAL_PLACEMENT_OPTIONS: Record<string, MetaPlacementOption[]> = {
+  facebook: [
+    { value: "feed", label: "Facebook Feed" },
+    { value: "story", label: "Facebook Stories" },
+    { value: "video_feeds", label: "Facebook Video Feeds" },
+    { value: "right_hand_column", label: "Right Column" },
+    { value: "marketplace", label: "Marketplace" },
+    { value: "instream_video", label: "In-stream Video" },
+    { value: "facebook_reels", label: "Facebook Reels" },
+  ],
+  instagram: [
+    { value: "stream", label: "Instagram Feed" },
+    { value: "story", label: "Instagram Stories" },
+    { value: "reels", label: "Instagram Reels" },
+    { value: "ig_search", label: "Instagram Search" },
+    { value: "explore_home", label: "Instagram Explore Home" },
+  ],
+  messenger: [
+    { value: "messenger_home", label: "Messenger Inbox" },
+    { value: "sponsored_messages", label: "Sponsored Messages" },
+  ],
+  audience_network: [
+    { value: "classic", label: "Native, Banner and Interstitial" },
+    { value: "instream_video", label: "In-stream Video" },
+    { value: "rewarded_video", label: "Rewarded Video" },
+  ],
+};
+
+type MetaManualPlacementPolicy = {
+  allowedPlatforms?: string[];
+  allowedPositionsByPlatform?: Record<string, string[]>;
+  message?: string;
+};
+
+/**
+ * Conservative placement rules sourced from Meta's objective/placement
+ * compatibility reference. Keep this aligned with the backend validator and
+ * the configured Meta Graph API v26.0 placement catalogue.
+ */
+function getMetaManualPlacementPolicy(
+  objective: string,
+  optimizationGoal: string,
+  destinationType: string,
+  messagingType: string,
+): MetaManualPlacementPolicy {
+  if (objective === "OUTCOME_AWARENESS") {
+    return {
+      allowedPlatforms: ["facebook", "instagram", "audience_network"],
+      allowedPositionsByPlatform: {
+        facebook: ["feed", "video_feeds", "instream_video", "story"],
+        instagram: ["stream"],
+        audience_network: ["classic", "instream_video"],
+      },
+      message: "Meta Awareness manual placements are limited here to the documented Facebook, Instagram Feed and Audience Network inventory. Messenger, Instagram Reels/Search/Explore and other positions are hidden for this objective.",
+    };
+  }
+
+  if (
+    objective === "OUTCOME_LEADS" &&
+    optimizationGoal === "LEAD_GENERATION" &&
+    destinationType === "INSTANT_FORM"
+  ) {
+    return {
+      allowedPlatforms: ["facebook", "instagram"],
+      allowedPositionsByPlatform: {
+        facebook: ["feed", "story"],
+        instagram: ["stream"],
+      },
+      message: "For Meta Instant Form lead generation, AdSyntra limits manual placements to the documented Facebook Feed/Stories and Instagram Feed combinations. Messenger and Audience Network are unavailable in this configuration.",
+    };
+  }
+
+  if (
+    objective === "OUTCOME_APP_PROMOTION" &&
+    optimizationGoal === "APP_INSTALLS" &&
+    destinationType === "APP"
+  ) {
+    return {
+      allowedPlatforms: ["facebook", "instagram", "audience_network"],
+      message: "Meta App Install placements in this flow are limited to Facebook, Instagram and Audience Network. Messenger placements are not offered for this app-install configuration.",
+    };
+  }
+
+  if (objective === "OUTCOME_TRAFFIC" && destinationType === "MESSAGING") {
+    const allowedPositionsByPlatform: Record<string, string[]> = {};
+    if (messagingType === "MESSENGER") {
+      allowedPositionsByPlatform.facebook = META_MANUAL_PLACEMENT_OPTIONS.facebook
+        .map((item) => item.value)
+        .filter((value) => value !== "story");
+    }
+    if (["MESSENGER", "WHATSAPP"].includes(messagingType)) {
+      allowedPositionsByPlatform.instagram = META_MANUAL_PLACEMENT_OPTIONS.instagram
+        .map((item) => item.value)
+        .filter((value) => !["ig_search", "explore_home"].includes(value));
+    }
+    return {
+      allowedPositionsByPlatform,
+      message: "Meta filters placements that do not support the selected Traffic messaging destination.",
+    };
+  }
+
+  return {};
+}
+
+function MetaPlacementSelector({
+  title,
+  options,
+  selected,
+  onChange,
+}: {
+  title: string;
+  options: MetaPlacementOption[];
+  selected: string[];
+  onChange: (values: string[]) => void;
+}) {
+  return (
+    <div className="mt-3 rounded-lg border border-slate-200 p-3">
+      <p className="text-sm font-medium text-slate-700">{title}</p>
+      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+        {options.map((option) => (
+          <label key={option.value} className="flex items-center gap-2 text-sm text-slate-600">
+            <input
+              type="checkbox"
+              checked={selected.includes(option.value)}
+              onChange={(event) =>
+                onChange(
+                  event.target.checked
+                    ? [...selected, option.value]
+                    : selected.filter((value) => value !== option.value),
+                )
+              }
+            />
+            {option.label}
+          </label>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function CreateCampaignPage() {
   const { getToken, isLoaded, isSignedIn } = useAuth();
   const [campaignCapabilityRegistry, setCampaignCapabilityRegistry] =
@@ -1961,6 +2174,14 @@ const [googleShoppingProductGroupValue, setGoogleShoppingProductGroupValue] =
   const [metaSpecialAdCategories, setMetaSpecialAdCategories] = useState<
     string[]
   >([]);
+  const metaHasRestrictedAudienceSpecialCategory = metaSpecialAdCategories.some(
+    (category) => [
+      "HOUSING",
+      "EMPLOYMENT",
+      "CREDIT",
+      "FINANCIAL_PRODUCTS_SERVICES",
+    ].includes(category),
+  );
   const [metaPlacementMode, setMetaPlacementMode] = useState<
     "AUTOMATIC" | "MANUAL"
   >("AUTOMATIC");
@@ -1970,11 +2191,11 @@ const [googleShoppingProductGroupValue, setGoogleShoppingProductGroupValue] =
   const [metaFacebookPositions, setMetaFacebookPositions] = useState<string[]>([
     "feed",
     "story",
-    "reels",
+    "facebook_reels",
   ]);
   const [metaInstagramPositions, setMetaInstagramPositions] = useState<
     string[]
-  >(["stream", "story", "reels", "explore"]);
+  >(["stream", "story", "reels"]);
   const [metaMessengerPositions, setMetaMessengerPositions] = useState<
     string[]
   >(["messenger_home", "sponsored_messages"]);
@@ -2057,17 +2278,15 @@ const [googleShoppingProductGroupValue, setGoogleShoppingProductGroupValue] =
   const [metaAdDescription, setMetaAdDescription] = useState(
     "New arrivals and seasonal offers.",
   );
-  const [metaCreativeImageUrl, setMetaCreativeImageUrl] = useState(
-    "https://bkacontent.com/wp-content/uploads/2016/06/Depositphotos_31146757_l-2015.webp",
-  );
+  // No sample media URL is preselected. Require an advertiser-owned URL or
+  // an image selected from the Asset Library before campaign submission.
+  const [metaCreativeImageUrl, setMetaCreativeImageUrl] = useState("");
+ const [metaCreativeImageAssetId, setMetaCreativeImageAssetId] = useState<string | null>(null);
+
   const [metaCreativeFormat, setMetaCreativeFormat] = useState<
     "SINGLE_IMAGE" | "SINGLE_VIDEO" | "CAROUSEL"
   >("SINGLE_IMAGE");
-  const [metaCreativeVideoId, setMetaCreativeVideoId] =
-    useState("DEMO_META_VIDEO_ID");
-  const [metaCarouselCards, setMetaCarouselCards] = useState(
-    "New Arrivals | https://example.com/card-1.jpg | https://example.com/collection\nSummer Offers | https://example.com/card-2.jpg | https://example.com/offers",
-  );
+  const [metaCarouselCards, setMetaCarouselCards] = useState("");
   const [metaDestinationType, setMetaDestinationType] = useState<
     "WEBSITE" | "INSTANT_FORM" | "MESSAGING" | "APP"
   >("WEBSITE");
@@ -2300,6 +2519,17 @@ const [
   const [metaSelectedSavedAudience, setMetaSelectedSavedAudience] = useState<MetaCampaignLookupOption | null>(null);
   const [metaAudienceLoading, setMetaAudienceLoading] = useState(false);
   const [metaAudienceError, setMetaAudienceError] = useState("");
+  const [metaCatalogOptions, setMetaCatalogOptions] = useState<MetaProductCatalogResource[]>([]);
+  const [metaCatalogId, setMetaCatalogId] = useState("");
+  const [metaCatalogLoading, setMetaCatalogLoading] = useState(false);
+  const [metaCatalogError, setMetaCatalogError] = useState("");
+  const [metaCatalogWarnings, setMetaCatalogWarnings] = useState<string[]>([]);
+  const [metaCatalogLookupTruncated, setMetaCatalogLookupTruncated] = useState(false);
+  const [metaProductSetOptions, setMetaProductSetOptions] = useState<MetaProductSetResource[]>([]);
+  const [metaProductSetId, setMetaProductSetId] = useState("");
+  const [metaProductSetsLoading, setMetaProductSetsLoading] = useState(false);
+  const [metaProductSetsError, setMetaProductSetsError] = useState("");
+  const [metaProductSetLookupTruncated, setMetaProductSetLookupTruncated] = useState(false);
   const [metaSelectedInterestOptions, setMetaSelectedInterestOptions] = useState<MetaCampaignLookupOption[]>([]);
   const [metaTargetingQuery, setMetaTargetingQuery] = useState("");
   const [metaTargetingOptions, setMetaTargetingOptions] = useState<MetaCampaignLookupOption[]>([]);
@@ -2393,6 +2623,45 @@ const [
   const [campaignAssetAssignments, setCampaignAssetAssignments] = useState<
     Record<string, CampaignCreativeTargetReference>
   >({});
+
+   const selectedMetaPrivateImageAsset = useMemo(() => {
+    if (!metaCreativeImageAssetId || !attachedCreativeAssetIds.includes(metaCreativeImageAssetId)) {
+      return null;
+    }
+    return assetLibrary.find((asset) =>
+      asset.id === metaCreativeImageAssetId &&
+      asset.kind === "IMAGE" &&
+      Boolean(asset.contentUrl),
+    ) ?? null;
+  }, [assetLibrary, attachedCreativeAssetIds, metaCreativeImageAssetId]);
+
+  // A Meta Single Image creative uses exactly the explicitly selected private
+  // image. Other attached images remain available to their other provider
+  // targets but are not accidentally uploaded as additional Meta creatives.
+  const getCampaignAssetIntendedPlatforms = (asset: CampaignLibraryAsset) => {
+    const configuredPlatforms = asset.platformTargets?.length
+      ? asset.platformTargets
+      : selectedPlatforms;
+    const platforms = new Set([
+      ...configuredPlatforms.filter((platform) => selectedPlatforms.includes(platform)),
+      ...(campaignAssetAssignments[asset.id]?.platform
+        ? [campaignAssetAssignments[asset.id].platform]
+        : []),
+    ]);
+
+    if (
+      selectedPlatforms.includes("metaAds") &&
+      metaCreativeFormat === "SINGLE_IMAGE" &&
+      asset.kind === "IMAGE"
+    ) {
+      platforms.delete("metaAds");
+      if (asset.id === metaCreativeImageAssetId && selectedMetaPrivateImageAsset) {
+        platforms.add("metaAds");
+      }
+    }
+
+    return Array.from(platforms);
+  };
   const [creativeStudioNotice, setCreativeStudioNotice] = useState("");
   const [managedStatuses, setManagedStatuses] = useState<
     Record<string, ManagedStatus>
@@ -3579,20 +3848,17 @@ useEffect(() => {
         )
         : googlePerformanceGoalsByType[googleCampaignType] ||
         googlePerformanceGoalsByType.SEARCH;
-  
-  
   const selectedGoogleCampaignCapability =
-   campaignCapabilityRegistry?.providers
-     .find((provider) => provider.provider === "googleAds")
-     ?.campaignTypes.find(
-       (capability) => capability.builderCampaignType === googleCampaignType,
-     ) ?? null;
- const availableGooglePerformanceGoals = configuredGooglePerformanceGoals.filter((item) => {
-   const registryGoals = selectedGoogleCampaignCapability?.options?.performanceGoals;
-   return !registryGoals || registryGoals.some((option) => option.value === item.value);
- });
-  
-        const effectiveGooglePerformanceGoal = availableGooglePerformanceGoals.some(
+    campaignCapabilityRegistry?.providers
+      .find((provider) => provider.provider === "googleAds")
+      ?.campaignTypes.find(
+        (capability) => capability.builderCampaignType === googleCampaignType,
+      ) ?? null;
+  const availableGooglePerformanceGoals = configuredGooglePerformanceGoals.filter((item) => {
+    const registryGoals = selectedGoogleCampaignCapability?.options?.performanceGoals;
+    return !registryGoals || registryGoals.some((option) => option.value === item.value);
+  });
+  const effectiveGooglePerformanceGoal = availableGooglePerformanceGoals.some(
     (item) => item.value === googlePerformanceGoal,
   )
     ? googlePerformanceGoal
@@ -3601,12 +3867,6 @@ useEffect(() => {
     availableGooglePerformanceGoals.find(
       (item) => item.value === effectiveGooglePerformanceGoal,
     ) || null;
-  const selectedGoogleCampaignCapability =
-    campaignCapabilityRegistry?.providers
-      .find((provider) => provider.provider === "googleAds")
-      ?.campaignTypes.find(
-        (capability) => capability.builderCampaignType === googleCampaignType,
-      ) ?? null;
   const selectedMetaCampaignCapability =
     campaignCapabilityRegistry?.providers
       .find((provider) => provider.provider === "metaAds")
@@ -3614,72 +3874,72 @@ useEffect(() => {
         (capability) => capability.builderCampaignType === "CAMPAIGN",
       ) ?? null;
   const selectedMetaProviderObjective = objective
-   ? metaObjectiveMap[objective]
-   : "";
- const availableMetaOptimizationOptions = objective
-   ? metaOptimizationOptions[objective].filter((item) => {
-       const registryGoals = selectedMetaCampaignCapability?.options
-         ?.optimizationGoalsByObjective?.[selectedMetaProviderObjective];
-       return !registryGoals || registryGoals.some((option) => option.value === item.value);
-     })
-   : [];
- const availableMetaBuyingTypes = metaBuyingTypes.filter((item) => {
-   const registryOptions = selectedMetaCampaignCapability?.options?.buyingTypes;
-   return !registryOptions || registryOptions.some((option) =>
-     option.value === item.value &&
-     (!option.implementationStatus || option.implementationStatus === "IMPLEMENTED_IN_SOURCE"),
-   );
- });
- const effectiveMetaBuyingType = availableMetaBuyingTypes.some(
-   (item) => item.value === metaBuyingType,
- )
-   ? metaBuyingType
-   : (availableMetaBuyingTypes[0]?.value as MetaBuyingType | undefined) ?? "AUCTION";
- const availableMetaBidStrategies = metaBidStrategies.filter((item) => {
-   const registryOptions = selectedMetaCampaignCapability?.options?.biddingStrategies;
-   return !registryOptions || registryOptions.some((option) =>
-     option.value === item.value &&
-     (!option.implementationStatus || option.implementationStatus === "IMPLEMENTED_IN_SOURCE"),
-   );
- });
- const selectedLiveProviderStates = [
-   ...(selectedPlatforms.includes("googleAds")
-     ? [{ provider: "Google Ads", capability: selectedGoogleCampaignCapability }]
-     : []),
-   ...(selectedPlatforms.includes("metaAds")
-     ? [{ provider: "Meta Ads", capability: selectedMetaCampaignCapability }]
-     : []),
- ];
- const liveExecutionReadyProviders = selectedLiveProviderStates
-   .filter(({ capability }) =>
-     capability?.operations.create?.status === "IMPLEMENTED_IN_SOURCE",
-   )
-   .map(({ provider }) => provider);
- const liveExecutionBlockedProviderReasons = selectedLiveProviderStates
-   .filter(({ capability }) =>
-     capability?.operations.create?.status !== "IMPLEMENTED_IN_SOURCE",
-   )
-   .map(({ provider, capability }) => {
-     if (!capability) return `${provider} campaign type is not registered for creation.`;
-     const detail = capability.operations.create;
-     return `${provider} ${capability.label}: ${detail?.summary ?? "Creation is not enabled."}`;
-   });
- const liveExecutionBlockReason = !campaignCapabilityRegistry && selectedPlatforms.length
-   ? "The Campaign Capability Registry is loading or unavailable. Live execution stays disabled until capability status is available."
-   : liveExecutionReadyProviders.length === 0
-     ? liveExecutionBlockedProviderReasons.join(" ")
-     : "";
- const liveExecutionWarning = liveExecutionReadyProviders.length > 0 &&
-   liveExecutionBlockedProviderReasons.length > 0
-     ? `Live execution will proceed only for ${liveExecutionReadyProviders.join(" and ")}. The following provider branch(es) will be rejected independently: ${liveExecutionBlockedProviderReasons.join(" ")}`
-     : "";
+    ? metaObjectiveMap[objective]
+    : "";
+  const availableMetaOptimizationOptions = objective
+    ? metaOptimizationOptions[objective].filter((item) => {
+        const registryGoals = selectedMetaCampaignCapability?.options
+          ?.optimizationGoalsByObjective?.[selectedMetaProviderObjective];
+        return !registryGoals || registryGoals.some((option) => option.value === item.value);
+      })
+    : [];
+  const availableMetaBuyingTypes = metaBuyingTypes.filter((item) => {
+    const registryOptions = selectedMetaCampaignCapability?.options?.buyingTypes;
+    return !registryOptions || registryOptions.some((option) =>
+      option.value === item.value &&
+      (!option.implementationStatus || option.implementationStatus === "IMPLEMENTED_IN_SOURCE"),
+    );
+  });
+  const effectiveMetaBuyingType = availableMetaBuyingTypes.some(
+    (item) => item.value === metaBuyingType,
+  )
+    ? metaBuyingType
+    : (availableMetaBuyingTypes[0]?.value as MetaBuyingType | undefined) ?? "AUCTION";
+  const availableMetaBidStrategies = metaBidStrategies.filter((item) => {
+    const registryOptions = selectedMetaCampaignCapability?.options?.biddingStrategies;
+    return !registryOptions || registryOptions.some((option) =>
+      option.value === item.value &&
+      (!option.implementationStatus || option.implementationStatus === "IMPLEMENTED_IN_SOURCE"),
+    );
+  });
+  const selectedLiveProviderStates = [
+    ...(selectedPlatforms.includes("googleAds")
+      ? [{ provider: "Google Ads", capability: selectedGoogleCampaignCapability }]
+      : []),
+    ...(selectedPlatforms.includes("metaAds")
+      ? [{ provider: "Meta Ads", capability: selectedMetaCampaignCapability }]
+      : []),
+  ];
+  const liveExecutionReadyProviders = selectedLiveProviderStates
+    .filter(({ capability }) =>
+      capability?.operations.create?.status === "IMPLEMENTED_IN_SOURCE",
+    )
+    .map(({ provider }) => provider);
+  const liveExecutionBlockedProviderReasons = selectedLiveProviderStates
+    .filter(({ capability }) =>
+      capability?.operations.create?.status !== "IMPLEMENTED_IN_SOURCE",
+    )
+    .map(({ provider, capability }) => {
+      if (!capability) return `${provider} campaign type is not registered for creation.`;
+      const detail = capability.operations.create;
+      return `${provider} ${capability.label}: ${detail?.summary ?? "Creation is not enabled."}`;
+    });
+  const liveExecutionBlockReason = !campaignCapabilityRegistry && selectedPlatforms.length
+    ? "The Campaign Capability Registry is loading or unavailable. Live execution stays disabled until capability status is available."
+    : liveExecutionReadyProviders.length === 0
+      ? liveExecutionBlockedProviderReasons.join(" ")
+      : "";
+  const liveExecutionWarning = liveExecutionReadyProviders.length > 0 &&
+    liveExecutionBlockedProviderReasons.length > 0
+      ? `Live execution will proceed only for ${liveExecutionReadyProviders.join(" and ")}. The following provider branch(es) will be rejected independently: ${liveExecutionBlockedProviderReasons.join(" ")}`
+      : "";
 
- useEffect(() => {
-   if (executionMode === "LIVE" && liveExecutionBlockReason) {
-     setExecutionMode("VALIDATE_ONLY");
-     setApiPayloadPreview("");
-   }
- }, [executionMode, liveExecutionBlockReason]);
+  useEffect(() => {
+    if (executionMode === "LIVE" && liveExecutionBlockReason) {
+      setExecutionMode("VALIDATE_ONLY");
+      setApiPayloadPreview("");
+    }
+  }, [executionMode, liveExecutionBlockReason]);
 
   const availableGoogleBiddingModes: GoogleBiddingMode[] =
     googleCampaignType === "SEARCH"
@@ -3710,7 +3970,6 @@ useEffect(() => {
     (item) => item.value === effectiveGoogleAppGoal,
   )!;
 
-
   const effectiveMetaOptimizationGoal = availableMetaOptimizationOptions.some(
     (item) => item.value === metaOptimizationGoal,
   )
@@ -3724,6 +3983,54 @@ useEffect(() => {
   )
     ? metaBillingEvent
     : availableMetaBillingOptions[0]?.value || "IMPRESSIONS";
+  const metaManualPlacementPolicy = getMetaManualPlacementPolicy(
+    metaObjectiveMap[objective],
+    effectiveMetaOptimizationGoal,
+    metaDestinationType,
+    metaMessagingType,
+  );
+  const metaPlacementPlatformOptions = [
+    ["facebook", "Facebook"],
+    ["instagram", "Instagram"],
+    ["messenger", "Messenger"],
+    ["audience_network", "Audience Network"],
+  ].filter(([value]) =>
+    !metaManualPlacementPolicy.allowedPlatforms ||
+    metaManualPlacementPolicy.allowedPlatforms.includes(value),
+  );
+  const getAllowedMetaPlacementOptions = (platform: string) => {
+    const allowed = metaManualPlacementPolicy.allowedPositionsByPlatform?.[platform];
+    const options = META_MANUAL_PLACEMENT_OPTIONS[platform] || [];
+    return allowed
+      ? options.filter((option) => allowed.includes(option.value))
+      : options;
+  };
+
+  useEffect(() => {
+    const allowedPlatforms = metaManualPlacementPolicy.allowedPlatforms;
+    if (allowedPlatforms) {
+      setMetaPublisherPlatforms((current) =>
+        current.filter((platform) => allowedPlatforms.includes(platform)),
+      );
+    }
+
+    const constrainPositions = (current: string[], platform: string) => {
+      const allowed = metaManualPlacementPolicy.allowedPositionsByPlatform?.[platform];
+      if (!allowed) return current;
+      const retained = current.filter((position) => allowed.includes(position));
+      return retained.length > 0 ? retained : allowed.slice(0, 1);
+    };
+    setMetaFacebookPositions((current) => constrainPositions(current, "facebook"));
+    setMetaInstagramPositions((current) => constrainPositions(current, "instagram"));
+    setMetaMessengerPositions((current) => constrainPositions(current, "messenger"));
+    setMetaAudienceNetworkPositions((current) => constrainPositions(current, "audience_network"));
+  }, [
+    metaObjectiveMap[objective],
+    effectiveMetaOptimizationGoal,
+    metaDestinationType,
+    metaMessagingType,
+  ]);
+
   const geoResources = [...new Set(googleGeoTargetResources
     .split(/[\n,]+/)
     .map((v) => v.trim())
@@ -4366,6 +4673,124 @@ useEffect(() => {
     void loadMetaAudiences();
     return () => { cancelled = true; };
   }, [getToken, isLoaded, isSignedIn, connections.metaAds.selectedAccountId]);
+
+  useEffect(() => {
+    const selectedAccountId = connections.metaAds.selectedAccountId;
+    let cancelled = false;
+
+    setMetaCatalogOptions([]);
+    setMetaCatalogId("");
+    setMetaCatalogWarnings([]);
+    setMetaCatalogLookupTruncated(false);
+    setMetaCatalogError("");
+    setMetaProductSetOptions([]);
+    setMetaProductSetId("");
+    setMetaProductSetsError("");
+    setMetaProductSetLookupTruncated(false);
+
+    if (!isLoaded || !isSignedIn || !selectedAccountId) {
+      setMetaCatalogLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const loadMetaCatalogs = async () => {
+      try {
+        setMetaCatalogLoading(true);
+        const token = await getToken();
+        if (!token) {
+          throw new Error("Unable to retrieve your Clerk authentication token.");
+        }
+        const result = await fetchMetaCommerceLookup<MetaCatalogLookupResponse>(
+          API_BASE_URL,
+          token,
+          "catalogs",
+        );
+        if (cancelled) return;
+        const catalogs = (result.catalogs ?? []).filter(
+          (catalog) => /^\d+$/.test(String(catalog.id ?? "")),
+        );
+        setMetaCatalogOptions(catalogs);
+        setMetaCatalogWarnings(result.warnings ?? []);
+        setMetaCatalogLookupTruncated(result.truncated === true);
+      } catch (lookupError) {
+        if (!cancelled) {
+          setMetaCatalogOptions([]);
+          setMetaCatalogError(
+            lookupError instanceof Error
+              ? lookupError.message
+              : "Unable to load Meta product catalogs.",
+          );
+        }
+      } finally {
+        if (!cancelled) setMetaCatalogLoading(false);
+      }
+    };
+
+    void loadMetaCatalogs();
+    return () => {
+      cancelled = true;
+    };
+  }, [getToken, isLoaded, isSignedIn, connections.metaAds.selectedAccountId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setMetaProductSetOptions([]);
+    setMetaProductSetId("");
+    setMetaProductSetsError("");
+    setMetaProductSetLookupTruncated(false);
+
+    if (
+      !isLoaded ||
+      !isSignedIn ||
+      !connections.metaAds.selectedAccountId ||
+      !metaCatalogId
+    ) {
+      setMetaProductSetsLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    const loadMetaProductSets = async () => {
+      try {
+        setMetaProductSetsLoading(true);
+        const token = await getToken();
+        if (!token) {
+          throw new Error("Unable to retrieve your Clerk authentication token.");
+        }
+        const result = await fetchMetaCommerceLookup<MetaProductSetLookupResponse>(
+          API_BASE_URL,
+          token,
+          `catalogs/${encodeURIComponent(metaCatalogId)}/product-sets`,
+        );
+        if (cancelled) return;
+        setMetaProductSetOptions(
+          (result.productSets ?? []).filter((productSet) =>
+            /^\d+$/.test(String(productSet.id ?? "")),
+          ),
+        );
+        setMetaProductSetLookupTruncated(result.truncated === true);
+      } catch (lookupError) {
+        if (!cancelled) {
+          setMetaProductSetOptions([]);
+          setMetaProductSetsError(
+            lookupError instanceof Error
+              ? lookupError.message
+              : "Unable to load Product Sets for this catalog.",
+          );
+        }
+      } finally {
+        if (!cancelled) setMetaProductSetsLoading(false);
+      }
+    };
+
+    void loadMetaProductSets();
+    return () => {
+      cancelled = true;
+    };
+  }, [getToken, isLoaded, isSignedIn, connections.metaAds.selectedAccountId, metaCatalogId]);
 
   useEffect(() => {
     if (
@@ -5449,9 +5874,7 @@ useEffect(() => {
           .map((item) => item.trim())
           .filter(Boolean);
 
-      const countryCodes = splitMetaLocations(metaCountries).map((code) =>
-        code.toUpperCase(),
-      );
+      const countryCodes = normalizeMetaCountryCodes(metaCountries);
       const excludedCountryCodes = splitMetaLocations(metaExcludedCountries).map((code) =>
         code.toUpperCase(),
       );
@@ -5463,6 +5886,13 @@ useEffect(() => {
 
       const minAge = Number(metaAgeMin);
       const maxAge = Number(metaAgeMax);
+      if (
+        !metaHasRestrictedAudienceSpecialCategory &&
+        (!Number.isFinite(minAge) || !Number.isFinite(maxAge) || minAge > maxAge)
+      ) {
+        setError("Enter a valid Meta age range, with minimum age no greater than maximum age.");
+        return false;
+      }
 
       const hasAnyLocation =
         countryCodes.length > 0 ||
@@ -5476,6 +5906,12 @@ useEffect(() => {
       ) {
         setError(
           "Select at least one valid Meta country, region, city or ZIP location.",
+        );
+        return false;
+      }
+      if (metaSpecialAdCategories.length > 0 && countryCodes.length === 0) {
+        setError(
+          "Meta Special Ad Category campaigns require at least one included country code. Add the country or countries where the ad will run (for example, IN or US).",
         );
         return false;
       }
@@ -5582,12 +6018,12 @@ useEffect(() => {
         return false;
       }
 
-      if (!isHttpsUrl(metaImageUrl)) {
+      if (step === 3 && !isHttpsUrl(metaImageUrl)) {
         setError("Enter a valid HTTPS URL for the Meta creative image.");
         return false;
       }
 
-      if (!isHttpsUrl(metaDestination)) {
+      if (step === 3 &&  !isHttpsUrl(metaDestination)) {
         setError(
           "Enter a valid HTTPS URL for the Meta website destination.",
         );
@@ -6156,14 +6592,19 @@ useEffect(() => {
         setError("Enter a valid image URL for the Meta single-image creative.");
         return false;
       }
-      if (
-        metaCreativeFormat === "SINGLE_VIDEO" &&
-        !metaCreativeVideoId.trim()
-      ) {
-        setError(
-          "Enter the uploaded Meta Video ID for the single-video creative.",
+      if (metaCreativeFormat === "SINGLE_VIDEO") {
+        const selectedPrivateMetaVideos = assetLibrary.filter((asset) =>
+          attachedCreativeAssetIds.includes(asset.id) &&
+          asset.kind === "VIDEO" &&
+          Boolean(asset.contentUrl) &&
+          (!asset.platformTargets?.length || asset.platformTargets.includes("metaAds")),
         );
-        return false;
+        if (selectedPrivateMetaVideos.length !== 1) {
+          setError(
+            "Choose exactly one private video from the AdSyntra Asset Library for the Meta Single Video creative.",
+          );
+          return false;
+        }
       }
       if (metaCreativeFormat === "CAROUSEL") {
         const cards = metaCarouselCards
@@ -7027,12 +7468,28 @@ useEffect(() => {
         ...(selectedPlatforms.includes("metaAds") && {
           metaAds: {
             accountId: connections.metaAds.selectedAccountId,
+            // AdSyntra-only measurement metadata lets the backend verify that
+            // a selected Custom Conversion belongs to the chosen Pixel and
+            // Meta Ad Account. It is not sent as a raw Graph API field.
+            conversionMeasurement: {
+              pixelId: metaPixelId.trim() || null,
+              standardEvent: metaConversionEvent.trim() || null,
+              customConversionId: metaCustomConversionId.trim() || null,
+              mode: metaCustomConversionId.trim()
+                ? "CUSTOM_CONVERSION"
+                : metaPixelId.trim()
+                  ? "PIXEL_EVENT"
+                  : "NONE",
+            },
             campaign: {
               name: campaignName.trim(),
               status: "PAUSED",
               objective: metaObjectiveMap[objective],
               buying_type: effectiveMetaBuyingType,
               special_ad_categories: metaSpecialAdCategories,
+              ...(metaSpecialAdCategories.length > 0 && {
+                special_ad_category_country: normalizeMetaCountryCodes(metaCountries),
+              }),
               budgetLevel: metaBudgetLevel,
               ...(metaBudgetLevel === "AD_SET" && {
                 is_adset_budget_sharing_enabled:
@@ -7110,14 +7567,14 @@ useEffect(() => {
                 ...(Object.keys(executionExcludedGeoLocations).length > 0 && {
                   excluded_geo_locations: executionExcludedGeoLocations,
                 }),
-                ...(metaSpecialAdCategories.length === 0 && {
+                ...(!metaHasRestrictedAudienceSpecialCategory && {
                   age_min: Number(metaAgeMin),
                   age_max: Number(metaAgeMax),
                   ...(metaGender !== "ALL" && {
                     genders: [metaGender === "MEN" ? 1 : 2],
                   }),
                 }),
-                ...(metaAudienceInterestIds.trim() && {
+                ...(!metaHasRestrictedAudienceSpecialCategory && metaAudienceInterestIds.trim() && {
                   flexible_spec: [
                     {
                       interests: interests
@@ -7223,9 +7680,6 @@ useEffect(() => {
                 description: metaAdDescription.trim() || null,
                 ...(metaCreativeFormat === "SINGLE_IMAGE" && {
                   imageUrl: metaCreativeImageUrl.trim(),
-                }),
-                ...(metaCreativeFormat === "SINGLE_VIDEO" && {
-                  uploadedVideoId: metaCreativeVideoId.trim(),
                 }),
                 ...(metaCreativeFormat === "CAROUSEL" && {
                   cards: metaCarouselCards
@@ -8339,11 +8793,11 @@ useEffect(() => {
     // --------------------------------------------------
     if (selectedPlatforms.includes("metaAds")) {
       if (
-        metaCreativeFormat !== "SINGLE_IMAGE" ||
+        !["SINGLE_IMAGE", "SINGLE_VIDEO"].includes(metaCreativeFormat) ||
         metaDestinationType !== "WEBSITE"
       ) {
         throw new Error(
-          "The current Meta global creation flow supports SINGLE_IMAGE creatives with a WEBSITE destination only.",
+          "The current Meta global creation flow supports SINGLE_IMAGE and SINGLE_VIDEO creatives with a WEBSITE destination only. Carousel and other destinations remain under development.",
         );
       }
 
@@ -8383,8 +8837,19 @@ useEffect(() => {
         }
       };
 
-      if (!isHttpsUrl(metaImageUrl)) {
+      if (metaCreativeFormat === "SINGLE_IMAGE" && !isHttpsUrl(metaImageUrl)) {
         throw new Error("Enter a valid HTTPS URL for the Meta creative image.");
+      }
+      if (metaCreativeFormat === "SINGLE_VIDEO") {
+        const selectedPrivateMetaVideos = assetLibrary.filter((asset) =>
+          attachedCreativeAssetIds.includes(asset.id) &&
+          asset.kind === "VIDEO" &&
+          Boolean(asset.contentUrl) &&
+          (!asset.platformTargets?.length || asset.platformTargets.includes("metaAds")),
+        );
+        if (selectedPrivateMetaVideos.length !== 1) {
+          throw new Error("Choose exactly one private Asset Library video for the Meta Single Video creative.");
+        }
       }
 
       if (!isHttpsUrl(metaDestination)) {
@@ -8443,10 +8908,11 @@ useEffect(() => {
 
       if (
         executionMode === "LIVE" &&
-        (usesExampleDomain(metaDestination) || usesExampleDomain(metaImageUrl))
+        (usesExampleDomain(metaDestination) ||
+          (metaCreativeFormat === "SINGLE_IMAGE" && usesExampleDomain(metaImageUrl)))
       ) {
         throw new Error(
-          "Replace the example.com Meta image and destination URLs before live execution.",
+          "Replace the example.com Meta creative and destination URLs before live execution.",
         );
       }
 
@@ -8510,7 +8976,7 @@ useEffect(() => {
           excluded_geo_locations: excludedGeoLocations,
         }),
 
-        ...(metaSpecialAdCategories.length === 0 && {
+        ...(!metaHasRestrictedAudienceSpecialCategory && {
           age_min: Number(metaAgeMin),
           age_max: Number(metaAgeMax),
           ...(metaGender !== "ALL" && {
@@ -8518,7 +8984,7 @@ useEffect(() => {
           }),
         }),
 
-        ...(interestIds.length > 0 && {
+        ...(!metaHasRestrictedAudienceSpecialCategory && interestIds.length > 0 && {
           flexible_spec: [
             {
               interests: interestIds.map((id) => ({ id })),
@@ -8567,6 +9033,9 @@ useEffect(() => {
             objective: metaObjective,
             buyingType: effectiveMetaBuyingType,
             specialAdCategories: metaSpecialAdCategories,
+            ...(metaSpecialAdCategories.length > 0 && {
+              specialAdCategoryCountries: normalizeMetaCountryCodes(metaCountries),
+            }),
             budgetLevel: metaBudgetLevel,
             budgetCurrency: metaCurrency,
             ...(metaBudgetLevel === "AD_SET" && {
@@ -8661,7 +9130,7 @@ useEffect(() => {
           ad: {
             name: `${metaAdSetName.trim()} - Ad`,
             creativeDraft: {
-              format: "SINGLE_IMAGE",
+              format: metaCreativeFormat,
               pageId,
               ...(hasRealInstagramActorId && {
                 instagramActorId,
@@ -8669,7 +9138,9 @@ useEffect(() => {
               primaryText: metaPrimaryText.trim(),
               headline: metaAdHeadline.trim(),
               description: metaAdDescription.trim() || null,
-              imageUrl: metaImageUrl,
+              ...(metaCreativeFormat === "SINGLE_IMAGE" && {
+                imageUrl: metaImageUrl,
+              }),
               destinationUrl: metaDestination,
               callToAction: metaCallToAction,
             },
@@ -11409,27 +11880,27 @@ const handleRegisterGoogleMerchantCenter = async () => {
                     className={inputClass}
                   >
                     {googleCampaignTypes.map((item) => {
-                     const capability = campaignCapabilityRegistry?.providers
-                       .find((provider) => provider.provider === "googleAds")
-                       ?.campaignTypes.find(
-                         (entry) => entry.builderCampaignType === item.value,
-                       );
-                     const createStatus = capability?.operations.create?.status;
-                     const blockedByRegistry = Boolean(
-                       campaignCapabilityRegistry &&
-                       createStatus !== "IMPLEMENTED_IN_SOURCE",
-                     );
-                     return (
-                       <option
-                         key={item.value}
-                         value={item.value}
-                         disabled={Boolean(item.disabled) || blockedByRegistry}
-                         title={capability?.operations.create?.summary}
-                       >
-                         {item.label}{blockedByRegistry ? " — not enabled for creation" : ""}
-                       </option>
-                     );
-                   })}
+                      const capability = campaignCapabilityRegistry?.providers
+                        .find((provider) => provider.provider === "googleAds")
+                        ?.campaignTypes.find(
+                          (entry) => entry.builderCampaignType === item.value,
+                        );
+                      const createStatus = capability?.operations.create?.status;
+                      const blockedByRegistry = Boolean(
+                        campaignCapabilityRegistry &&
+                        createStatus !== "IMPLEMENTED_IN_SOURCE",
+                      );
+                      return (
+                        <option
+                          key={item.value}
+                          value={item.value}
+                          disabled={Boolean(item.disabled) || blockedByRegistry}
+                          title={capability?.operations.create?.summary}
+                        >
+                          {item.label}{blockedByRegistry ? " — not enabled for creation" : ""}
+                        </option>
+                      );
+                    })}
                   </select>
                   {campaignCapabilityRegistryLoading && (
                     <p className="mt-2 text-xs text-slate-500">
@@ -13267,7 +13738,7 @@ googleMerchantCenterProducts.length > 0 ? (
                   <div>
                     <label className={labelClass}>Buying Type *</label>
                     <select
-                      value={availableMetaBuyingTypes}
+                      value={effectiveMetaBuyingType}
                       onChange={(e) => {
                         setMetaBuyingType(e.target.value as MetaBuyingType);
                         clearPreview();
@@ -13288,10 +13759,10 @@ googleMerchantCenterProducts.length > 0 ? (
                     </p>
                     {effectiveMetaBuyingType === "RESERVED" && (
                       <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
-                         Reservation buying is not enabled in this version because
-                       the current AdSyntra flow does not collect reservation
-                       predictions or assign a reservation to an Ad Set. Auction
-                       is the enabled buying type.
+                        Reservation buying is not enabled in this version because
+                        the current AdSyntra flow does not collect reservation
+                        predictions or assign a reservation to an Ad Set. Auction
+                        is the enabled buying type.
                       </p>
                     )}
                   </div>
@@ -13784,6 +14255,11 @@ googleMerchantCenterProducts.length > 0 ? (
                           placeholder="IN, US"
                           className={inputClass}
                         />
+                        {metaSpecialAdCategories.length > 0 && (
+                          <p className="mt-1 text-xs text-amber-700">
+                            These included country codes are also sent as Meta's special_ad_category_country values. Use Meta API country codes such as IN, US or GB (not UK). Add each applicable country even when the rest of your targeting uses only regions, cities or ZIP codes.
+                          </p>
+                        )}
                       </div>
                       <div>
                         <label className={labelClass}>
@@ -13955,63 +14431,49 @@ googleMerchantCenterProducts.length > 0 ? (
                       </div>
                     </div>
                     <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                      <div>
-                        <label className={labelClass}>Gender</label>
-                        <select
-                          value={metaGender}
-                          onChange={(e) => {
-                            setMetaGender(
-                              e.target.value as "ALL" | "MEN" | "WOMEN",
-                            );
-                            clearPreview();
-                          }}
-                          className={inputClass}
-                        >
-                          <option value="ALL">All genders</option>
-                          <option value="MEN">Men</option>
-                          <option value="WOMEN">Women</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className={labelClass}>Minimum Age *</label>
-                        <input
-                          type="number"
-                          min="18"
-                          max="65"
-                          value={metaAgeMin}
-                          onChange={(e) => {
-                            setMetaAgeMin(e.target.value);
-                            clearPreview();
-                          }}
-                          className={inputClass}
-                        />
-                      </div>
-                      <div>
-                        <label className={labelClass}>Maximum Age *</label>
-                        <input
-                          type="number"
-                          min="18"
-                          max="65"
-                          value={metaAgeMax}
-                          onChange={(e) => {
-                            setMetaAgeMax(e.target.value);
-                            clearPreview();
-                          }}
-                          className={inputClass}
-                        />
-                      </div>
-                      <div className="sm:col-span-2 rounded-lg border border-slate-200 p-3">
-                        <label className={labelClass}>Search Meta interests</label>
-                        <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-                          <input value={metaTargetingQuery} onChange={(event) => setMetaTargetingQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void searchMetaDetailedTargetingOptions(); } }} placeholder="e.g. online shopping, fitness, travel" className={inputClass} />
-                          <Button variant="contained" size="small" onClick={searchMetaDetailedTargetingOptions} disabled={metaTargetingLoading} sx={{ borderRadius: "8px", textTransform: "none", minWidth: 110 }}>{metaTargetingLoading ? "Searching..." : "Search"}</Button>
+                      {metaHasRestrictedAudienceSpecialCategory ? (
+                        <div className="sm:col-span-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                          Housing, Employment, Credit and Financial Products & Services campaigns use restricted audience rules. AdSyntra will not send age, gender or detailed-interest targeting for this campaign. Review the allowed location and audience restrictions for the countries where the ad will run.
                         </div>
-                        {metaTargetingOptions.length > 0 && <div className="mt-3">
-                          <Autocomplete multiple size="small" options={metaTargetingOptions} value={metaSelectedInterestOptions} getOptionLabel={getMetaLookupLabel} isOptionEqualToValue={(option, value) => getMetaLookupId(option) === getMetaLookupId(value)} onChange={(_, options) => { setMetaSelectedInterestOptions(options); setMetaAudienceInterestIds(options.map(getMetaLookupId).filter(Boolean).join("\n")); clearPreview(); }} renderInput={(params) => <TextField {...params} label="Selected interests" placeholder="Select Meta interests" />} />
-                          <p className="mt-1 text-xs text-slate-500">Selected interest IDs: {metaAudienceInterestIds.split(/[\n,]+/).filter(Boolean).length}</p>
-                        </div>}
-                        {metaTargetingError && <p className="mt-2 text-xs text-red-600">{metaTargetingError}</p>}
-                      </div>
+                      ) : (
+                        <>
+                          <div>
+                            <label className={labelClass}>Gender</label>
+                            <select
+                              value={metaGender}
+                              onChange={(e) => {
+                                setMetaGender(e.target.value as "ALL" | "MEN" | "WOMEN");
+                                clearPreview();
+                              }}
+                              className={inputClass}
+                            >
+                              <option value="ALL">All genders</option>
+                              <option value="MEN">Men</option>
+                              <option value="WOMEN">Women</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className={labelClass}>Minimum Age *</label>
+                            <input type="number" min="18" max="65" value={metaAgeMin} onChange={(e) => { setMetaAgeMin(e.target.value); clearPreview(); }} className={inputClass} />
+                          </div>
+                          <div>
+                            <label className={labelClass}>Maximum Age *</label>
+                            <input type="number" min="18" max="65" value={metaAgeMax} onChange={(e) => { setMetaAgeMax(e.target.value); clearPreview(); }} className={inputClass} />
+                          </div>
+                          <div className="sm:col-span-2 rounded-lg border border-slate-200 p-3">
+                            <label className={labelClass}>Search Meta interests</label>
+                            <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                              <input value={metaTargetingQuery} onChange={(event) => setMetaTargetingQuery(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void searchMetaDetailedTargetingOptions(); } }} placeholder="e.g. online shopping, fitness, travel" className={inputClass} />
+                              <Button variant="contained" size="small" onClick={searchMetaDetailedTargetingOptions} disabled={metaTargetingLoading} sx={{ borderRadius: "8px", textTransform: "none", minWidth: 110 }}>{metaTargetingLoading ? "Searching..." : "Search"}</Button>
+                            </div>
+                            {metaTargetingOptions.length > 0 && <div className="mt-3">
+                              <Autocomplete multiple size="small" options={metaTargetingOptions} value={metaSelectedInterestOptions} getOptionLabel={getMetaLookupLabel} isOptionEqualToValue={(option, value) => getMetaLookupId(option) === getMetaLookupId(value)} onChange={(_, options) => { setMetaSelectedInterestOptions(options); setMetaAudienceInterestIds(options.map(getMetaLookupId).filter(Boolean).join("\n")); clearPreview(); }} renderInput={(params) => <TextField {...params} label="Selected interests" placeholder="Select Meta interests" />} />
+                              <p className="mt-1 text-xs text-slate-500">Selected interest IDs: {metaAudienceInterestIds.split(/[\n,]+/).filter(Boolean).length}</p>
+                            </div>}
+                            {metaTargetingError && <p className="mt-2 text-xs text-red-600">{metaTargetingError}</p>}
+                          </div>
+                        </>
+                      )}
                       <div>
                         <Autocomplete multiple size="small" options={metaCustomAudienceOptions} loading={metaAudienceLoading} value={metaCustomAudienceOptions.filter((option) => metaIncludedCustomAudienceIds.split(/[\n,]+/).map((value) => value.trim()).includes(getMetaLookupId(option)))} getOptionLabel={getMetaLookupLabel} isOptionEqualToValue={(option, value) => getMetaLookupId(option) === getMetaLookupId(value)} onChange={(_, options) => { setMetaIncludedCustomAudienceIds(options.map(getMetaLookupId).filter(Boolean).join("\n")); clearPreview(); }} renderInput={(params) => <TextField {...params} label="Include Custom Audiences" placeholder="Search account audiences" />} />
                       </div>
@@ -14038,12 +14500,7 @@ googleMerchantCenterProducts.length > 0 ? (
                         {metaPlacementMode === "MANUAL" && (
                           <>
                             <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                              {[
-                                ["facebook", "Facebook"],
-                                ["instagram", "Instagram"],
-                                ["messenger", "Messenger"],
-                                ["audience_network", "Audience Network"],
-                              ].map(([value, label]) => (
+                              {metaPlacementPlatformOptions.map(([value, label]) => (
                                 <label
                                   key={value}
                                   className="flex items-center gap-2 text-sm"
@@ -14066,104 +14523,58 @@ googleMerchantCenterProducts.length > 0 ? (
                               ))}
                             </div>
                             {metaPublisherPlatforms.includes("facebook") && (
-                              <div className="mt-3">
-                                <label className={labelClass}>
-                                  Facebook positions (comma-separated)
-                                </label>
-                                <input
-                                  value={metaFacebookPositions.join(", ")}
-                                  onChange={(e) => {
-                                    setMetaFacebookPositions(
-                                      e.target.value
-                                        .split(",")
-                                        .map((v) => v.trim())
-                                        .filter(Boolean),
-                                    );
-                                    clearPreview();
-                                  }}
-                                  className={inputClass}
-                                  placeholder="feed, story, reels"
-                                />
-                              </div>
+                              <MetaPlacementSelector
+                                title="Facebook placements"
+                                options={getAllowedMetaPlacementOptions("facebook")}
+                                selected={metaFacebookPositions}
+                                onChange={(values) => { setMetaFacebookPositions(values); clearPreview(); }}
+                              />
                             )}
                             {metaPublisherPlatforms.includes("instagram") && (
-                              <div className="mt-3">
-                                <label className={labelClass}>
-                                  Instagram positions (comma-separated)
-                                </label>
-                                <input
-                                  value={metaInstagramPositions.join(", ")}
-                                  onChange={(e) => {
-                                    setMetaInstagramPositions(
-                                      e.target.value
-                                        .split(",")
-                                        .map((v) => v.trim())
-                                        .filter(Boolean),
-                                    );
-                                    clearPreview();
-                                  }}
-                                  className={inputClass}
-                                  placeholder="stream, story, reels, explore"
-                                />
-                              </div>
+                              <MetaPlacementSelector
+                                title="Instagram placements"
+                                options={getAllowedMetaPlacementOptions("instagram")}
+                                selected={metaInstagramPositions}
+                                onChange={(values) => { setMetaInstagramPositions(values); clearPreview(); }}
+                              />
                             )}
                             {metaPublisherPlatforms.includes("messenger") && (
-                              <div className="mt-3">
-                                <label className={labelClass}>
-                                  Messenger positions (comma-separated)
-                                </label>
-                                <input
-                                  value={metaMessengerPositions.join(", ")}
-                                  onChange={(e) => {
-                                    setMetaMessengerPositions(
-                                      e.target.value
-                                        .split(",")
-                                        .map((v) => v.trim())
-                                        .filter(Boolean),
-                                    );
-                                    clearPreview();
-                                  }}
-                                  className={inputClass}
-                                  placeholder="messenger_home, sponsored_messages"
-                                />
-                              </div>
+                              <MetaPlacementSelector
+                                title="Messenger placements"
+                                options={getAllowedMetaPlacementOptions("messenger")}
+                                selected={metaMessengerPositions}
+                                onChange={(values) => { setMetaMessengerPositions(values); clearPreview(); }}
+                              />
                             )}
-                            {metaPublisherPlatforms.includes(
-                              "audience_network",
-                            ) && (
-                                <div className="mt-3">
-                                  <label className={labelClass}>
-                                    Audience Network positions (comma-separated)
-                                  </label>
-                                  <input
-                                    value={metaAudienceNetworkPositions.join(
-                                      ", ",
-                                    )}
-                                    onChange={(e) => {
-                                      setMetaAudienceNetworkPositions(
-                                        e.target.value
-                                          .split(",")
-                                          .map((v) => v.trim())
-                                          .filter(Boolean),
-                                      );
-                                      clearPreview();
-                                    }}
-                                    className={inputClass}
-                                    placeholder="classic, rewarded_video"
-                                  />
-                                </div>
-                              )}
+                            {metaPublisherPlatforms.includes("audience_network") && (
+                              <MetaPlacementSelector
+                                title="Audience Network placements"
+                                options={getAllowedMetaPlacementOptions("audience_network")}
+                                selected={metaAudienceNetworkPositions}
+                                onChange={(values) => { setMetaAudienceNetworkPositions(values); clearPreview(); }}
+                              />
+                            )}
+                          </>
+                        )}
+                        {metaPlacementMode === "MANUAL" && (
+                          <>
+                            <p className="mt-3 text-xs text-slate-500">
+                              Instagram Explore Feed and Messenger Stories are omitted from the Meta Graph API v26.0 placement choices. WhatsApp Status is not exposed until its WhatsApp identity and creative specification are implemented.
+                            </p>
+                            {metaManualPlacementPolicy.message && (
+                              <p className="mt-2 rounded-lg border border-blue-100 bg-blue-50 p-3 text-xs text-blue-800">
+                                {metaManualPlacementPolicy.message}
+                              </p>
+                            )}
                           </>
                         )}
                       </div>
                     </div>
                     {metaSpecialAdCategories.length > 0 && (
                       <p className="mt-3 rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
-                        Special Ad Category selected: restricted categories can
-                        limit age, gender, location and detailed-targeting
-                        controls. This builder omits age/gender targeting for
-                        this campaign; the API and policy validation must
-                        enforce the applicable market rules.
+                        {metaHasRestrictedAudienceSpecialCategory
+                          ? "Housing, Employment, Credit and Financial Products & Services selections trigger restricted-audience handling. Age, gender and detailed-interest targeting are omitted. Location eligibility can still vary by market and must follow Meta policy."
+                          : "A special category is selected. AdSyntra does not automatically apply Housing, Employment and Credit audience restrictions to the other category types; Meta may apply additional category-specific eligibility and review rules."}
                       </p>
                     )}
                   </div>
@@ -14210,9 +14621,7 @@ googleMerchantCenterProducts.length > 0 ? (
                       ))}
                     </div>
                     <p className="mt-2 text-xs text-slate-500">
-                      Leave all unchecked only when none apply. The API field is
-                      an array, so the builder supports multiple applicable
-                      categories.
+                      Select every category that accurately describes the ad. Leave all unchecked only when none apply. AdSyntra applies age, gender and detailed-interest restrictions to Housing, Employment, Credit and Financial Products & Services. Other category types may have separate eligibility rules and are still subject to Meta review.
                     </p>
                   </div>
                 </div>
@@ -17072,6 +17481,109 @@ googleMerchantCenterProducts.length > 0 ? (
                       <option value="APP">Mobile App</option>
                     </select>
                   </div>
+                  {(metaCreativeFormat === "CAROUSEL" || metaDestinationType !== "WEBSITE") && (
+                    <p className="sm:col-span-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-800">
+                      The current campaign execution work covers Single Image and Single Video creatives with a Website destination. Carousel, Instant Form, Messaging and App workflows remain in staged development. Meta Live creation stays gated until the consolidated product-readiness checks are completed.
+                    </p>
+                  )}
+                  <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <h4 className="text-sm font-semibold text-slate-900">
+                          Product Catalog & Product Set
+                        </h4>
+                        <p className="mt-1 text-xs leading-5 text-slate-600">
+                          Discover catalogs available to the selected Meta Ad Account and the Product Sets inside each catalog.
+                        </p>
+                      </div>
+                      <span className="rounded-full bg-amber-100 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-amber-800">
+                        Discovery only
+                      </span>
+                    </div>
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className={labelClass}>Meta Product Catalog</label>
+                        <select
+                          value={metaCatalogId}
+                          onChange={(event) => {
+                            setMetaCatalogId(event.target.value);
+                            setMetaProductSetId("");
+                            clearPreview();
+                          }}
+                          disabled={!connections.metaAds.selectedAccountId || metaCatalogLoading || metaCatalogOptions.length === 0}
+                          className={inputClass}
+                        >
+                          <option value="">
+                            {metaCatalogLoading
+                              ? "Loading available catalogs..."
+                              : !connections.metaAds.selectedAccountId
+                                ? "Select a Meta Ad Account first"
+                                : metaCatalogOptions.length > 0
+                                  ? "Select a product catalog"
+                                  : "No accessible catalogs found"}
+                          </option>
+                          {metaCatalogOptions.map((catalog) => (
+                            <option key={catalog.id} value={catalog.id}>
+                              {catalog.name} · {catalog.id}
+                              {typeof catalog.productCount === "number" ? ` · ${catalog.productCount} products` : ""}
+                            </option>
+                          ))}
+                        </select>
+                        {metaCatalogLoading && (
+                          <p className="mt-1 text-xs text-slate-500">Loading catalogs available through the selected account's Business relationships...</p>
+                        )}
+                        {metaCatalogError && <p className="mt-1 text-xs text-red-600">{metaCatalogError}</p>}
+                        {!metaCatalogLoading && !metaCatalogError && connections.metaAds.selectedAccountId && metaCatalogOptions.length === 0 && (
+                          <p className="mt-1 text-xs text-amber-700">No accessible catalog was returned. Check Business Manager access and the connected Meta permissions.</p>
+                        )}
+                      </div>
+                      <div>
+                        <label className={labelClass}>Product Set</label>
+                        <select
+                          value={metaProductSetId}
+                          onChange={(event) => {
+                            setMetaProductSetId(event.target.value);
+                            clearPreview();
+                          }}
+                          disabled={!metaCatalogId || metaProductSetsLoading || metaProductSetOptions.length === 0}
+                          className={inputClass}
+                        >
+                          <option value="">
+                            {metaProductSetsLoading
+                              ? "Loading Product Sets..."
+                              : !metaCatalogId
+                                ? "Select a catalog first"
+                                : metaProductSetOptions.length > 0
+                                  ? "Select a Product Set (optional)"
+                                  : "No Product Sets found"}
+                          </option>
+                          {metaProductSetOptions.map((productSet) => (
+                            <option key={productSet.id} value={productSet.id}>
+                              {productSet.name} · {productSet.id}
+                              {typeof productSet.productCount === "number" ? ` · ${productSet.productCount} products` : ""}
+                            </option>
+                          ))}
+                        </select>
+                        {metaProductSetsError && <p className="mt-1 text-xs text-red-600">{metaProductSetsError}</p>}
+                        {metaCatalogId && !metaProductSetsLoading && !metaProductSetsError && metaProductSetOptions.length === 0 && (
+                          <p className="mt-1 text-xs text-slate-500">This catalog has no Product Sets available to the selected account.</p>
+                        )}
+                      </div>
+                    </div>
+                    {metaCatalogWarnings.length > 0 && (
+                      <div className="mt-3 space-y-1 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                        {metaCatalogWarnings.slice(0, 3).map((warning, index) => (
+                          <p key={`${index}-${warning}`}>{warning}</p>
+                        ))}
+                      </div>
+                    )}
+                    {(metaCatalogLookupTruncated || metaProductSetLookupTruncated) && (
+                      <p className="mt-2 text-xs text-amber-700">Meta returned a large resource list. The displayed results are capped; refine access or catalog selection before using these resources.</p>
+                    )}
+                    <p className="mt-3 text-xs leading-5 text-slate-500">
+                      These selections are for account-scoped resource discovery only. They are not yet included in the campaign submission payload; native Meta Catalog/Dynamic Product Ad creation will be enabled in the creative integration phase.
+                    </p>
+                  </div>
                   <div>
                     <label className={labelClass}>Facebook Page *</label>
                     <select
@@ -17268,19 +17780,24 @@ googleMerchantCenterProducts.length > 0 ? (
                     </div>
                   )}
                   {metaCreativeFormat === "SINGLE_VIDEO" && (
-                    <div>
-                      <label className={labelClass}>
-                        Uploaded Meta Video ID *
-                      </label>
-                      <input
-                        value={metaCreativeVideoId}
-                        onChange={(e) => {
-                          setMetaCreativeVideoId(e.target.value);
-                          clearPreview();
+                    <div className="sm:col-span-2 rounded-xl border border-slate-200 bg-slate-50 p-4">
+                      <label className={labelClass}>AdSyntra Video Asset *</label>
+                      <p className="mt-1 text-xs leading-5 text-slate-600">
+                        Select one private MP4, MOV or WebM video from the Asset Library. AdSyntra uploads the file to the selected Meta Ad Account, waits for Meta processing, and uses the returned video ID and preferred thumbnail. Do not paste a provider video ID or private storage URL here.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAssetLibraryOpen(true);
+                          setAssetNotice("Choose exactly one private video for the Meta Single Video creative.");
                         }}
-                        placeholder="Video ID returned by Meta video upload"
-                        className={inputClass}
-                      />
+                        className="mt-3 text-xs font-semibold text-blue-700"
+                      >
+                        Choose Video from Asset Library
+                      </button>
+                      <p className="mt-2 text-xs text-slate-500">
+                        {assetLibrary.filter((asset) => attachedCreativeAssetIds.includes(asset.id) && asset.kind === "VIDEO" && Boolean(asset.contentUrl)).length} private video asset(s) currently attached. Exactly one is required for this Meta creative.
+                      </p>
                     </div>
                   )}
                   {metaCreativeFormat === "CAROUSEL" && (
@@ -18069,8 +18586,8 @@ googleMerchantCenterProducts.length > 0 ? (
                 </p>
                 <p>
                   <strong>Targeting:</strong> {metaCountries.toUpperCase()} ·{" "}
-                  {metaSpecialAdCategories.length
-                    ? "Special-category restrictions apply"
+                  {metaHasRestrictedAudienceSpecialCategory
+                    ? "Restricted special-category audience rules"
                     : `Ages ${metaAgeMin}–${metaAgeMax} · ${metaGender === "ALL" ? "All genders" : metaGender}`}
                 </p>
                 {(metaExcludedCountries.trim() ||
@@ -18107,6 +18624,12 @@ googleMerchantCenterProducts.length > 0 ? (
                     ? metaSpecialAdCategories.join(", ")
                     : "None"}
                 </p>
+                {metaSpecialAdCategories.length > 0 && (
+                  <p>
+                    <strong>Special Ad Category Countries:</strong>{" "}
+                    {normalizeMetaCountryCodes(metaCountries).join(", ")}
+                  </p>
+                )}
                 <p>
                   <strong>Ad Set:</strong> {metaAdSetName}
                 </p>
@@ -18195,20 +18718,20 @@ googleMerchantCenterProducts.length > 0 ? (
               <option value="VALIDATE_ONLY">
                 Validate only — no provider mutations
               </option>
-               <option value="LIVE" disabled={Boolean(liveExecutionBlockReason)}>
+              <option value="LIVE" disabled={Boolean(liveExecutionBlockReason)}>
                 Live execution — create paused provider resources
               </option>
             </select>
-                       {liveExecutionBlockReason ? (
-             <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
-               Live execution is currently unavailable for the selected provider configuration. {liveExecutionBlockReason} Validation-only remains available.
-             </p>
-           ) : liveExecutionWarning ? (
-             <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
-               {liveExecutionWarning}. Review the provider results after submission; AdSyntra records each provider branch independently.
-             </p>
-           ) : null}
 
+            {liveExecutionBlockReason ? (
+              <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
+                Live execution is currently unavailable for the selected provider configuration. {liveExecutionBlockReason} Validation-only remains available.
+              </p>
+            ) : liveExecutionWarning ? (
+              <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-900">
+                {liveExecutionWarning}. Review the provider results after submission; AdSyntra records each provider branch independently.
+              </p>
+            ) : null}
             <p className="mt-2 text-xs leading-5 text-slate-500">
               This setting controls the backend request preview. Preparing the
               request does not submit it or create campaigns.
@@ -18259,7 +18782,296 @@ googleMerchantCenterProducts.length > 0 ? (
                 </p>
               </div>
 
+              {/*
+                MOCK SCENARIO TESTING DISABLED.
+                The previous Prototype simulation panel is kept here as a comment
+                for reference. The result panel below now reads live backend API
+                responses from POST /api/campaigns.
 
+              <div className="rounded-2xl border border-indigo-200 bg-indigo-50/60 p-6">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-wide text-indigo-700">
+                      Prototype simulation
+                    </p>
+                    <h3 className="mt-1 text-lg font-bold text-slate-900">
+                      Campaign creation results
+                    </h3>
+                    <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-600">
+                      Test how the application should report independent
+                      provider outcomes. These are mock responses only; no
+                      campaign is sent to Google or Meta.
+                    </p>
+                  </div>
+                  <span className="rounded-full border border-indigo-200 bg-white px-3 py-1 text-xs font-semibold text-indigo-700">
+                    Mock API mode
+                  </span>
+                </div>
+
+                <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                  {(
+                    [
+                      {
+                        value: "ALL_SUCCESS",
+                        title: "Both platforms succeed",
+                        description: "All selected resources are created.",
+                      },
+                      {
+                        value: "PROVIDER_FAILURE",
+                        title: "One provider fails",
+                        description:
+                          "Google succeeds while Meta fails (or the only selected provider fails).",
+                      },
+                      {
+                        value: "ALL_FAILURE",
+                        title: "All platforms fail",
+                        description:
+                          "Each selected provider returns a campaign-level error.",
+                      },
+                      {
+                        value: "RESOURCE_FAILURE",
+                        title: "A child resource fails",
+                        description:
+                          "Campaign succeeds, but an Ad Group or Ad Set fails.",
+                      },
+                      {
+                        value: "TIMEOUT",
+                        title: "Request timeout / unknown result",
+                        description:
+                          "A request times out; dependent steps are blocked pending reconciliation.",
+                      },
+                    ] as {
+                      value: DemoScenario;
+                      title: string;
+                      description: string;
+                    }[]
+                  ).map((scenario) => (
+                    <button
+                      key={scenario.value}
+                      type="button"
+                      onClick={() => runDemoScenario(scenario.value)}
+                      className="rounded-xl border border-indigo-200 bg-white p-4 text-left transition hover:border-indigo-400 hover:shadow-sm"
+                    >
+                      <span className="block text-sm font-semibold text-slate-900">
+                        {scenario.title}
+                      </span>
+                      <span className="mt-1 block text-xs leading-5 text-slate-500">
+                        {scenario.description}
+                      </span>
+                      <span className="mt-3 inline-block text-xs font-bold text-indigo-700">
+                        Run scenario →
+                      </span>
+                    </button>
+                  ))}
+                </div>
+
+                {demoJob && (
+                  <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5">
+                    <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-4">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                          Creation job
+                        </p>
+                        <h4 className="mt-1 font-bold text-slate-900">
+                          {demoJob.jobId}
+                        </h4>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {demoJob.createdAt}
+                        </p>
+                      </div>
+                      <span
+                        className={`rounded-full px-3 py-1 text-xs font-bold ${demoJob.overallStatus === "SUCCESS" ? "bg-green-100 text-green-800" : demoJob.overallStatus === "FAILED" ? "bg-red-100 text-red-800" : "bg-amber-100 text-amber-800"}`}
+                      >
+                        {demoJob.overallStatus === "SUCCESS"
+                          ? "Success"
+                          : demoJob.overallStatus === "FAILED"
+                            ? "Failed"
+                            : "Partial success"}
+                      </span>
+                    </div>
+
+                    <div className="mt-4 grid gap-4 lg:grid-cols-2">
+                      {demoJob.providers.map((provider) => {
+                        const providerLabel =
+                          provider.provider === "googleAds"
+                            ? "Google Ads"
+                            : "Meta Ads";
+                        const failedResources = provider.resources.filter(
+                          (resource) => resource.status === "FAILED",
+                        ).length;
+                        const timedOutResources = provider.resources.filter(
+                          (resource) => resource.status === "TIMED_OUT",
+                        ).length;
+                        const pendingResources = provider.resources.filter(
+                          (resource) =>
+                            resource.status === "NOT_STARTED" ||
+                            resource.status === "BLOCKED",
+                        ).length;
+                        return (
+                          <div
+                            key={provider.provider}
+                            className="rounded-xl border border-slate-200 p-4"
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <h5 className="font-bold text-slate-900">
+                                {providerLabel}
+                              </h5>
+                              <span
+                                className={`rounded-full px-2.5 py-1 text-xs font-semibold ${provider.status === "SUCCESS" ? "bg-green-100 text-green-800" : provider.status === "FAILED" ? "bg-red-100 text-red-800" : "bg-amber-100 text-amber-800"}`}
+                              >
+                                {provider.status === "SUCCESS"
+                                  ? "Created"
+                                  : provider.status === "FAILED"
+                                    ? "Failed"
+                                    : "Partially created"}
+                              </span>
+                            </div>
+                            <div className="mt-4 space-y-3">
+                              {provider.resources.map((resource) => (
+                                <div
+                                  key={resource.key}
+                                  className="flex items-start gap-3"
+                                >
+                                  <span
+                                    className={`mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-xs font-bold ${resource.status === "SUCCESS" ? "bg-green-100 text-green-700" : resource.status === "FAILED" ? "bg-red-100 text-red-700" : "bg-slate-100 text-slate-500"}`}
+                                  >
+                                    {resource.status === "SUCCESS"
+                                      ? "✓"
+                                      : resource.status === "FAILED"
+                                        ? "!"
+                                        : resource.status === "TIMED_OUT"
+                                          ? "?"
+                                          : resource.status === "BLOCKED"
+                                            ? "Ⅱ"
+                                            : "–"}
+                                  </span>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="flex flex-wrap items-center justify-between gap-2">
+                                      <span className="text-sm font-semibold text-slate-800">
+                                        {resource.label}
+                                      </span>
+                                      <span
+                                        className={`text-xs font-semibold ${resource.status === "SUCCESS" ? "text-green-700" : resource.status === "FAILED" ? "text-red-700" : "text-slate-500"}`}
+                                      >
+                                        {resource.status === "SUCCESS"
+                                          ? "Success"
+                                          : resource.status === "FAILED"
+                                            ? "Failed"
+                                            : resource.status === "TIMED_OUT"
+                                              ? "Timed out — reconcile"
+                                              : resource.status === "BLOCKED"
+                                                ? "Blocked by dependency"
+                                                : "Not started"}
+                                      </span>
+                                    </div>
+                                    {resource.resourceId && (
+                                      <p className="mt-1 break-all font-mono text-[11px] text-slate-400">
+                                        ID: {resource.resourceId}
+                                      </p>
+                                    )}
+                                    {resource.endpoint && (
+                                      <p className="mt-1 break-all font-mono text-[10px] text-slate-400">
+                                        {resource.endpoint}
+                                      </p>
+                                    )}
+                                    {resource.requestId && (
+                                      <p className="mt-1 font-mono text-[10px] text-slate-400">
+                                        Request: {resource.requestId} · Attempt:{" "}
+                                        {resource.attemptCount ?? 1}
+                                      </p>
+                                    )}
+                                    {resource.responseSummary && (
+                                      <p className="mt-1 text-[11px] text-slate-500">
+                                        {resource.responseSummary}
+                                      </p>
+                                    )}
+                                    {resource.errorMessage && (
+                                      <div className="mt-2 rounded-lg bg-red-50 p-3">
+                                        <p className="text-[11px] font-bold uppercase text-red-700">
+                                          {resource.errorCode}
+                                        </p>
+                                        <p className="mt-1 text-xs leading-5 text-red-700">
+                                          {resource.errorMessage}
+                                        </p>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                            {(failedResources > 0 ||
+                              timedOutResources > 0 ||
+                              pendingResources > 0) && (
+                              <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-100 pt-4">
+                                {timedOutResources > 0 && (
+                                  <div className="w-full space-y-2">
+                                    <p className="text-xs font-medium text-amber-700">
+                                      Do not retry timed-out requests yet. First
+                                      query the provider account to determine
+                                      whether the resource was created.
+                                    </p>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        reconcileDemoTimeout(provider.provider)
+                                      }
+                                      className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-semibold text-amber-800 hover:bg-amber-100"
+                                    >
+                                      Simulate reconciliation lookup
+                                    </button>
+                                  </div>
+                                )}
+                                {failedResources > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      retryDemoFailedSteps(provider.provider)
+                                    }
+                                    className="rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700"
+                                  >
+                                    Retry failed step
+                                    {failedResources > 1 ? "s" : ""}
+                                  </button>
+                                )}
+                                {pendingResources > 0 &&
+                                  failedResources === 0 &&
+                                  timedOutResources === 0 && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        continueDemoProvider(provider.provider)
+                                      }
+                                      className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+                                    >
+                                      Continue remaining steps
+                                    </button>
+                                  )}
+                              </div>
+                            )}
+                            {failedResources > 0 && pendingResources > 0 && (
+                              <p className="mt-2 text-xs text-slate-500">
+                                Retry the failed resource first. Then continue
+                                the resources that depend on it.
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="mt-4 rounded-xl bg-slate-50 p-3 text-xs leading-5 text-slate-600">
+                      <strong>Demo behavior:</strong> successful resource IDs
+                      are retained. Failed steps can be retried; blocked steps
+                      wait for their dependency. A timeout is an unknown
+                      outcome, not proof of failure: reconcile by querying the
+                      provider before retrying to avoid duplicate resources.
+                      Endpoint names, IDs and responses are illustrative, not
+                      live provider records.
+                    </div>
+                  </div>
+                )}
+              </div>
+              */}
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                 <p className="text-sm font-semibold text-slate-800">
                   Live provider execution

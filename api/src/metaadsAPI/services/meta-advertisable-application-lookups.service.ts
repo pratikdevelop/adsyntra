@@ -1,7 +1,13 @@
 import { getProviderAccessToken } from "../../utils/provider-token.utils.js";
 
 const META_GRAPH_API_VERSION =
-  process.env.META_ADS_API_VERSION || "v27.0";
+  process.env.META_ADS_API_VERSION?.trim() ||
+  process.env.META_GRAPH_API_VERSION?.trim() ||
+  "v26.0";
+
+if (!/^v\d+\.\d+$/.test(META_GRAPH_API_VERSION)) {
+  throw new Error("Invalid Meta Graph API version configuration.");
+}
 
 const PAGE_SIZE = 100;
 
@@ -66,6 +72,7 @@ export async function listMetaAdvertisableApplications(
   userId: string,
   rawAdAccountId: string,
   after?: string,
+  appId?: string,
 ) {
   const adAccountId = rawAdAccountId
     .trim()
@@ -100,6 +107,17 @@ export async function listMetaAdvertisableApplications(
     "id,name,advertisable_app_events",
   );
   url.searchParams.set("limit", String(PAGE_SIZE));
+
+  if (appId !== undefined) {
+    const normalizedAppId = appId.trim();
+    if (!/^\d+$/.test(normalizedAppId)) {
+      throw new MetaAdvertisableApplicationLookupError(
+        "A valid numeric Meta Application ID is required when filtering advertisable applications.",
+        400,
+      );
+    }
+    url.searchParams.set("app_id", normalizedAppId);
+  }
 
   if (after) {
     url.searchParams.set("after", after);

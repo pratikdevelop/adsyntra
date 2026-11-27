@@ -233,7 +233,7 @@ export default function ProfilePage() {
               <div className="rounded-xl border border-dashed border-slate-300 p-4 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">No external sign-in identities are linked to this Clerk user.</div>
             )}
             <Divider sx={{ my: 2 }} />
-            <Stack direction="row" spacing={1.5} alignItems="flex-start">
+            <Stack sx={{ alignItems: "flex-start" }} direction="row" spacing={1.5} >
               <LoginRoundedIcon color="primary" sx={{ mt: 0.25 }} />
               <Box sx={{ minWidth: 0 }}><Typography variant="body2" fontWeight={800}>Authentication and sessions</Typography><Typography variant="body2" color="text.secondary" sx={{ mt: 0.35 }}>Password, multi-factor authentication, passkeys, recovery codes and active sessions remain controlled by Clerk. Their availability depends on your Clerk instance configuration; advanced management will be added after those capabilities are verified.</Typography></Box>
             </Stack>

@@ -496,7 +496,7 @@ export default function AudiencesPage() {
   if (!isLoaded || (isSignedIn && loading)) {
     return (
       <Box sx={{ minHeight: 420, display: "grid", placeItems: "center", bgcolor: "#F6F8FC" }}>
-        <Stack alignItems="center" spacing={2}>
+        <Stack sx={{ alignItems: "center" }} spacing={2}>
           <CircularProgress size={30} />
           <Typography variant="body2" color="text.secondary">Loading your audiences…</Typography>
         </Stack>
@@ -544,7 +544,7 @@ export default function AudiencesPage() {
             <Typography variant="body2" sx={{ mt: 0.45, color: "#475569" }}>
               View and create audience segments across your Google Ads and Meta Ads accounts.
             </Typography>
-            <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mt: 1.1 }}>
+            <Stack direction="row" spacing={1.5} useFlexGap sx={{ mt: 1.1, alignItems: "center", flexWrap: "wrap" }}>
               <Typography variant="caption" color="text.secondary">
                 Google Ads: {overview?.providers.googleAds.connected ? "Connected" : "Not connected"}
               </Typography>
@@ -843,7 +843,7 @@ export default function AudiencesPage() {
           />
         </Box>
 
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 2.2, px: 0.25 }}>
+        <Stack direction="row" spacing={1} sx={{ mt: 2.2, px: 0.25, alignItems: "center" }}>
           <InfoOutlined sx={{ fontSize: 15, color: "#8A95A7" }} />
           <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.6 }}>
             Audience size values are provider-reported estimates. Google Search and Display sizes are shown separately; Meta may return approximate ranges.
@@ -860,7 +860,7 @@ export default function AudiencesPage() {
         PaperProps={{ sx: { borderRadius: isMobile ? 0 : 2 } }}
       >
         <DialogTitle sx={{ px: 3, py: 2.25, borderBottom: "1px solid #EDF0F5" }}>
-          <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={2}>
+          <Stack sx={{ justifyContent: "space-between", alignItems: "flex-start" }} direction="row" spacing={2}>
             <Box>
               <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: 1, fontWeight: 750 }}>NEW AUDIENCE</Typography>
               <Typography variant="h6" fontWeight={800} color="#192536">Create audience</Typography>
@@ -1067,11 +1067,11 @@ export default function AudiencesPage() {
         PaperProps={{ sx: { borderRadius: isMobile ? 0 : 2, overflow: "hidden" } }}
       >
         <DialogTitle sx={{ px: 3, py: 2.25, borderBottom: "1px solid #EDF0F5" }}>
-          <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={2}>
+          <Stack sx={{ justifyContent: "space-between", alignItems: "flex-start" }} direction="row" spacing={2}>
             <Box sx={{ minWidth: 0 }}>
               <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: 1, fontWeight: 750 }}>AUDIENCE DETAILS</Typography>
               <Typography variant="h6" fontWeight={780} sx={{ color: "#192536", overflowWrap: "anywhere" }}>{selectedAudience?.name}</Typography>
-              {selectedAudience && <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mt: 1 }}><ProviderBadge provider={selectedAudience.provider} /><Chip size="small" label={selectedAudience.kind} variant="outlined" sx={{ borderColor: "#E4E8EF", color: "#586477" }} />{selectedAudience.status && <StatusBadge status={selectedAudience.status} />}</Stack>}
+              {selectedAudience && <Stack direction="row" spacing={1} useFlexGap sx={{ mt: 1, alignItems: "center", flexWrap: "wrap" }}><ProviderBadge provider={selectedAudience.provider} /><Chip size="small" label={selectedAudience.kind} variant="outlined" sx={{ borderColor: "#E4E8EF", color: "#586477" }} />{selectedAudience.status && <StatusBadge status={selectedAudience.status} />}</Stack>}
             </Box>
             <IconButton onClick={() => setSelectedAudience(null)} aria-label="Close details"><CloseRounded /></IconButton>
           </Stack>
@@ -1135,14 +1135,14 @@ function SummaryCard({
   return (
     <Card elevation={0} sx={{ ...surfaceSx, overflow: "hidden", minWidth: 0 }}>
       <CardContent sx={{ p: 2.1, "&:last-child": { pb: 2.1 } }}>
-        <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1.5}>
+        <Stack sx={{ justifyContent: "space-between", alignItems: "flex-start" }} direction="row" spacing={1.5}>
           <Box sx={{ minWidth: 0 }}>
             <Typography variant="body2" sx={{ fontWeight: 700, color: "#687487" }}>{label}</Typography>
             <Typography variant="h4" sx={{ mt: 1.1, fontSize: 30, fontWeight: 600, letterSpacing: -0.7, lineHeight: 1.1, color: "#172235", fontVariantNumeric: "tabular-nums" }}>{value}</Typography>
           </Box>
           <Avatar variant="rounded" sx={{ width: 38, height: 38, borderRadius: 1.5, bgcolor: iconBg, color: iconColor, border: `1px solid ${accent}22` }}>{icon}</Avatar>
         </Stack>
-        <Stack direction="row" alignItems="center" spacing={0.65} sx={{ mt: 1.6, minWidth: 0 }}>
+        <Stack direction="row" spacing={0.65} sx={{ mt: 1.6, minWidth: 0, alignItems: "center" }}>
           {connected !== undefined && (
             <Box sx={{ width: 7, height: 7, borderRadius: "50%", bgcolor: connected ? "#16A36A" : "#9AA4B2", flex: "0 0 auto" }} />
           )}
@@ -1156,7 +1156,7 @@ function SummaryCard({
 
 function TabLabel({ label, count }: { label: string; count: number }) {
   return (
-    <Stack direction="row" spacing={0.9} alignItems="center">
+    <Stack sx={{ alignItems: "center" }} direction="row" spacing={0.9} >
       <span>{label}</span>
       <Box component="span" sx={{ px: 0.75, py: 0.1, minWidth: 22, borderRadius: 1, bgcolor: "rgba(100,116,139,.10)", color: "#758195", fontSize: 10.5, lineHeight: 1.7, fontWeight: 800, textAlign: "center" }}>
         {count}
@@ -1168,7 +1168,7 @@ function TabLabel({ label, count }: { label: string; count: number }) {
 function ProviderBadge({ provider }: { provider: ProviderKey }) {
   const isGoogle = provider === "googleAds";
   return (
-    <Stack direction="row" spacing={0.8} alignItems="center" sx={{ whiteSpace: "nowrap" }}>
+    <Stack direction="row" spacing={0.8} sx={{ whiteSpace: "nowrap", alignItems: "center" }}>
       <Avatar sx={{ width: 23, height: 23, bgcolor: isGoogle ? "#EAF2FF" : "#F0ECFF", color: isGoogle ? "#3973C9" : "#7158C5", fontSize: 11, fontWeight: 850 }}>
         {isGoogle ? "G" : "M"}
       </Avatar>
@@ -1194,7 +1194,7 @@ function StatusBadge({ status }: { status: string | null }) {
 function MobileAudienceCard({ row, onView }: { row: AudienceRow; onView: () => void }) {
   return (
     <Box sx={{ px: 2, py: 2.1 }}>
-      <Stack direction="row" justifyContent="space-between" spacing={1.5} alignItems="flex-start">
+      <Stack sx={{ justifyContent: "space-between", alignItems: "flex-start" }} direction="row" spacing={1.5} >
         <Box sx={{ minWidth: 0 }}>
           <Typography sx={{ fontSize: 14, fontWeight: 760, color: "#202B3B", overflowWrap: "anywhere" }}>{row.name}</Typography>
           <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.45, lineHeight: 1.5 }}>{row.description}</Typography>
@@ -1205,11 +1205,11 @@ function MobileAudienceCard({ row, onView }: { row: AudienceRow; onView: () => v
           </IconButton>
         </Tooltip>
       </Stack>
-      <Stack direction="row" spacing={1.4} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mt: 1.4 }}>
+      <Stack direction="row" spacing={1.4} useFlexGap sx={{ mt: 1.4, alignItems: "center", flexWrap: "wrap" }}>
         <ProviderBadge provider={row.provider} />
         <Typography variant="caption" color="text.secondary">{row.kind}</Typography>
       </Stack>
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mt: 1.4 }}>
+      <Stack direction="row" sx={{ mt: 1.4, justifyContent: "space-between", alignItems: "center" }}>
         <Box>
           <Typography variant="caption" color="text.secondary">Estimated size</Typography>
           <Typography variant="body2" fontWeight={700} color="#435066">{row.size}</Typography>
@@ -1239,8 +1239,8 @@ function ProviderStatusCard({
   const hasEmptySuccess = isMeta && connected && count === 0 && emptyReportsSucceeded;
   return (
     <Paper elevation={0} sx={{ ...surfaceSx, p: 2.1, minWidth: 0 }}>
-      <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
-        <Stack direction="row" spacing={1} alignItems="center" minWidth={0}>
+      <Stack sx={{ alignItems: "center", justifyContent: "space-between" }} direction="row" spacing={1}>
+        <Stack sx={{ alignItems: "center", minWidth: 0 }} direction="row" spacing={1}  >
           <Avatar sx={{ width: 34, height: 34, bgcolor: isMeta ? "#F0ECFF" : "#EAF2FF", color: isMeta ? "#7158C5" : "#3973C9", fontWeight: 850, fontSize: 13 }}>{isMeta ? "M" : "G"}</Avatar>
           <Box minWidth={0}>
             <Typography variant="subtitle2" fontWeight={780}>{providerLabel(provider)}</Typography>
@@ -1251,19 +1251,19 @@ function ProviderStatusCard({
       </Stack>
       <Divider sx={{ my: 1.6, borderColor: "#EEF1F5" }} />
       {error ? (
-        <Stack direction="row" spacing={1} alignItems="flex-start">
+        <Stack sx={{ alignItems: "flex-start" }} direction="row" spacing={1} >
           <ErrorOutlineRounded sx={{ color: "#D97706", fontSize: 18, mt: 0.1 }} />
           <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.65 }}>{error}</Typography>
         </Stack>
       ) : hasEmptySuccess ? (
-        <Stack direction="row" spacing={1} alignItems="flex-start">
+        <Stack sx={{ alignItems: "flex-start" }} direction="row" spacing={1} >
           <CheckCircleRounded sx={{ color: "#16A36A", fontSize: 18, mt: 0.1 }} />
           <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.65 }}>
             Both audience reports completed successfully. The selected Meta ad account returned zero Custom Audiences and zero Saved Audiences.
           </Typography>
         </Stack>
       ) : (
-        <Stack direction="row" spacing={1} alignItems="flex-start">
+        <Stack sx={{ alignItems: "flex-start" }} direction="row" spacing={1} >
           <CheckCircleRounded sx={{ color: connected ? "#16A36A" : "#9AA4B2", fontSize: 18, mt: 0.1 }} />
           <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.65 }}>
             {connected ? `${count} audience record${count === 1 ? "" : "s"} loaded from this account.` : "Connect this provider to load audience data."}

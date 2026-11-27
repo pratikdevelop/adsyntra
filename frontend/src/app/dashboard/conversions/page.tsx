@@ -232,7 +232,7 @@ function StatCard({ title, value, description, icon, tone = "blue" }: {
       }}
     >
       <CardContent className="relative p-5" sx={{ p: 2.5, "&:last-child": { pb: 2.5 } }}>
-        <Stack direction="row" spacing={1.5} alignItems="center">
+        <Stack sx={{ alignItems: "center" }} direction="row" spacing={1.5} >
           <Box
             sx={{
               width: 36,
@@ -265,7 +265,7 @@ function StatCard({ title, value, description, icon, tone = "blue" }: {
 
 function SectionHeading({ title, subtitle, action }: { title: string; subtitle: string; action?: ReactNode }) {
   return (
-    <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" alignItems={{ xs: "stretch", sm: "center" }} spacing={1.5} sx={{ mb: 2 }}>
+    <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ mb: 2, justifyContent: "space-between", alignItems: { xs: "stretch", sm: "center" } }}>
       <Box><Typography variant="h6" fontWeight={750} className="tracking-tight text-slate-900 dark:text-slate-100">{title}</Typography><Typography variant="body2" color="text.secondary" className="mt-0.5 text-slate-500 dark:text-slate-400">{subtitle}</Typography></Box>
       {action}
     </Stack>
@@ -275,7 +275,7 @@ function SectionHeading({ title, subtitle, action }: { title: string; subtitle: 
 function CodePanel({ title, code, onCopy }: { title: string; code: string; onCopy: () => void }) {
   return (
     <Paper variant="outlined" className="overflow-hidden rounded-2xl border-slate-200 bg-slate-50 dark:border-slate-800 dark:bg-slate-900" sx={{ borderRadius: 3, overflow: "hidden", bgcolor: "background.default" }}>
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ px: 1.5, py: 1, borderBottom: 1, borderColor: "divider" }}>
+      <Stack direction="row" sx={{ px: 1.5, py: 1, borderBottom: 1, borderColor: "divider", justifyContent: "space-between", alignItems: "center" }}>
         <Typography variant="caption" fontWeight={750}>{title}</Typography>
         <Tooltip title="Copy code" arrow><IconButton size="small" onClick={onCopy}><ContentCopyRoundedIcon fontSize="small" /></IconButton></Tooltip>
       </Stack>
@@ -535,7 +535,7 @@ export default function ConversionsPage() {
   }, [metaPixelId]);
 
   if (!isLoaded || (isSignedIn && loading)) {
-    return <Box sx={{ minHeight: 460, display: "grid", placeItems: "center" }}><Stack spacing={1.5} alignItems="center"><CircularProgress /><Typography color="text.secondary">Loading conversion tracking workspace…</Typography></Stack></Box>;
+    return <Box sx={{ minHeight: 460, display: "grid", placeItems: "center" }}><Stack sx={{ alignItems: "center" }} spacing={1.5} ><CircularProgress /><Typography color="text.secondary">Loading conversion tracking workspace…</Typography></Stack></Box>;
   }
 
   if (!isSignedIn) {
@@ -585,7 +585,7 @@ export default function ConversionsPage() {
           </Typography>
         </Box>
 
-        <Stack direction="row" spacing={1.5} alignItems="center" flexWrap="wrap">
+        <Stack sx={{ alignItems: "center", flexWrap: "wrap" }} direction="row" spacing={1.5}  >
           <TextField
             select
             size="small"
@@ -677,9 +677,9 @@ export default function ConversionsPage() {
               <Stack spacing={2.5}>
                 {googleData.metricsError && <Alert severity="warning">Conversion actions loaded, but Google conversion metrics could not be retrieved: {googleData.metricsError}</Alert>}
                 <Paper variant="outlined" className="rounded-2xl border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900" sx={{ p: 2.5, borderRadius: 3, bgcolor: "background.paper" }}>
-                  <Stack direction={{ xs: "column", md: "row" }} justifyContent="space-between" alignItems={{ xs: "flex-start", md: "center" }} spacing={1.5}>
+                  <Stack sx={{ justifyContent: "space-between", alignItems: { xs: "flex-start", md: "center" } }} direction={{ xs: "column", md: "row" }} spacing={1.5}>
                     <Box>
-                      <Stack direction="row" spacing={1} alignItems="center"><Typography fontWeight={800}>Account tracking status</Typography><Chip size="small" color={statusTone(googleTrackingStatus)} label={readableStatus(googleTrackingStatus)} /></Stack>
+                      <Stack sx={{ alignItems: "center" }} direction="row" spacing={1} ><Typography fontWeight={800}>Account tracking status</Typography><Chip size="small" color={statusTone(googleTrackingStatus)} label={readableStatus(googleTrackingStatus)} /></Stack>
                       <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>Selected account: {google.accountId} · Conversion account: {googleData.conversionCustomerId}</Typography>
                     </Box>
                     <Chip size="small" variant="outlined" label={googleTrackingEnabled ? "Tracking enabled" : "Check account setup"} icon={googleTrackingEnabled ? <CheckCircleRoundedIcon /> : <ErrorOutlineRoundedIcon />} />
@@ -707,7 +707,7 @@ export default function ConversionsPage() {
                               <TableCell align="right"><Typography fontWeight={700}>{formatNumber(action.metrics?.conversions, 1)}</Typography><Typography variant="caption" color="text.secondary">All: {formatNumber(action.metrics?.allConversions, 1)}</Typography></TableCell>
                               <TableCell align="right">{formatCurrency(action.metrics?.conversionsValue, googleCurrency)}</TableCell>
                               <TableCell>{action.primaryForGoal ? <Chip size="small" color="success" variant="outlined" label="Primary" /> : <Chip size="small" variant="outlined" label="Secondary" />}</TableCell>
-                              <TableCell align="right"><Stack direction="row" alignItems="center" justifyContent="flex-end" spacing={0.5}><Tooltip title="View tag snippets and action settings" arrow><IconButton size="small" onClick={() => setSelectedAction(action)}><VisibilityRoundedIcon fontSize="small" /></IconButton></Tooltip><Tooltip title={action.status === "ENABLED" ? "Hide conversion action (stop recording)" : "Enable conversion action"} arrow><span><Switch size="small" checked={action.status === "ENABLED"} disabled={mutatingKey === `google:${action.id}`} onChange={(_event, checked) => void runGoogleMutation(action.id, checked ? "ENABLED" : "HIDDEN")} /></span></Tooltip></Stack></TableCell>
+                              <TableCell align="right"><Stack sx={{ alignItems: "center", justifyContent: "flex-end" }} direction="row" spacing={0.5}><Tooltip title="View tag snippets and action settings" arrow><IconButton size="small" onClick={() => setSelectedAction(action)}><VisibilityRoundedIcon fontSize="small" /></IconButton></Tooltip><Tooltip title={action.status === "ENABLED" ? "Hide conversion action (stop recording)" : "Enable conversion action"} arrow><span><Switch size="small" checked={action.status === "ENABLED"} disabled={mutatingKey === `google:${action.id}`} onChange={(_event, checked) => void runGoogleMutation(action.id, checked ? "ENABLED" : "HIDDEN")} /></span></Tooltip></Stack></TableCell>
                             </TableRow>
                           ))}
                         </TableBody>
@@ -735,7 +735,7 @@ export default function ConversionsPage() {
                       {pixels.map((pixel) => (
                         <Card variant="outlined" key={pixel.id} className="rounded-2xl border-slate-200 bg-white transition-all hover:-translate-y-0.5 hover:shadow-md dark:border-slate-800 dark:bg-slate-900" sx={{ borderRadius: 3 }}>
                           <CardContent sx={{ p: 2.25 }}>
-                            <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={1}>
+                            <Stack sx={{ justifyContent: "space-between", alignItems: "flex-start" }} direction="row" spacing={1}>
                               <Box sx={{ minWidth: 0 }}><Typography fontWeight={800} sx={{ overflowWrap: "anywhere" }}>{pixel.name ?? "Untitled Pixel / Dataset"}</Typography><Typography variant="caption" color="text.secondary">ID: {pixel.id}</Typography></Box>
                               <Chip size="small" variant="outlined" label={pixel.last_fired_time ? "Activity timestamp available" : "No activity timestamp"} color={pixel.last_fired_time ? "success" : "default"} />
                             </Stack>
@@ -748,7 +748,7 @@ export default function ConversionsPage() {
                             <Alert severity="info" variant="outlined" sx={{ mt: 1.5 }}>
                               Meta reports the Pixel/Dataset last-fired timestamp here. This is not a per-event log and does not identify whether individual events arrived from the browser or Conversions API. Use Meta Events Manager for Test Events, diagnostics and event-source details.
                             </Alert>
-                            <Stack direction="row" justifyContent="flex-end" sx={{ mt: 1.5 }}><Button size="small" onClick={() => { setMetaPixelId(pixel.id); showToast(`Selected ${pixel.name ?? "Pixel/Dataset"} for setup instructions.`, "info"); }} sx={{ textTransform: "none" }}>Use for setup</Button></Stack>
+                            <Stack direction="row" sx={{ mt: 1.5, justifyContent: "flex-end" }}><Button size="small" onClick={() => { setMetaPixelId(pixel.id); showToast(`Selected ${pixel.name ?? "Pixel/Dataset"} for setup instructions.`, "info"); }} sx={{ textTransform: "none" }}>Use for setup</Button></Stack>
                           </CardContent>
                         </Card>
                       ))}
@@ -772,7 +772,7 @@ export default function ConversionsPage() {
                             <TableCell><Typography variant="body2">{item.pixel?.name ?? item.event_source_id ?? "—"}</Typography><Typography variant="caption" color="text.secondary">{item.event_source_type ?? "Pixel"}</Typography></TableCell>
                             <TableCell>{dateText(item.last_fired_time)}</TableCell>
                             <TableCell><Chip size="small" label={blocked ? "Unavailable" : archived ? "Archived" : "Configured"} color={blocked ? "error" : archived ? "warning" : "success"} /></TableCell>
-                            <TableCell align="right"><Stack direction="row" justifyContent="flex-end" spacing={0.5}><Tooltip title={blocked ? "Meta marked this conversion unavailable; changes are blocked" : "Edit custom conversion"} arrow><span><IconButton size="small" disabled={blocked || mutatingKey === `meta:${item.id}`} onClick={() => { setMetaEditTarget(item); setMetaEditName(item.name); setMetaEditDescription(item.description ?? ""); setMetaEditValue(String(item.default_conversion_value ?? 0)); }}><SettingsSuggestRoundedIcon fontSize="small" /></IconButton></span></Tooltip><Tooltip title={blocked ? "Meta marked this conversion unavailable" : "Delete custom conversion"} arrow><span><IconButton size="small" color="error" disabled={blocked || mutatingKey === `meta:${item.id}`} onClick={() => void deleteMetaConversion(item)}><ErrorOutlineRoundedIcon fontSize="small" /></IconButton></span></Tooltip></Stack></TableCell>
+                            <TableCell align="right"><Stack sx={{ justifyContent: "flex-end" }} direction="row" spacing={0.5}><Tooltip title={blocked ? "Meta marked this conversion unavailable; changes are blocked" : "Edit custom conversion"} arrow><span><IconButton size="small" disabled={blocked || mutatingKey === `meta:${item.id}`} onClick={() => { setMetaEditTarget(item); setMetaEditName(item.name); setMetaEditDescription(item.description ?? ""); setMetaEditValue(String(item.default_conversion_value ?? 0)); }}><SettingsSuggestRoundedIcon fontSize="small" /></IconButton></span></Tooltip><Tooltip title={blocked ? "Meta marked this conversion unavailable" : "Delete custom conversion"} arrow><span><IconButton size="small" color="error" disabled={blocked || mutatingKey === `meta:${item.id}`} onClick={() => void deleteMetaConversion(item)}><ErrorOutlineRoundedIcon fontSize="small" /></IconButton></span></Tooltip></Stack></TableCell>
                           </TableRow>;
                         })}</TableBody>
                       </Table>
@@ -791,7 +791,7 @@ export default function ConversionsPage() {
                     <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
                       Enter a public page URL. AdSyntra checks its initial HTML for the selected Pixel ID, the Meta Pixel library and the fallback tracking request.
                     </Typography>
-                    <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems={{ sm: "flex-start" }}>
+                    <Stack sx={{ alignItems: { sm: "flex-start" } }} direction={{ xs: "column", sm: "row" }} spacing={1} >
                       <TextField
                         fullWidth
                         size="small"
@@ -818,7 +818,7 @@ export default function ConversionsPage() {
                   {pixelVerification && (
                     <Card variant="outlined" className="mb-3 rounded-2xl border-slate-200 dark:border-slate-800" sx={{ mb: 1.5, borderRadius: 3 }}>
                       <CardContent sx={{ p: 2, "&:last-child": { pb: 2 } }}>
-                        <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" alignItems={{ sm: "center" }} spacing={1}>
+                        <Stack sx={{ justifyContent: "space-between", alignItems: { sm: "center" } }} direction={{ xs: "column", sm: "row" }} spacing={1}>
                           <Box>
                             <Typography fontWeight={800}>Website verification result</Typography>
                             <Typography variant="caption" color="text.secondary">{pixelVerification.finalUrl}</Typography>
@@ -837,7 +837,7 @@ export default function ConversionsPage() {
                             ["Meta Pixel library reference", pixelVerification.checks.pixelLibraryDetected],
                             ["Fallback tracking pixel request", pixelVerification.checks.noscriptPixelDetected],
                           ].map(([label, checked]) => (
-                            <Stack key={String(label)} direction="row" alignItems="center" spacing={1}>
+                            <Stack sx={{ alignItems: "center" }} key={String(label)} direction="row" spacing={1}>
                               {checked ? <CheckCircleRoundedIcon color="success" fontSize="small" /> : <ErrorOutlineRoundedIcon color="disabled" fontSize="small" />}
                               <Typography variant="body2">{String(label)}: <strong>{checked ? "Found" : "Not found"}</strong></Typography>
                             </Stack>
@@ -850,7 +850,7 @@ export default function ConversionsPage() {
                         <Alert severity="info" variant="outlined" sx={{ mt: 1.5 }}>
                           {pixelVerification.limitations.join(" ")}
                         </Alert>
-                        <Stack direction={{ xs: "column", sm: "row" }} justifyContent="flex-end" spacing={1} sx={{ mt: 1 }}>
+                        <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mt: 1, justifyContent: "flex-end" }}>
                           <Button size="small" component="a" href={pixelVerification.finalUrl} target="_blank" rel="noopener noreferrer" sx={{ textTransform: "none" }}>
                             Open website to test events
                           </Button>
@@ -869,7 +869,7 @@ export default function ConversionsPage() {
                 </Box>
 
                 <Paper variant="outlined" className="rounded-2xl border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900" sx={{ p: 2.5, borderRadius: 3, bgcolor: "background.paper" }}>
-                  <Stack direction="row" spacing={1.25} alignItems="flex-start">
+                  <Stack sx={{ alignItems: "flex-start" }} direction="row" spacing={1.25} >
                     <LanRoundedIcon color="primary" sx={{ mt: 0.2 }} />
                     <Box>
                       <Typography fontWeight={800}>Conversions API (server-side tracking)</Typography>
@@ -944,7 +944,7 @@ export default function ConversionsPage() {
         <DialogTitle>{selectedAction?.name ?? "Conversion action"}</DialogTitle>
         <DialogContent dividers>
           {selectedAction && <Stack spacing={2}>
-            <Stack direction="row" spacing={1} flexWrap="wrap"><Chip size="small" label={selectedAction.category ?? "Unknown category"} /><Chip size="small" label={selectedAction.type ?? "Unknown type"} /><Chip size="small" label={readableStatus(selectedAction.status)} color={statusTone(selectedAction.status)} /></Stack>
+            <Stack sx={{ flexWrap: "wrap" }} direction="row" spacing={1} ><Chip size="small" label={selectedAction.category ?? "Unknown category"} /><Chip size="small" label={selectedAction.type ?? "Unknown type"} /><Chip size="small" label={readableStatus(selectedAction.status)} color={statusTone(selectedAction.status)} /></Stack>
             <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(3,minmax(0,1fr))" }, gap: 2 }}>
               <Box><Typography variant="caption" color="text.secondary">Conversion ID</Typography><Typography variant="body2" fontWeight={700}>{selectedAction.id}</Typography></Box>
               <Box><Typography variant="caption" color="text.secondary">Counting type</Typography><Typography variant="body2" fontWeight={700}>{selectedAction.countingType ?? "—"}</Typography></Box>

@@ -88,10 +88,15 @@ import sharp from "sharp";
 import { resolveStoredAssetPath } from "../services/asset-storage.service.js";
 import { uploadMetaAdsImageAsset } from "../metaadsAPI/services/meta-ads-image-upload.service.js";
 import {
+    uploadMetaAdsVideoAsset,
+    waitForMetaAdsVideoReady,
+} from "../metaadsAPI/services/meta-ads-video-upload.service.js";
+import {
  getGoogleAdsAudiences,
     getGoogleAdsConversionActions,
     getGoogleAdsPortfolioStrategies,
     getGoogleAdsMerchantCenterLinks,
+    getGoogleAdsHotelCenterLinks,
     getGoogleMerchantCenterDataSources,
     getGoogleMerchantCenterFeedLabels,
     getGoogleMerchantCenterProducts,
@@ -106,6 +111,14 @@ import {
     getMetaPixelEventOptions,
     MetaPixelLookupError,
 } from "../metaadsAPI/services/meta-pixel-resource-lookups.service.js";
+import {
+    evaluateCampaignCreateGate,
+    getCapabilityConfigurationError,
+} from "../campaign-capabilities/campaign-capability.enforcement.js";
+import {
+    MetaCampaignPrerequisiteError,
+    validateMetaCampaignPrerequisites,
+} from "../metaadsAPI/services/meta-campaign-prerequisites.service.js";
 
 const router = Router();
 
@@ -252,6 +265,93 @@ async function readOwnedCampaignImageAsset(
         mimeType,
         width: swapsDimensions ? metadata.height! : metadata.width,
         height: swapsDimensions ? metadata.width! : metadata.height,
+    };
+}
+
+const META_CAMPAIGN_VIDEO_MIME_TYPES = new Set([
+    "video/mp4",
+    "video/quicktime",
+    "video/webm",
+]);
+const MAX_META_CAMPAIGN_VIDEO_BYTES = 100 * 1024 * 1024;
+
+/**
+ * Reads an authenticated user's private Asset Library video from local storage.
+ * The provider receives the binary upload only; the private storage URL/key is
+ * never forwarded to Meta.
+ */
+async function readOwnedCampaignVideoAsset(
+    userId: string,
+    assetId: string,
+): Promise<{
+    buffer: Buffer;
+    fileName: string;
+    mimeType: string;
+    sizeBytes: number;
+}> {
+    const asset = await AssetModel.findOne({
+        _id: assetId,
+        ownerUserId: userId,
+        kind: "VIDEO",
+    })
+        .select("+storageKey +storageProvider")
+        .lean()
+        .exec();
+
+    if (!asset || !asset.storageKey) {
+        throw new CampaignRequestValidationError(
+            "The selected video is not available in your private Asset Library storage.",
+        );
+    }
+    if (asset.storageProvider !== "LOCAL") {
+        throw new CampaignRequestValidationError(
+            "The selected video uses a storage provider that this Meta upload flow does not support yet.",
+        );
+    }
+
+    const mimeType = String(asset.mimeType ?? "").trim().toLowerCase();
+    if (!META_CAMPAIGN_VIDEO_MIME_TYPES.has(mimeType)) {
+        throw new CampaignRequestValidationError(
+            "Meta video uploads currently support MP4, MOV and WebM Asset Library files.",
+        );
+    }
+    if (typeof asset.sizeBytes === "number" && asset.sizeBytes > MAX_META_CAMPAIGN_VIDEO_BYTES) {
+        throw new CampaignRequestValidationError(
+            "Meta campaign video assets must be 100 MB or smaller.",
+        );
+    }
+
+    let buffer: Buffer;
+    try {
+        buffer = await readFile(resolveStoredAssetPath(asset.storageKey));
+    } catch {
+        throw new CampaignRequestValidationError(
+            "The selected Asset Library video could not be read from private storage.",
+        );
+    }
+    if (!buffer.length || buffer.length > MAX_META_CAMPAIGN_VIDEO_BYTES) {
+        throw new CampaignRequestValidationError(
+            "The selected Meta video must be non-empty and no larger than 100 MB.",
+        );
+    }
+
+    // Container-signature checks prevent a renamed image or arbitrary binary
+    // from being uploaded as a video. Full codec/duration validation remains
+    // part of the final media QA stage.
+    const hasIsoBmffSignature = buffer.length >= 8 && buffer.toString("ascii", 4, 8) === "ftyp";
+    const hasWebmSignature = buffer.length >= 4 && buffer.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
+    if ((mimeType === "video/webm" && !hasWebmSignature) ||
+        ((mimeType === "video/mp4" || mimeType === "video/quicktime") && !hasIsoBmffSignature)) {
+        throw new CampaignRequestValidationError(
+            "The selected video content does not match its declared MP4, MOV or WebM file type.",
+        );
+    }
+
+    return {
+        buffer,
+        fileName: asset.originalFileName || asset.name || `asset-${assetId}`,
+        mimeType,
+        sizeBytes: buffer.length,
     };
 }
 
@@ -1215,6 +1315,165 @@ function optionalConfigNumber(
 
     return numberValue;
 }
+type ResolvedMetaMessagingDestination = {
+    type: "MESSENGER" | "INSTAGRAM_DIRECT" | "WHATSAPP";
+    id: string;
+    pageId: string;
+    whatsappNumber?: string | null;
+};
+
+type MetaAppStorePlatform = "ANDROID" | "IOS";
+
+function resolveMetaAppStoreListingForRequest(
+    rawUrl: unknown,
+    rawPlatform: unknown,
+): { platform: MetaAppStorePlatform; url: string; storeListingId: string } {
+    const platform = typeof rawPlatform === "string"
+        ? rawPlatform.trim().toUpperCase()
+        : "";
+    if (platform !== "ANDROID" && platform !== "IOS") {
+        throw new CampaignRequestValidationError(
+            "Choose Android (Google Play) or iOS (Apple App Store) for the Meta App store listing.",
+        );
+    }
+
+    if (typeof rawUrl !== "string" || !rawUrl.trim()) {
+        throw new CampaignRequestValidationError(
+            "A public App Store or Google Play listing URL is required for the selected Meta application.",
+        );
+    }
+
+    let url: URL;
+    try {
+        url = new URL(rawUrl.trim());
+    } catch {
+        throw new CampaignRequestValidationError(
+            "Enter a valid public App Store or Google Play listing URL.",
+        );
+    }
+
+    if (url.protocol !== "https:" || url.username || url.password) {
+        throw new CampaignRequestValidationError(
+            "The Meta App store listing must be a public HTTPS URL without embedded credentials.",
+        );
+    }
+
+    const hostname = url.hostname.toLowerCase();
+    let storeListingId = "";
+
+    if (platform === "ANDROID") {
+        if (
+            (hostname !== "play.google.com" && hostname !== "www.play.google.com") ||
+            url.pathname.replace(/\/$/, "") !== "/store/apps/details"
+        ) {
+            throw new CampaignRequestValidationError(
+                "Android apps require a Google Play app details URL from play.google.com.",
+            );
+        }
+        storeListingId = url.searchParams.get("id")?.trim() ?? "";
+        if (!/^[A-Za-z][A-Za-z0-9_]*(?:\.[A-Za-z][A-Za-z0-9_]*)+$/.test(storeListingId)) {
+            throw new CampaignRequestValidationError(
+                "The Google Play URL must contain a valid Android package name in its id parameter.",
+            );
+        }
+    } else {
+        if (
+            hostname !== "apps.apple.com" &&
+            hostname !== "www.apps.apple.com" &&
+            hostname !== "itunes.apple.com"
+        ) {
+            throw new CampaignRequestValidationError(
+                "iOS apps require an Apple App Store listing URL from apps.apple.com.",
+            );
+        }
+        const match = url.pathname.match(/(?:^|\/)id(\d+)(?:\/|$)/i);
+        storeListingId = match?.[1] ?? "";
+        if (!/^\d{6,}$/.test(storeListingId)) {
+            throw new CampaignRequestValidationError(
+                "The Apple App Store URL must contain its numeric app ID, for example /id1234567890.",
+            );
+        }
+    }
+
+    url.hash = "";
+    return { platform, url: url.toString(), storeListingId };
+}
+
+async function revalidateMetaAdvertisableApplicationForAccount(
+    userId: string,
+    accountId: string,
+    applicationId: string,
+): Promise<void> {
+    let result: Awaited<ReturnType<typeof listMetaAdvertisableApplications>>;
+    try {
+        result = await listMetaAdvertisableApplications(
+            userId,
+            accountId,
+            undefined,
+            applicationId,
+        );
+    } catch (error) {
+        throw new CampaignRequestValidationError(
+            error instanceof Error
+                ? `Unable to revalidate the selected Meta application for this Ad Account: ${error.message}`
+                : "Unable to revalidate the selected Meta application for this Ad Account.",
+        );
+    }
+
+    if (!(result.applications ?? []).some((application) => application.id === applicationId)) {
+        throw new CampaignRequestValidationError(
+            "The selected Meta application is not advertisable from the currently selected Ad Account. Refresh the application list and select an available app.",
+        );
+    }
+}
+
+async function resolveMetaMessagingDestinationForCreative(
+    userId: string,
+    creativeConfig: Record<string, unknown>,
+): Promise<ResolvedMetaMessagingDestination> {
+    const rawDestination = getConfigValue(creativeConfig, "destination");
+    const destinationConfig = isRecord(rawDestination) ? rawDestination : {};
+    const destinationType = String(getConfigValue(destinationConfig, "type") ?? "").trim().toUpperCase();
+    if (destinationType !== "MESSAGING") {
+        throw new CampaignRequestValidationError("A Meta messaging destination is required.");
+    }
+
+    const messagingType = String(getConfigValue(destinationConfig, "messagingType", "messaging_type") ?? "").trim().toUpperCase();
+    if (!["MESSENGER", "INSTAGRAM_DIRECT", "WHATSAPP"].includes(messagingType)) {
+        throw new CampaignRequestValidationError("Choose Messenger, Instagram Direct or WhatsApp as the Meta messaging destination.");
+    }
+
+    const messagingDestinationId = optionalConfigString(destinationConfig, ["messagingDestinationId", "messaging_destination_id"], "Meta messaging identity");
+    const pageId = requireConfigString(creativeConfig, ["pageId", "page_id"], "Meta Facebook Page ID");
+    if (!messagingDestinationId) {
+        throw new CampaignRequestValidationError("Select an available messaging identity connected to the selected Facebook Page.");
+    }
+
+    let discovery: Awaited<ReturnType<typeof listMetaMessagingDestinationsForPage>>;
+    try {
+        discovery = await listMetaMessagingDestinationsForPage(userId, pageId);
+    } catch (error) {
+        throw new CampaignRequestValidationError(error instanceof Error ? error.message : "Unable to revalidate the selected Meta messaging identity.");
+    }
+
+    const selected = discovery.destinations.find((destination) =>
+        destination.type === messagingType &&
+        destination.id === messagingDestinationId &&
+        destination.pageId === pageId &&
+        destination.isAvailable,
+    );
+    if (!selected) {
+        throw new CampaignRequestValidationError("The selected messaging identity is no longer available for this Facebook Page. Refresh the identity list and select it again.");
+    }
+
+    return {
+        type: selected.type,
+        id: selected.id,
+        pageId: selected.pageId,
+        whatsappNumber: selected.whatsappNumber ?? null,
+    };
+}
+
 function buildMetaCampaignBundleInput(
     campaignName: string,
     websiteUrl: string | null,
@@ -1225,6 +1484,18 @@ function buildMetaCampaignBundleInput(
         confirm: boolean;
     },
     uploadedMetaImageHash?: string,
+    uploadedMetaVideo?: { videoId: string; thumbnailUrl: string },
+    resolvedMessagingDestination?: ResolvedMetaMessagingDestination,
+    resolvedMetaAppDestination?: {
+        applicationId: string;
+        platform: MetaAppStorePlatform;
+        url: string;
+        storeListingId: string;
+    },
+    resolvedMetaCatalogDestination?: {
+        catalogId: string;
+        productSetId: string;
+    },
 ): any {
     const campaignConfig = requireConfigObject(
         configuration.campaign,
@@ -1253,6 +1524,63 @@ function buildMetaCampaignBundleInput(
         "Meta Creative configuration",
     );
 
+    // Current execution supports Single Image and Single Video for Website,
+    // Page-owned Instant Form, messaging and App Install destinations.
+    const creativeFormat = String(
+        getConfigValue(creativeConfig, "format", "creativeFormat") ?? "SINGLE_IMAGE",
+    ).trim().toUpperCase();
+    if (creativeFormat !== "SINGLE_IMAGE" && creativeFormat !== "SINGLE_VIDEO" && creativeFormat !== "CATALOG_TEMPLATE") {
+        throw new CampaignRequestValidationError(
+            "The current Meta campaign execution path supports SINGLE_IMAGE, SINGLE_VIDEO and native CATALOG_TEMPLATE creatives. Carousel requires its own child-attachment workflow.",
+        );
+    }
+    if (creativeFormat === "CATALOG_TEMPLATE" && !resolvedMetaCatalogDestination) {
+        throw new CampaignRequestValidationError("A verified Meta Catalog and Product Set are required for a Catalog Template creative.");
+    }
+    if (creativeFormat !== "CATALOG_TEMPLATE" && resolvedMetaCatalogDestination) {
+        throw new CampaignRequestValidationError("A Meta Catalog destination cannot be combined with a standard image or video creative.");
+    }
+
+    const creativeDestination = getConfigValue(creativeConfig, "destination");
+    const creativeDestinationConfig = isRecord(creativeDestination)
+        ? creativeDestination
+        : {};
+    const creativeDestinationType = String(
+        getConfigValue(creativeDestinationConfig, "type") ?? "WEBSITE",
+    ).trim().toUpperCase();
+    if (!["WEBSITE", "INSTANT_FORM", "MESSAGING", "APP"].includes(creativeDestinationType)) {
+        throw new CampaignRequestValidationError(
+            "This Meta execution slice supports WEBSITE, INSTANT_FORM, MESSAGING and APP destinations.",
+        );
+    }
+    if (creativeDestinationType === "APP" && !resolvedMetaAppDestination) {
+        throw new CampaignRequestValidationError(
+            "Select an advertisable Meta App and validate its Google Play or Apple App Store listing before creating an App Install campaign.",
+        );
+    }
+
+    const instantFormId = creativeDestinationType === "INSTANT_FORM"
+        ? optionalConfigString(
+            creativeDestinationConfig,
+            ["instantFormId", "instant_form_id"],
+            "Meta Instant Form ID",
+        )
+        : undefined;
+    if (
+        creativeDestinationType === "INSTANT_FORM" &&
+        (!instantFormId || !/^\d+$/.test(instantFormId))
+    ) {
+        throw new CampaignRequestValidationError(
+            "Select a valid existing Instant Form belonging to the selected Facebook Page.",
+        );
+    }
+
+    const creativePageId = requireConfigString(creativeConfig, ["pageId", "page_id"], "Meta Facebook Page ID");
+    const messagingDestinationType = creativeDestinationType === "MESSAGING" ? resolvedMessagingDestination?.type : undefined;
+    if (creativeDestinationType === "MESSAGING" && !resolvedMessagingDestination) {
+        throw new CampaignRequestValidationError("The selected Meta messaging identity must be revalidated against the selected Page before campaign creation.");
+    }
+
     // Campaign objective
     const objective = (
         getConfigValue(campaignConfig, "objective") ??
@@ -1266,6 +1594,81 @@ function buildMetaCampaignBundleInput(
         throw new CampaignRequestValidationError(
             "Meta campaign objective is required.",
         );
+    }
+
+    if (creativeFormat === "CATALOG_TEMPLATE") {
+        const normalizedObjective = objective.trim().toUpperCase();
+        const optimizationGoal = String(getConfigValue(adSetConfig, "optimization_goal", "optimizationGoal") ?? "").trim().toUpperCase();
+        const billingEvent = String(getConfigValue(adSetConfig, "billing_event", "billingEvent") ?? "").trim().toUpperCase();
+        const placementValue = getConfigValue(adSetConfig, "placements");
+        const placementConfig = isRecord(placementValue) ? placementValue : {};
+        const placementMode = String(getConfigValue(placementConfig, "mode") ?? "").trim().toUpperCase();
+        const catalogConfig = isRecord(configuration.catalog) ? configuration.catalog : {};
+        const submittedCatalogId = optionalConfigString(catalogConfig, ["catalogId", "catalog_id"], "Meta Product Catalog ID");
+        const submittedProductSetId = optionalConfigString(catalogConfig, ["productSetId", "product_set_id"], "Meta Product Set ID");
+        const campaignPromotedValue = getConfigValue(campaignConfig, "promoted_object", "promotedObject");
+        const campaignPromoted = isRecord(campaignPromotedValue) ? campaignPromotedValue : {};
+        const adSetPromotedValue = getConfigValue(adSetConfig, "promoted_object", "promotedObject");
+        const adSetPromoted = isRecord(adSetPromotedValue) ? adSetPromotedValue : {};
+        const campaignCatalogId = optionalConfigString(campaignPromoted, ["product_catalog_id", "productCatalogId"], "Meta Campaign Product Catalog ID");
+        const adSetProductSetId = optionalConfigString(adSetPromoted, ["product_set_id", "productSetId"], "Meta Ad Set Product Set ID");
+        const adSetEvent = optionalConfigString(adSetPromoted, ["custom_event_type", "customEventType"], "Meta Catalog custom event");
+        const creativeProductSetId = optionalConfigString(creativeConfig, ["productSetId", "product_set_id"], "Meta Creative Product Set ID");
+        if (normalizedObjective !== "OUTCOME_SALES" || optimizationGoal !== "LINK_CLICKS" || billingEvent !== "LINK_CLICKS") {
+            throw new CampaignRequestValidationError("Meta Catalog Dynamic Product Ads require OUTCOME_SALES, LINK_CLICKS optimization and LINK_CLICKS billing.");
+        }
+        if (creativeDestinationType !== "WEBSITE" || placementMode !== "AUTOMATIC") {
+            throw new CampaignRequestValidationError("The initial Meta Catalog Dynamic Product Ad workflow requires Website destination and Automatic placements.");
+        }
+        if (catalogConfig.enabled !== true || !submittedCatalogId || !/^\d+$/.test(submittedCatalogId) || submittedCatalogId !== resolvedMetaCatalogDestination!.catalogId) {
+            throw new CampaignRequestValidationError("The submitted Meta Catalog selection is missing, invalid or inconsistent with the account-verified Catalog.");
+        }
+        if (!submittedProductSetId || !/^\d+$/.test(submittedProductSetId) || submittedProductSetId !== resolvedMetaCatalogDestination!.productSetId || campaignCatalogId !== resolvedMetaCatalogDestination!.catalogId || adSetProductSetId !== resolvedMetaCatalogDestination!.productSetId || creativeProductSetId !== resolvedMetaCatalogDestination!.productSetId || adSetEvent !== "PURCHASE") {
+            throw new CampaignRequestValidationError("Campaign, Ad Set and Creative must use the same account-verified Catalog and Product Set, with PURCHASE as the Ad Set custom event.");
+        }
+    }
+
+    if (creativeDestinationType === "INSTANT_FORM") {
+        const optimizationGoal = String(getConfigValue(adSetConfig, "optimization_goal", "optimizationGoal") ?? "").trim().toUpperCase();
+        if (objective.trim().toUpperCase() !== "OUTCOME_LEADS" || optimizationGoal !== "LEAD_GENERATION") {
+            throw new CampaignRequestValidationError("Meta Instant Form ads require the Leads campaign objective and LEAD_GENERATION optimization goal.");
+        }
+    }
+    if (creativeDestinationType === "MESSAGING") {
+        const optimizationGoal = String(getConfigValue(adSetConfig, "optimization_goal", "optimizationGoal") ?? "").trim().toUpperCase();
+        const billingEvent = String(getConfigValue(adSetConfig, "billing_event", "billingEvent") ?? "").trim().toUpperCase();
+        const placementsValue = getConfigValue(adSetConfig, "placements");
+        const placements = isRecord(placementsValue) ? placementsValue : {};
+        const placementMode = String(getConfigValue(placements, "mode") ?? "").trim().toUpperCase();
+        if (objective.trim().toUpperCase() !== "OUTCOME_ENGAGEMENT" || optimizationGoal !== "CONVERSATIONS" || billingEvent !== "IMPRESSIONS") {
+            throw new CampaignRequestValidationError("Meta messaging ads currently require OUTCOME_ENGAGEMENT, CONVERSATIONS optimization and IMPRESSIONS billing.");
+        }
+        if (placementMode !== "AUTOMATIC") {
+            throw new CampaignRequestValidationError("Meta messaging ads currently require Automatic placements. Destination-specific manual placement rules will be added separately.");
+        }
+        if (messagingDestinationType === "INSTAGRAM_DIRECT" && optionalConfigString(creativeConfig, ["instagramActorId", "instagram_actor_id"], "Meta Instagram Actor ID") !== resolvedMessagingDestination?.id) {
+            throw new CampaignRequestValidationError("Instagram Direct requires the Instagram professional account selected for the Facebook Page.");
+        }
+    }
+    if (creativeDestinationType === "APP") {
+        const optimizationGoal = String(getConfigValue(adSetConfig, "optimization_goal", "optimizationGoal") ?? "").trim().toUpperCase();
+        const billingEvent = String(getConfigValue(adSetConfig, "billing_event", "billingEvent") ?? "").trim().toUpperCase();
+        const placementsValue = getConfigValue(adSetConfig, "placements");
+        const placements = isRecord(placementsValue) ? placementsValue : {};
+        const placementMode = String(getConfigValue(placements, "mode") ?? "AUTOMATIC").trim().toUpperCase();
+        if (objective.trim().toUpperCase() !== "OUTCOME_APP_PROMOTION" || optimizationGoal !== "APP_INSTALLS" || billingEvent !== "IMPRESSIONS") {
+            throw new CampaignRequestValidationError("Meta App Install campaigns require OUTCOME_APP_PROMOTION, APP_INSTALLS optimization and IMPRESSIONS billing.");
+        }
+        if (placementMode !== "AUTOMATIC") {
+            throw new CampaignRequestValidationError("The initial Meta App Install workflow requires Automatic placements.");
+        }
+        const submittedPromotedObjectValue = getConfigValue(adSetConfig, "promoted_object", "promotedObject");
+        const submittedPromotedObject = isRecord(submittedPromotedObjectValue) ? submittedPromotedObjectValue : {};
+        const submittedApplicationId = optionalConfigString(submittedPromotedObject, ["application_id", "applicationId"], "Meta promoted application ID");
+        const submittedStoreUrl = optionalConfigString(submittedPromotedObject, ["object_store_url", "objectStoreUrl"], "Meta promoted application store URL");
+        if (submittedApplicationId !== resolvedMetaAppDestination!.applicationId || submittedStoreUrl !== resolvedMetaAppDestination!.url) {
+            throw new CampaignRequestValidationError("The App Install Ad Set must use the same selected Meta App ID and normalized store listing URL as the creative destination.");
+        }
     }
 
     // Budget level
@@ -1319,6 +1722,21 @@ function buildMetaCampaignBundleInput(
 
     const specialAdCategories = rawCategories as string[];
 
+    const rawSpecialAdCategoryCountries = getConfigValue(
+        campaignConfig,
+        "specialAdCategoryCountries",
+        "special_ad_category_country",
+    ) ?? [];
+    if (
+        !Array.isArray(rawSpecialAdCategoryCountries) ||
+        !rawSpecialAdCategoryCountries.every((item: unknown) => typeof item === "string")
+    ) {
+        throw new CampaignRequestValidationError(
+            "Meta specialAdCategoryCountries must be an array of ISO country codes.",
+        );
+    }
+    const specialAdCategoryCountries = rawSpecialAdCategoryCountries as string[];
+
     // Currency is shared by campaign and Ad Set budget settings.
     const budgetCurrency =
         optionalConfigString(
@@ -1347,16 +1765,34 @@ function buildMetaCampaignBundleInput(
             "Meta Creative name",
         ) ?? `${adName} Creative`;
 
-    const destinationUrl =
-        optionalConfigString(
-            creativeConfig,
-            ["destinationUrl", "destination_url"],
-            "Meta Creative destination URL",
-        ) ?? websiteUrl;
+    const destinationUrl = creativeDestinationType === "MESSAGING"
+        ? undefined
+        : creativeDestinationType === "INSTANT_FORM"
+            ? "https://fb.me/"
+            : creativeDestinationType === "APP"
+                ? resolvedMetaAppDestination!.url
+                : optionalConfigString(
+                    creativeConfig,
+                    ["destinationUrl", "destination_url"],
+                    "Meta Creative destination URL",
+                ) ?? websiteUrl;
 
-    if (!destinationUrl) {
+    if (creativeDestinationType === "WEBSITE" && !destinationUrl) {
         throw new CampaignRequestValidationError(
-            "A Meta Creative destination URL is required.",
+            "A Meta Creative destination URL is required for a Website ad.",
+        );
+    }
+    if (creativeFormat === "CATALOG_TEMPLATE") {
+        try {
+            const catalogDestinationUrl = new URL(destinationUrl ?? "");
+            if (catalogDestinationUrl.protocol !== "https:" || catalogDestinationUrl.username || catalogDestinationUrl.password) throw new Error("invalid");
+        } catch {
+            throw new CampaignRequestValidationError("Meta Catalog Dynamic Product Ads require a valid HTTPS website URL.");
+        }
+    }
+    if (creativeDestinationType === "APP" && destinationUrl !== resolvedMetaAppDestination?.url) {
+        throw new CampaignRequestValidationError(
+            "The App Install creative destination must exactly match the selected app store listing URL.",
         );
     }
 
@@ -1375,10 +1811,17 @@ function buildMetaCampaignBundleInput(
         );
     }
 
-    const targeting = requireConfigObject(
+    const submittedTargeting = requireConfigObject(
         adSetConfig.targeting,
         "Meta Ad Set targeting",
     );
+    const targeting = creativeDestinationType === "APP"
+        ? {
+            ...submittedTargeting,
+            device_platforms: ["mobile"],
+            user_os: [resolvedMetaAppDestination!.platform],
+        }
+        : submittedTargeting;
 
     const configuredImageUrl = optionalConfigString(
         creativeConfig,
@@ -1394,13 +1837,17 @@ function buildMetaCampaignBundleInput(
 
     const creativeImageHash = uploadedMetaImageHash ?? configuredImageHash;
 
-    if (
+    if (creativeFormat === "SINGLE_IMAGE" &&
         !creativeImageHash &&
         !configuredImageUrl &&
-        !execution.validateOnly
-    ) {
+        !execution.validateOnly) {
         throw new CampaignRequestValidationError(
             "A Meta Creative image is required. Select an Asset Library image or provide an HTTPS image URL.",
+        );
+    }
+    if (creativeFormat === "SINGLE_VIDEO" && !uploadedMetaVideo && !execution.validateOnly) {
+        throw new CampaignRequestValidationError(
+            "A Meta video must be uploaded and processed before creating a Single Video creative.",
         );
     }
     return {
@@ -1414,6 +1861,7 @@ function buildMetaCampaignBundleInput(
                 CreateMetaAdsCampaignBundleInput["campaign"]["buyingType"],
 
             specialAdCategories,
+            specialAdCategoryCountries,
 
             budgetLevel,
 
@@ -1430,6 +1878,12 @@ function buildMetaCampaignBundleInput(
             ),
 
             budgetCurrency,
+
+            ...(resolvedMetaCatalogDestination && {
+                promotedObject: {
+                    product_catalog_id: resolvedMetaCatalogDestination.catalogId,
+                },
+            }),
 
             bidStrategy: optionalConfigString(
                 campaignConfig,
@@ -1517,22 +1971,31 @@ function buildMetaCampaignBundleInput(
                 "bidConstraints",
             ) as CreateMetaAdsCampaignBundleInput["adSet"]["bid_constraints"],
 
-            destinationType: getConfigValue(
-                adSetConfig,
-                "destinationType",
-                "destination_type",
-            ) as CreateMetaAdsCampaignBundleInput["adSet"]["destinationType"],
+            destinationType: (creativeDestinationType === "INSTANT_FORM"
+                ? "ON_AD"
+                : creativeDestinationType === "MESSAGING"
+                    ? messagingDestinationType
+                    : creativeDestinationType === "APP"
+                        ? "APP_STORE"
+                        : getConfigValue(adSetConfig, "destinationType", "destination_type")) as CreateMetaAdsCampaignBundleInput["adSet"]["destinationType"],
 
-            promoted_object: getConfigValue(
-                adSetConfig,
-                "promoted_object",
-                "promotedObject",
-            ) as CreateMetaAdsCampaignBundleInput["adSet"]["promoted_object"],
+            promoted_object: (creativeFormat === "CATALOG_TEMPLATE"
+                ? {
+                    product_set_id: resolvedMetaCatalogDestination!.productSetId,
+                    custom_event_type: "PURCHASE",
+                }
+                : creativeDestinationType === "INSTANT_FORM" || creativeDestinationType === "MESSAGING"
+                    ? { page_id: creativePageId }
+                    : creativeDestinationType === "APP"
+                        ? {
+                            application_id: resolvedMetaAppDestination!.applicationId,
+                            object_store_url: resolvedMetaAppDestination!.url,
+                        }
+                        : getConfigValue(adSetConfig, "promoted_object", "promotedObject")) as CreateMetaAdsCampaignBundleInput["adSet"]["promoted_object"],
 
-            placements: getConfigValue(
-                adSetConfig,
-                "placements",
-            ) as CreateMetaAdsCampaignBundleInput["adSet"]["placements"],
+            placements: (creativeFormat === "CATALOG_TEMPLATE" || creativeDestinationType === "APP"
+                ? { mode: "AUTOMATIC" }
+                : getConfigValue(adSetConfig, "placements")) as CreateMetaAdsCampaignBundleInput["adSet"]["placements"],
 
             advantageAudience: getConfigValue(
                 adSetConfig,
@@ -1563,12 +2026,16 @@ function buildMetaCampaignBundleInput(
 
         creative: {
             name: creativeName,
+            format: creativeFormat,
+            destinationType: (creativeDestinationType === "APP" ? "APP_STORE" : creativeDestinationType),
+            ...(instantFormId && { instantFormId }),
+            ...(resolvedMessagingDestination && {
+                messagingDestinationType: resolvedMessagingDestination.type,
+                messagingDestinationId: resolvedMessagingDestination.id,
+                ...(resolvedMessagingDestination.whatsappNumber && { whatsappNumber: resolvedMessagingDestination.whatsappNumber }),
+            }),
 
-            pageId: requireConfigString(
-                creativeConfig,
-                ["pageId", "page_id"],
-                "Meta Facebook Page ID",
-            ),
+            pageId: creativePageId,
 
             instagramActorId: optionalConfigString(
                 creativeConfig,
@@ -1594,15 +2061,26 @@ function buildMetaCampaignBundleInput(
                 "Meta Creative description",
             ),
 
-            imageUrl: configuredImageUrl,
-            imageHash: creativeImageHash,
-            destinationUrl,
+            imageUrl: creativeFormat === "CATALOG_TEMPLATE" ? undefined : configuredImageUrl,
+            imageHash: creativeFormat === "CATALOG_TEMPLATE" ? undefined : creativeImageHash,
+            videoId: creativeFormat === "CATALOG_TEMPLATE" ? undefined : uploadedMetaVideo?.videoId,
+            videoThumbnailUrl: creativeFormat === "CATALOG_TEMPLATE" ? undefined : uploadedMetaVideo?.thumbnailUrl,
+            ...(creativeFormat === "CATALOG_TEMPLATE" && resolvedMetaCatalogDestination && {
+                productSetId: resolvedMetaCatalogDestination.productSetId,
+            }),
+            ...(destinationUrl && { destinationUrl }),
 
-            callToAction: requireConfigString(
-                creativeConfig,
-                ["callToAction", "call_to_action"],
-                "Meta Creative call to action",
-            ) as CreateMetaAdsCampaignBundleInput["creative"]["callToAction"],
+            callToAction: (creativeFormat === "CATALOG_TEMPLATE"
+                ? "SHOP_NOW"
+                : creativeDestinationType === "APP"
+                ? "INSTALL_MOBILE_APP"
+                : creativeDestinationType === "MESSAGING"
+                    ? messagingDestinationType === "MESSENGER"
+                        ? "MESSAGE_PAGE"
+                        : messagingDestinationType === "INSTAGRAM_DIRECT"
+                            ? "INSTAGRAM_MESSAGE"
+                            : "WHATSAPP_MESSAGE"
+                    : requireConfigString(creativeConfig, ["callToAction", "call_to_action"], "Meta Creative call to action")) as CreateMetaAdsCampaignBundleInput["creative"]["callToAction"],
 
             validateOnly: execution.validateOnly,
             confirm: execution.confirm,
@@ -1610,6 +2088,12 @@ function buildMetaCampaignBundleInput(
 
         ad: {
             name: adName,
+            ...(creativeDestinationType === "APP" && resolvedMetaAppDestination && {
+                trackingSpecs: [{
+                    "action.type": ["mobile_app_install"],
+                    application: [resolvedMetaAppDestination.applicationId],
+                }],
+            }),
         },
     };
 }
@@ -2149,6 +2633,27 @@ router.post("/", async (req: Request, res: Response) => {
             try {
                 if (!googleRequest) {
                     throw new Error("Google Ads provider configuration is missing.");
+                }
+
+                const googleCreateGate = evaluateCampaignCreateGate(
+                    "googleAds",
+                    googleRequest.providerCampaignType,
+                    execution.validateOnly,
+                );
+                if (!googleCreateGate.allowed) {
+                    throw new CampaignRequestValidationError(
+                        googleCreateGate.reason ?? "Google Ads campaign creation is not enabled for this campaign type.",
+                    );
+                }
+
+                const googleCapabilityConfigurationError = getCapabilityConfigurationError(
+                    "googleAds",
+                    googleRequest.providerCampaignType,
+                    googleRequest.providerObjective,
+                    googleRequest.configuration,
+                );
+                if (googleCapabilityConfigurationError) {
+                    throw new CampaignRequestValidationError(googleCapabilityConfigurationError);
                 }
 
                 // Search, Display and Standard Performance Max have independent execution paths.
@@ -3158,10 +3663,6 @@ router.post("/", async (req: Request, res: Response) => {
                                     resourceName,
                                 }),
                             ),
-                            ...resources.proximityCriteria.map((resourceName: string) => ({
-                                resourceType: "proximityCriterion",
-                                resourceName,
-                            })),
                             ...resources.positiveKeywords.map(
                                 (resourceName: string) => ({
                                     resourceType: "positiveKeyword",
@@ -3440,6 +3941,45 @@ router.post("/", async (req: Request, res: Response) => {
                     );
                 }
 
+                const metaCreateGate = evaluateCampaignCreateGate(
+                    "metaAds",
+                    metaRequest.providerCampaignType,
+                    execution.validateOnly,
+                );
+                if (!metaCreateGate.allowed) {
+                    throw new CampaignRequestValidationError(
+                        metaCreateGate.reason ?? "Meta Ads campaign creation is not enabled for this campaign type.",
+                    );
+                }
+
+                const preliminaryMetaConfiguration = isRecord(metaRequest.configuration)
+                    ? metaRequest.configuration
+                    : {};
+                const preliminaryMetaAd = isRecord(preliminaryMetaConfiguration.ad)
+                    ? preliminaryMetaConfiguration.ad
+                    : {};
+                const preliminaryMetaCreative = isRecord(preliminaryMetaConfiguration.creative)
+                    ? preliminaryMetaConfiguration.creative
+                    : isRecord(preliminaryMetaAd.creativeDraft)
+                        ? preliminaryMetaAd.creativeDraft
+                        : {};
+                const preliminaryMetaCatalog = isRecord(preliminaryMetaConfiguration.catalog)
+                    ? preliminaryMetaConfiguration.catalog
+                    : {};
+                const preliminaryCreativeFormat = String(getConfigValue(preliminaryMetaCreative, "format", "creativeFormat") ?? "").trim().toUpperCase();
+                const isPreliminaryMetaCatalogCreative = preliminaryCreativeFormat === "CATALOG_TEMPLATE" && preliminaryMetaCatalog.enabled === true;
+                const metaCapabilityConfigurationError = isPreliminaryMetaCatalogCreative
+                    ? null
+                    : getCapabilityConfigurationError(
+                        "metaAds",
+                        metaRequest.providerCampaignType,
+                        metaRequest.providerObjective,
+                        metaRequest.configuration,
+                    );
+                if (metaCapabilityConfigurationError) {
+                    throw new CampaignRequestValidationError(metaCapabilityConfigurationError);
+                }
+
                 // 1. Verify that the submitted account belongs to this user.
                 const ownedMetaAccount = await AdAccountModel.findOne({
                     userId,
@@ -3456,10 +3996,264 @@ router.post("/", async (req: Request, res: Response) => {
                     );
                 }
 
+                // Phase 2B: resolve every Page, Pixel, Custom Conversion,
+                // Instant Form, messaging identity and app reference against
+                // the selected account before any provider resource is created.
+                await validateMetaCampaignPrerequisites(
+                    userId,
+                    metaRequest.accountId,
+                    metaRequest.configuration,
+                );
+
+                const metaConfiguration = isRecord(metaRequest.configuration)
+                    ? metaRequest.configuration
+                    : {};
+                const metaAdDraft = isRecord(metaConfiguration.ad)
+                    ? metaConfiguration.ad
+                    : {};
+                const metaCreativeDraft = isRecord(metaConfiguration.creative)
+                    ? metaConfiguration.creative
+                    : isRecord(metaAdDraft.creativeDraft)
+                        ? metaAdDraft.creativeDraft
+                        : {};
+                const requestedMetaCreativeFormat = String(
+                    getConfigValue(metaCreativeDraft, "format", "creativeFormat") ?? "SINGLE_IMAGE",
+                ).trim().toUpperCase();
+                const requestedMetaDestination = getConfigValue(metaCreativeDraft, "destination");
+                const requestedMetaDestinationType = isRecord(requestedMetaDestination)
+                    ? String(getConfigValue(requestedMetaDestination, "type") ?? "WEBSITE").trim().toUpperCase()
+                    : "WEBSITE";
+
+                const requestedCatalogConfig = isRecord(metaConfiguration.catalog)
+                    ? metaConfiguration.catalog
+                    : {};
+                const isMetaCatalogCreative = requestedMetaCreativeFormat === "CATALOG_TEMPLATE" && requestedCatalogConfig.enabled === true;
+                let resolvedMetaCatalogDestination: { catalogId: string; productSetId: string } | undefined;
+                if (requestedMetaCreativeFormat === "CATALOG_TEMPLATE" || requestedCatalogConfig.enabled === true) {
+                    if (!isMetaCatalogCreative) {
+                        throw new CampaignRequestValidationError("Catalog Dynamic Product Ads require the CATALOG_TEMPLATE creative format and catalog.enabled flag together.");
+                    }
+                    if (!Array.isArray(request.platforms) || request.platforms.length !== 1 || request.platforms[0] !== "metaAds") {
+                        throw new CampaignRequestValidationError("Meta Catalog Dynamic Product Ads currently require a Meta-only campaign.");
+                    }
+                    if (requestedMetaDestinationType !== "WEBSITE") {
+                        throw new CampaignRequestValidationError("Meta Catalog Dynamic Product Ads currently require a Website destination.");
+                    }
+                }
+
+                if (
+                    requestedMetaDestinationType === "APP" &&
+                    Array.isArray(request.platforms) &&
+                    request.platforms.some((platform: unknown) => platform !== "metaAds")
+                ) {
+                    throw new CampaignRequestValidationError(
+                        "The initial App Install execution slice is Meta-only. Google App campaigns are a separate provider workflow.",
+                    );
+                }
+
+                let resolvedMetaAppDestination: {
+                    applicationId: string;
+                    platform: MetaAppStorePlatform;
+                    url: string;
+                    storeListingId: string;
+                } | undefined;
+
+                // Revalidate App identity against the currently selected Ad Account
+                // and retain the normalized store listing for the Ad Set and Creative.
+                if (requestedMetaDestinationType === "APP") {
+                    const appDestination = isRecord(requestedMetaDestination)
+                        ? requestedMetaDestination
+                        : {};
+                    const appId = optionalConfigString(
+                        appDestination,
+                        ["appId", "app_id"],
+                        "Meta Application ID",
+                    );
+                    if (!appId || !/^\d+$/.test(appId)) {
+                        throw new CampaignRequestValidationError(
+                            "Select an advertisable Meta Application from the currently selected Ad Account.",
+                        );
+                    }
+
+                    const appStoreIdentity = resolveMetaAppStoreListingForRequest(
+                        getConfigValue(appDestination, "appStoreUrl", "app_store_url"),
+                        getConfigValue(appDestination, "appStorePlatform", "app_store_platform"),
+                    );
+
+                    const adSetConfiguration = isRecord(metaConfiguration.adSet)
+                        ? metaConfiguration.adSet
+                        : {};
+                    const promotedObjectValue = getConfigValue(
+                        adSetConfiguration,
+                        "promoted_object",
+                        "promotedObject",
+                    );
+                    const promotedObject = isRecord(promotedObjectValue)
+                        ? promotedObjectValue
+                        : {};
+                    const promotedApplicationId = optionalConfigString(
+                        promotedObject,
+                        ["application_id", "applicationId"],
+                        "Meta promoted application ID",
+                    );
+                    const promotedStoreUrl = optionalConfigString(
+                        promotedObject,
+                        ["object_store_url", "objectStoreUrl"],
+                        "Meta promoted application store URL",
+                    );
+
+                    if (promotedApplicationId !== appId || promotedStoreUrl !== appStoreIdentity.url) {
+                        throw new CampaignRequestValidationError(
+                            "The Meta Creative destination application and Ad Set promoted_object must use the same selected application ID and normalized store listing URL.",
+                        );
+                    }
+
+                    const campaignConfiguration = isRecord(metaConfiguration.campaign)
+                        ? metaConfiguration.campaign
+                        : {};
+                    const requestedObjective = String(
+                        getConfigValue(campaignConfiguration, "objective") ?? metaRequest.providerObjective ?? "",
+                    ).trim().toUpperCase();
+                    const requestedOptimizationGoal = String(
+                        getConfigValue(adSetConfiguration, "optimization_goal", "optimizationGoal") ?? "",
+                    ).trim().toUpperCase();
+                    const requestedBillingEvent = String(
+                        getConfigValue(adSetConfiguration, "billing_event", "billingEvent") ?? "",
+                    ).trim().toUpperCase();
+                    if (requestedObjective !== "OUTCOME_APP_PROMOTION" || requestedOptimizationGoal !== "APP_INSTALLS") {
+                        throw new CampaignRequestValidationError(
+                            "The initial Meta App workflow requires OUTCOME_APP_PROMOTION with APP_INSTALLS optimization.",
+                        );
+                    }
+                    if (requestedBillingEvent !== "IMPRESSIONS") {
+                        throw new CampaignRequestValidationError(
+                            "The initial Meta App Install workflow requires IMPRESSIONS billing.",
+                        );
+                    }
+
+                    await revalidateMetaAdvertisableApplicationForAccount(
+                        userId,
+                        metaRequest.accountId,
+                        appId,
+                    );
+                    resolvedMetaAppDestination = {
+                        applicationId: appId,
+                        platform: appStoreIdentity.platform,
+                        url: appStoreIdentity.url,
+                        storeListingId: appStoreIdentity.storeListingId,
+                    };
+                }
+
+
+                if (isMetaCatalogCreative) {
+                    const campaignConfiguration = isRecord(metaConfiguration.campaign)
+                        ? metaConfiguration.campaign
+                        : {};
+                    const adSetConfiguration = isRecord(metaConfiguration.adSet)
+                        ? metaConfiguration.adSet
+                        : {};
+                    const objective = String(getConfigValue(campaignConfiguration, "objective") ?? metaRequest.providerObjective ?? "").trim().toUpperCase();
+                    const buyingType = String(getConfigValue(campaignConfiguration, "buyingType", "buying_type") ?? "AUCTION").trim().toUpperCase();
+                    const optimizationGoal = String(getConfigValue(adSetConfiguration, "optimization_goal", "optimizationGoal") ?? "").trim().toUpperCase();
+                    const billingEvent = String(getConfigValue(adSetConfiguration, "billing_event", "billingEvent") ?? "").trim().toUpperCase();
+                    const placementsValue = getConfigValue(adSetConfiguration, "placements");
+                    const placements = isRecord(placementsValue) ? placementsValue : {};
+                    const placementMode = String(getConfigValue(placements, "mode") ?? "").trim().toUpperCase();
+                    if (objective !== "OUTCOME_SALES" || buyingType !== "AUCTION" || optimizationGoal !== "LINK_CLICKS" || billingEvent !== "LINK_CLICKS" || placementMode !== "AUTOMATIC") {
+                        throw new CampaignRequestValidationError("Meta Catalog Dynamic Product Ads require OUTCOME_SALES, AUCTION buying, LINK_CLICKS optimization and billing, and Automatic placements.");
+                    }
+
+                    const catalogIdValue = getConfigValue(requestedCatalogConfig, "catalogId", "catalog_id");
+                    const productSetIdValue = getConfigValue(requestedCatalogConfig, "productSetId", "product_set_id");
+                    const catalogId = typeof catalogIdValue === "string" ? catalogIdValue.trim() : "";
+                    const productSetId = typeof productSetIdValue === "string" ? productSetIdValue.trim() : "";
+                    if (!/^\d+$/.test(catalogId) || !/^\d+$/.test(productSetId)) {
+                        throw new CampaignRequestValidationError("Select a valid Meta Product Catalog and Product Set from the selected Ad Account.");
+                    }
+
+                    const campaignPromotedValue = getConfigValue(campaignConfiguration, "promoted_object", "promotedObject");
+                    const campaignPromoted = isRecord(campaignPromotedValue) ? campaignPromotedValue : {};
+                    const adSetPromotedValue = getConfigValue(adSetConfiguration, "promoted_object", "promotedObject");
+                    const adSetPromoted = isRecord(adSetPromotedValue) ? adSetPromotedValue : {};
+                    const creativeProductSetValue = getConfigValue(metaCreativeDraft, "productSetId", "product_set_id");
+                    const campaignPromotedCatalogId = getConfigValue(campaignPromoted, "product_catalog_id", "productCatalogId");
+                    const adSetPromotedProductSetId = getConfigValue(adSetPromoted, "product_set_id", "productSetId");
+                    const adSetCustomEvent = String(getConfigValue(adSetPromoted, "custom_event_type", "customEventType") ?? "").trim().toUpperCase();
+                    if (String(campaignPromotedCatalogId ?? "").trim() !== catalogId || String(adSetPromotedProductSetId ?? "").trim() !== productSetId || String(creativeProductSetValue ?? "").trim() !== productSetId || adSetCustomEvent !== "PURCHASE") {
+                        throw new CampaignRequestValidationError("The Campaign, Ad Set and Creative must reference the same selected Catalog and Product Set, with PURCHASE as the Ad Set custom event.");
+                    }
+
+                    const commerceContext = await getMetaAdsCreationContext(userId, metaRequest.accountId);
+                    const catalogLookup = await getMetaCatalogsForSelectedAccount(commerceContext);
+                    const selectedCatalog = catalogLookup.catalogs.find((item: Record<string, any>) => item.id === catalogId);
+                    if (!selectedCatalog || selectedCatalog.isCatalogSegment === true || selectedCatalog.isLocalCatalog === true) {
+                        throw new CampaignRequestValidationError("The selected Meta Product Catalog is not accessible to the selected Ad Account, is a Catalog Segment, or is a local catalog outside this website-commerce workflow.");
+                    }
+                    if (typeof selectedCatalog.productCount === "number" && selectedCatalog.productCount <= 0) {
+                        throw new CampaignRequestValidationError("The selected Meta Product Catalog contains no products.");
+                    }
+
+                    const productSetLookup = await getMetaProductSetsForSelectedAccount(commerceContext, catalogId);
+                    const selectedProductSet = productSetLookup.productSets.find((item: Record<string, any>) => item.id === productSetId);
+                    if (!selectedProductSet) {
+                        throw new CampaignRequestValidationError("The selected Product Set is not accessible within the selected Meta Product Catalog.");
+                    }
+                    if (typeof selectedProductSet.productCount === "number" && selectedProductSet.productCount <= 0) {
+                        throw new CampaignRequestValidationError("The selected Meta Product Set contains no products.");
+                    }
+                    resolvedMetaCatalogDestination = { catalogId, productSetId };
+                }
+
+                if (
+                    (!isMetaCatalogCreative && !["SINGLE_IMAGE", "SINGLE_VIDEO"].includes(requestedMetaCreativeFormat)) ||
+                    (isMetaCatalogCreative && requestedMetaCreativeFormat !== "CATALOG_TEMPLATE") ||
+                    !["WEBSITE", "INSTANT_FORM", "MESSAGING", "APP"].includes(requestedMetaDestinationType) ||
+                    (isMetaCatalogCreative && requestedMetaDestinationType !== "WEBSITE")
+                ) {
+                    throw new CampaignRequestValidationError("The current Meta execution path supports Single Image and Single Video destination workflows plus the account-verified Catalog Template Dynamic Product Ad flow. Carousel requires a separate child-attachment workflow.");
+                }
+                let resolvedMetaMessagingDestination: ResolvedMetaMessagingDestination | undefined;
+                if (requestedMetaDestinationType === "MESSAGING") {
+                    resolvedMetaMessagingDestination = await resolveMetaMessagingDestinationForCreative(userId, metaCreativeDraft);
+                }
+                if (requestedMetaDestinationType === "INSTANT_FORM") {
+                    const creativeDestinationConfig = isRecord(requestedMetaDestination)
+                        ? requestedMetaDestination
+                        : {};
+                    const requestedFormId = getConfigValue(
+                        creativeDestinationConfig,
+                        "instantFormId",
+                        "instant_form_id",
+                    );
+                    const campaignConfig = isRecord(metaConfiguration.campaign)
+                        ? metaConfiguration.campaign
+                        : {};
+                    const adSetConfig = isRecord(metaConfiguration.adSet)
+                        ? metaConfiguration.adSet
+                        : {};
+                    const requestedObjective = String(
+                        getConfigValue(campaignConfig, "objective") ?? metaRequest.providerObjective ?? "",
+                    ).trim().toUpperCase();
+                    const requestedOptimizationGoal = String(
+                        getConfigValue(adSetConfig, "optimization_goal", "optimizationGoal") ?? "",
+                    ).trim().toUpperCase();
+                    if (typeof requestedFormId !== "string" || !/^\d+$/.test(requestedFormId.trim())) {
+                        throw new CampaignRequestValidationError(
+                            "Select a valid existing Instant Form belonging to the selected Facebook Page.",
+                        );
+                    }
+                    if (requestedObjective !== "OUTCOME_LEADS" || requestedOptimizationGoal !== "LEAD_GENERATION") {
+                        throw new CampaignRequestValidationError(
+                            "Meta Instant Form ads require the Leads campaign objective and LEAD_GENERATION optimization goal.",
+                        );
+                    }
+                }
+
                 let uploadedMetaImageHash: string | undefined;
                 let uploadedMetaImageRecord: Record<string, unknown> | null = null;
+                let uploadedMetaVideo: { videoId: string; thumbnailUrl: string } | undefined;
 
-                const selectedMetaMedia = selectedAssetReferences.filter(
+                const selectedMetaMedia = isMetaCatalogCreative ? [] : selectedAssetReferences.filter(
                     (reference) =>
                         reference.intendedPlatforms.includes("metaAds") &&
                         reference.providerUploadRequired &&
@@ -3470,24 +4264,137 @@ router.post("/", async (req: Request, res: Response) => {
                     (reference) => reference.kind === "VIDEO",
                 );
 
-                if (selectedMetaVideos.length > 0) {
-                    throw new CampaignRequestValidationError(
-                        "Video assets are not supported by the current Meta single-image creative upload flow. Select a JPEG or PNG image instead.",
-                    );
-                }
-
                 const selectedMetaImages = selectedMetaMedia.filter(
                     (reference) =>
                         reference.kind === "IMAGE" || reference.kind === "LOGO",
                 );
 
-                if (selectedMetaImages.length > 1) {
-                    throw new CampaignRequestValidationError(
-                        "The current Meta creative flow supports one selected Asset Library image per ad. Select one image and try again.",
+                if (requestedMetaCreativeFormat === "SINGLE_IMAGE") {
+                    if (selectedMetaVideos.length > 0) {
+                        throw new CampaignRequestValidationError(
+                            "A Single Image creative cannot use a selected video asset. Choose an image or change the creative format.",
+                        );
+                    }
+                    if (selectedMetaImages.length > 1) {
+                        throw new CampaignRequestValidationError(
+                            "The current Meta Single Image flow supports one selected Asset Library image per ad.",
+                        );
+                    }
+                } else if (requestedMetaCreativeFormat === "SINGLE_VIDEO") {
+                    if (selectedMetaVideos.length !== 1) {
+                        throw new CampaignRequestValidationError(
+                            "A Single Video creative requires exactly one private VIDEO asset selected from the AdSyntra Asset Library.",
+                        );
+                    }
+                    if (selectedMetaImages.length > 0) {
+                        throw new CampaignRequestValidationError(
+                            "A Single Video creative cannot include a separate selected image. Choose one video asset only; Meta will use its processed thumbnail.",
+                        );
+                    }
+                    const selectedVideo = selectedMetaVideos[0];
+                    // Validate ownership, file type and private storage on both
+                    // validation-only and live paths. Validation-only must not
+                    // upload media or create provider-side objects.
+                    const videoFile = await readOwnedCampaignVideoAsset(
+                        userId,
+                        selectedVideo.assetId,
                     );
+
+                    if (!execution.validateOnly) {
+                        const metaContext = await getMetaAdsCreationContext(
+                            userId,
+                            metaRequest.accountId,
+                        );
+                        const currentConfiguration = isRecord(metaProvider.configuration)
+                            ? metaProvider.configuration
+                            : {};
+                        const existingUploads = Array.isArray(currentConfiguration.creativeAssetUploads)
+                            ? currentConfiguration.creativeAssetUploads
+                            : [];
+                        const matchingVideoUpload = existingUploads.find(
+                            (item: unknown) =>
+                                isRecord(item) &&
+                                item.provider === "metaAds" &&
+                                item.assetId === selectedVideo.assetId &&
+                                typeof item.videoId === "string" &&
+                                item.videoId.trim() &&
+                                normalizeMetaAccountId(item.adAccountId) === normalizeMetaAccountId(metaRequest.accountId),
+                        ) as Record<string, unknown> | undefined;
+
+                        let videoId = typeof matchingVideoUpload?.videoId === "string"
+                            ? matchingVideoUpload.videoId.trim()
+                            : "";
+                        let videoUploadRecord: Record<string, unknown> = matchingVideoUpload ?? {};
+
+                        if (!videoId) {
+                            const uploadResult = await uploadMetaAdsVideoAsset(
+                                metaContext,
+                                {
+                                    buffer: videoFile.buffer,
+                                    fileName: videoFile.fileName,
+                                    mimeType: videoFile.mimeType,
+                                    title: videoFile.fileName,
+                                },
+                            );
+                            videoId = uploadResult.videoId;
+                            videoUploadRecord = {
+                                provider: "metaAds",
+                                assetId: selectedVideo.assetId,
+                                videoId,
+                                adAccountId: uploadResult.adAccountId,
+                                fileName: uploadResult.fileName,
+                                mimeType: uploadResult.mimeType,
+                                fileSizeBytes: uploadResult.fileSizeBytes,
+                                processingStatus: "PROCESSING",
+                                uploadedAt: new Date(),
+                            };
+                            const retainedUploads = existingUploads.filter(
+                                (item: unknown) =>
+                                    !(
+                                        isRecord(item) &&
+                                        item.provider === "metaAds" &&
+                                        item.assetId === selectedVideo.assetId &&
+                                        normalizeMetaAccountId(item.adAccountId) === normalizeMetaAccountId(uploadResult.adAccountId)
+                                    ),
+                            );
+                            metaProvider.configuration = {
+                                ...currentConfiguration,
+                                creativeAssetUploads: [...retainedUploads, videoUploadRecord],
+                            };
+                            campaign.markModified("providers.metaAds");
+                            await campaign.save();
+                        }
+
+                        const readyVideo = await waitForMetaAdsVideoReady(metaContext, videoId);
+                        uploadedMetaVideo = {
+                            videoId: readyVideo.videoId,
+                            thumbnailUrl: readyVideo.thumbnailUrl,
+                        };
+                        const completedVideoRecord = {
+                            ...videoUploadRecord,
+                            processingStatus: "READY",
+                            thumbnailUrl: readyVideo.thumbnailUrl,
+                            processedAt: new Date(),
+                        };
+                        const retainedUploads = existingUploads.filter(
+                            (item: unknown) =>
+                                !(
+                                    isRecord(item) &&
+                                    item.provider === "metaAds" &&
+                                    item.assetId === selectedVideo.assetId &&
+                                    normalizeMetaAccountId(item.adAccountId) === normalizeMetaAccountId(metaRequest.accountId)
+                                ),
+                        );
+                        metaProvider.configuration = {
+                            ...currentConfiguration,
+                            creativeAssetUploads: [...retainedUploads, completedVideoRecord],
+                        };
+                        campaign.markModified("providers.metaAds");
+                        await campaign.save();
+                    }
                 }
 
-                if (!execution.validateOnly && selectedMetaImages.length === 1) {
+                if (!execution.validateOnly && requestedMetaCreativeFormat === "SINGLE_IMAGE" && selectedMetaImages.length === 1) {
                     const selectedImage: any = selectedMetaImages[0];
                     const imageFile = await readOwnedCampaignImageAsset(
                         userId,
@@ -3565,7 +4472,10 @@ router.post("/", async (req: Request, res: Response) => {
                     metaRequest.configuration,
                     execution,
                     uploadedMetaImageHash,
-
+                    uploadedMetaVideo,
+                    resolvedMetaMessagingDestination,
+                    resolvedMetaAppDestination,
+                    resolvedMetaCatalogDestination,
                 );
 
                 // 3. Execute all four Meta creation stages.
@@ -3648,9 +4558,11 @@ router.post("/", async (req: Request, res: Response) => {
                     errorDetails.originalErrorDetails ?? null;
 
                 const providerStatusCode =
-                    error instanceof MetaAdsCampaignCreationError
+                    error instanceof MetaCampaignPrerequisiteError
                         ? error.statusCode
-                        : null;
+                        : error instanceof MetaAdsCampaignCreationError
+                            ? error.statusCode
+                            : null;
 
                 const partialResult = isRecord(errorDetails.partialResult)
                     ? errorDetails.partialResult
@@ -3728,9 +4640,14 @@ router.post("/", async (req: Request, res: Response) => {
                     creationStatus:
                         partialResources.length > 0 ? "partial" : "failed",
                     failedStep:
-                        typeof errorDetails.failedStep === "string"
-                            ? errorDetails.failedStep
-                            : null,
+                        error instanceof MetaCampaignPrerequisiteError
+                            ? "PREREQUISITE_VALIDATION"
+                            : typeof errorDetails.failedStep === "string"
+                                ? errorDetails.failedStep
+                                : null,
+                    errorCode: error instanceof MetaCampaignPrerequisiteError
+                        ? "META_CAMPAIGN_PREREQUISITE_FAILED"
+                        : null,
                     error: message,
                     partialResources,
                     providerStatusCode,
@@ -3835,6 +4752,14 @@ router.post("/", async (req: Request, res: Response) => {
             return res.status(400).json({
                 success: false,
                 message: error.message,
+            });
+        }
+
+        if (error instanceof MetaCampaignPrerequisiteError) {
+            return res.status(error.statusCode).json({
+                success: false,
+                message: error.message,
+                code: "META_CAMPAIGN_PREREQUISITE_FAILED",
             });
         }
 
@@ -4530,6 +5455,12 @@ router.post(
                 });
             }
 
+            await validateMetaCampaignPrerequisites(
+                userId,
+                metaProvider.accountId,
+                configuration,
+            );
+
             const adConfig = isRecord(configuration.ad)
                 ? configuration.ad
                 : {};
@@ -4555,6 +5486,126 @@ router.post(
                 ...savedCreativeConfig,
                 ...creativeOverrides,
             };
+            const effectiveRetryPreflightConfiguration = {
+                ...configuration,
+                ad: {
+                    ...adConfig,
+                    creativeDraft: effectiveCreativeConfig,
+                },
+            };
+            await validateMetaCampaignPrerequisites(
+                userId,
+                metaProvider.accountId,
+                effectiveRetryPreflightConfiguration,
+            );
+            const retryCreativeFormat = String(
+                getConfigValue(effectiveCreativeConfig, "format", "creativeFormat") ?? "SINGLE_IMAGE",
+            ).trim().toUpperCase();
+            const retryDestinationDraft = getConfigValue(effectiveCreativeConfig, "destination");
+            const retryDestinationType = isRecord(retryDestinationDraft)
+                ? String(getConfigValue(retryDestinationDraft, "type") ?? "WEBSITE").trim().toUpperCase()
+                : "WEBSITE";
+            if (
+                !["SINGLE_IMAGE", "SINGLE_VIDEO"].includes(retryCreativeFormat) ||
+                !["WEBSITE", "INSTANT_FORM", "MESSAGING", "APP"].includes(retryDestinationType)
+            ) {
+                return res.status(422).json({success: false, message: "Creative retry supports Single Image and Single Video with Website, Instant Form, Messaging or App Install destinations. Carousel requires a separate child-attachment workflow."});
+            }
+            const retryMessagingDestination = retryDestinationType === "MESSAGING"
+                ? await resolveMetaMessagingDestinationForCreative(userId, effectiveCreativeConfig)
+                : undefined;
+            let retryAppDestination: {
+                applicationId: string;
+                platform: MetaAppStorePlatform;
+                url: string;
+                storeListingId: string;
+            } | undefined;
+            if (retryDestinationType === "APP") {
+                const appDestination = isRecord(retryDestinationDraft) ? retryDestinationDraft : {};
+                const appId = optionalConfigString(appDestination, ["appId", "app_id"], "Meta Application ID");
+                if (!appId || !/^\d+$/.test(appId)) {
+                    return res.status(422).json({ success: false, message: "The saved advertisable Meta App ID is missing or invalid." });
+                }
+                const storeIdentity = resolveMetaAppStoreListingForRequest(
+                    getConfigValue(appDestination, "appStoreUrl", "app_store_url"),
+                    getConfigValue(appDestination, "appStorePlatform", "app_store_platform"),
+                );
+                const savedCampaignConfig = isRecord(configuration.campaign) ? configuration.campaign : {};
+                const savedAdSetConfig = isRecord(configuration.adSet) ? configuration.adSet : {};
+                const savedPromotedObjectValue = getConfigValue(savedAdSetConfig, "promoted_object", "promotedObject");
+                const savedPromotedObject = isRecord(savedPromotedObjectValue) ? savedPromotedObjectValue : {};
+                const savedPromotedAppId = optionalConfigString(savedPromotedObject, ["application_id", "applicationId"], "Meta promoted application ID");
+                const savedPromotedStoreUrl = optionalConfigString(savedPromotedObject, ["object_store_url", "objectStoreUrl"], "Meta promoted application store URL");
+                const savedObjective = String(getConfigValue(savedCampaignConfig, "objective") ?? "").trim().toUpperCase();
+                const savedOptimizationGoal = String(getConfigValue(savedAdSetConfig, "optimization_goal", "optimizationGoal") ?? "").trim().toUpperCase();
+                const savedBillingEvent = String(getConfigValue(savedAdSetConfig, "billing_event", "billingEvent") ?? "").trim().toUpperCase();
+                const savedPlacementsValue = getConfigValue(savedAdSetConfig, "placements");
+                const savedPlacements = isRecord(savedPlacementsValue) ? savedPlacementsValue : {};
+                if (savedPromotedAppId !== appId || savedPromotedStoreUrl !== storeIdentity.url) {
+                    return res.status(422).json({ success: false, message: "The saved App Store destination and Ad Set promoted_object do not match. Rebuild the App Install request before retrying." });
+                }
+                if (savedObjective !== "OUTCOME_APP_PROMOTION" || savedOptimizationGoal !== "APP_INSTALLS" || savedBillingEvent !== "IMPRESSIONS") {
+                    return res.status(422).json({ success: false, message: "App Install creative retry requires App Promotion → APP_INSTALLS with Impressions billing." });
+                }
+                if (String(getConfigValue(savedPlacements, "mode") ?? "AUTOMATIC").toUpperCase() !== "AUTOMATIC") {
+                    return res.status(422).json({ success: false, message: "App Install creative retry requires Automatic placements." });
+                }
+                await revalidateMetaAdvertisableApplicationForAccount(userId, metaProvider.accountId, appId);
+                retryAppDestination = {
+                    applicationId: appId,
+                    platform: storeIdentity.platform,
+                    url: storeIdentity.url,
+                    storeListingId: storeIdentity.storeListingId,
+                };
+            }
+            if (retryDestinationType === "MESSAGING") {
+                const savedCampaignConfig = isRecord(configuration.campaign) ? configuration.campaign : {};
+                const savedAdSetConfig = isRecord(configuration.adSet) ? configuration.adSet : {};
+                const savedObjective = String(getConfigValue(savedCampaignConfig, "objective") ?? "").trim().toUpperCase();
+                const savedOptimizationGoal = String(getConfigValue(savedAdSetConfig, "optimization_goal", "optimizationGoal") ?? "").trim().toUpperCase();
+                const savedBillingEvent = String(getConfigValue(savedAdSetConfig, "billing_event", "billingEvent") ?? "").trim().toUpperCase();
+                const savedPlacementsValue = getConfigValue(savedAdSetConfig, "placements");
+                const savedPlacements = isRecord(savedPlacementsValue) ? savedPlacementsValue : {};
+                if (savedObjective !== "OUTCOME_ENGAGEMENT" || savedOptimizationGoal !== "CONVERSATIONS" || savedBillingEvent !== "IMPRESSIONS") {
+                    return res.status(422).json({success: false, message: "Messaging creative retry requires Engagement → Conversations with Impressions billing."});
+                }
+                if (String(getConfigValue(savedPlacements, "mode") ?? "").toUpperCase() !== "AUTOMATIC") {
+                    return res.status(422).json({success: false, message: "Messaging creative retry requires Automatic placements."});
+                }
+            }
+            const retryInstantFormId = retryDestinationType === "INSTANT_FORM" && isRecord(retryDestinationDraft)
+                ? optionalConfigString(
+                    retryDestinationDraft,
+                    ["instantFormId", "instant_form_id"],
+                    "Meta Instant Form ID",
+                )
+                : undefined;
+            if (retryDestinationType === "INSTANT_FORM" && (!retryInstantFormId || !/^\d+$/.test(retryInstantFormId))) {
+                return res.status(422).json({
+                    success: false,
+                    message: "The saved Meta Instant Form is missing or invalid. Select an available Page-owned form before retrying.",
+                });
+            }
+            if (retryDestinationType === "INSTANT_FORM") {
+                const savedCampaignConfig = isRecord(configuration.campaign)
+                    ? configuration.campaign
+                    : {};
+                const savedAdSetConfig = isRecord(configuration.adSet)
+                    ? configuration.adSet
+                    : {};
+                const savedObjective = String(
+                    getConfigValue(savedCampaignConfig, "objective") ?? "",
+                ).trim().toUpperCase();
+                const savedOptimizationGoal = String(
+                    getConfigValue(savedAdSetConfig, "optimization_goal", "optimizationGoal") ?? "",
+                ).trim().toUpperCase();
+                if (savedObjective !== "OUTCOME_LEADS" || savedOptimizationGoal !== "LEAD_GENERATION") {
+                    return res.status(422).json({
+                        success: false,
+                        message: "Instant Form creative retry requires the saved Leads campaign objective and LEAD_GENERATION Ad Set optimization goal.",
+                    });
+                }
+            }
 
             const adName =
                 optionalConfigString(
@@ -4570,19 +5621,24 @@ router.post(
                     "Meta Creative name",
                 ) ?? `${adName} Creative`;
 
-            const destinationUrl =
-                optionalConfigString(
-                    effectiveCreativeConfig,
-                    ["destinationUrl", "destination_url"],
-                    "Meta Creative destination URL",
-                ) ??
-                (
-                    typeof campaign.websiteUrl === "string"
-                        ? campaign.websiteUrl
-                        : undefined
-                );
+            const destinationUrl = retryDestinationType === "MESSAGING"
+                ? undefined
+                : retryDestinationType === "INSTANT_FORM"
+                    ? "https://fb.me/"
+                    : retryDestinationType === "APP"
+                        ? retryAppDestination?.url
+                        : optionalConfigString(
+                            effectiveCreativeConfig,
+                            ["destinationUrl", "destination_url"],
+                            "Meta Creative destination URL",
+                        ) ??
+                        (
+                            typeof campaign.websiteUrl === "string"
+                                ? campaign.websiteUrl
+                                : undefined
+                        );
 
-            if (!destinationUrl) {
+            if (retryDestinationType === "WEBSITE" && !destinationUrl) {
                 return res.status(422).json({
                     success: false,
                     message:
@@ -4607,36 +5663,45 @@ router.post(
                     (item.kind === "IMAGE" || item.kind === "LOGO"),
             ) as Array<Record<string, unknown>>;
 
-            const selectedMetaVideos = rawCreativeAssetReferences.some(
+            const selectedPrivateMetaVideos = rawCreativeAssetReferences.filter(
                 (item: unknown) =>
                     isRecord(item) &&
                     item.providerUploadRequired === true &&
-                    item.intendedPlatforms instanceof Array &&
+                    Array.isArray(item.intendedPlatforms) &&
                     item.intendedPlatforms.includes("metaAds") &&
                     item.kind === "VIDEO",
-            );
+            ) as Array<Record<string, unknown>>;
 
-            if (selectedMetaVideos) {
-                return res.status(422).json({
-                    success: false,
-                    message:
-                        "Video assets are not supported by the current Meta single-image creative retry flow. Select a JPEG or PNG image instead.",
-                });
-            }
-
-            if (selectedPrivateMetaImages.length > 1) {
-                return res.status(422).json({
-                    success: false,
-                    message:
-                        "The current Meta creative retry supports one selected Asset Library image per ad.",
-                });
+            if (retryCreativeFormat === "SINGLE_IMAGE") {
+                if (selectedPrivateMetaVideos.length > 0) {
+                    return res.status(422).json({
+                        success: false,
+                        message: "A Single Image creative cannot use a selected video asset.",
+                    });
+                }
+                if (selectedPrivateMetaImages.length > 1) {
+                    return res.status(422).json({
+                        success: false,
+                        message: "The current Meta creative retry supports one selected Asset Library image per ad.",
+                    });
+                }
+            } else {
+                if (selectedPrivateMetaVideos.length !== 1 || selectedPrivateMetaImages.length > 0) {
+                    return res.status(422).json({
+                        success: false,
+                        message: "A Single Video retry requires exactly one private Meta VIDEO asset and no image asset.",
+                    });
+                }
             }
 
             const selectedMetaImage = selectedPrivateMetaImages[0];
-            const selectedMetaAssetId =
-                typeof selectedMetaImage?.assetId === "string"
-                    ? selectedMetaImage.assetId
-                    : null;
+            const selectedMetaAssetId = retryCreativeFormat === "SINGLE_IMAGE" && typeof selectedMetaImage?.assetId === "string"
+                ? selectedMetaImage.assetId
+                : null;
+            const selectedMetaVideo = selectedPrivateMetaVideos[0];
+            const selectedMetaVideoAssetId = retryCreativeFormat === "SINGLE_VIDEO" && typeof selectedMetaVideo?.assetId === "string"
+                ? selectedMetaVideo.assetId
+                : null;
 
             const currentConfiguration = isRecord(metaProvider.configuration)
                 ? metaProvider.configuration
@@ -4647,6 +5712,25 @@ router.post(
             )
                 ? currentConfiguration.creativeAssetUploads
                 : [];
+
+            const matchingSavedVideoUpload = selectedMetaVideoAssetId
+                ? previousUploads.find(
+                    (item: unknown) =>
+                        isRecord(item) &&
+                        item.provider === "metaAds" &&
+                        item.assetId === selectedMetaVideoAssetId &&
+                        typeof item.videoId === "string" &&
+                        item.videoId.trim() &&
+                        normalizeMetaAccountId(item.adAccountId) === normalizeMetaAccountId(metaProvider.accountId),
+                ) as Record<string, unknown> | undefined
+                : undefined;
+
+            let retryVideoId = typeof matchingSavedVideoUpload?.videoId === "string"
+                ? matchingSavedVideoUpload.videoId.trim()
+                : undefined;
+            let retryVideoThumbnailUrl = typeof matchingSavedVideoUpload?.thumbnailUrl === "string"
+                ? matchingSavedVideoUpload.thumbnailUrl.trim()
+                : undefined;
 
             const matchingSavedUpload = selectedMetaAssetId
                 ? previousUploads.find(
@@ -4729,17 +5813,83 @@ router.post(
                 await campaign.save();
             }
 
-            if (!retryImageHash && !configuredImageUrl) {
+            if (retryCreativeFormat === "SINGLE_IMAGE" && !retryImageHash && !configuredImageUrl) {
                 return res.status(422).json({
                     success: false,
-                    message:
-                        "Meta Creative image is missing. Select an Asset Library image or configure an HTTPS image URL before retrying.",
+                    message: "Meta Creative image is missing. Select an Asset Library image or configure an HTTPS image URL before retrying.",
                 });
+            }
+
+            if (retryCreativeFormat === "SINGLE_VIDEO" && selectedMetaVideoAssetId) {
+                const videoFile = await readOwnedCampaignVideoAsset(userId, selectedMetaVideoAssetId);
+                if (!retryVideoId) {
+                    const uploadResult = await uploadMetaAdsVideoAsset(metaContext, {
+                        buffer: videoFile.buffer,
+                        fileName: videoFile.fileName,
+                        mimeType: videoFile.mimeType,
+                        title: videoFile.fileName,
+                    });
+                    retryVideoId = uploadResult.videoId;
+                    const uploadRecord = {
+                        provider: "metaAds",
+                        assetId: selectedMetaVideoAssetId,
+                        videoId: uploadResult.videoId,
+                        adAccountId: uploadResult.adAccountId,
+                        fileName: uploadResult.fileName,
+                        mimeType: uploadResult.mimeType,
+                        fileSizeBytes: uploadResult.fileSizeBytes,
+                        processingStatus: "PROCESSING",
+                        uploadedAt: new Date(),
+                    };
+                    const retainedUploads = previousUploads.filter(
+                        (item: unknown) => !(isRecord(item) && item.provider === "metaAds" && item.assetId === selectedMetaVideoAssetId && normalizeMetaAccountId(item.adAccountId) === normalizeMetaAccountId(metaContext.adAccountId)),
+                    );
+                    metaProvider.configuration = {
+                        ...currentConfiguration,
+                        creativeAssetUploads: [...retainedUploads, uploadRecord],
+                    };
+                    campaign.markModified("providers.metaAds");
+                    await campaign.save();
+                }
+
+                const readyVideo = await waitForMetaAdsVideoReady(metaContext, retryVideoId);
+                retryVideoId = readyVideo.videoId;
+                retryVideoThumbnailUrl = readyVideo.thumbnailUrl;
+                const completedUpload = {
+                    provider: "metaAds",
+                    assetId: selectedMetaVideoAssetId,
+                    videoId: readyVideo.videoId,
+                    thumbnailUrl: readyVideo.thumbnailUrl,
+                    adAccountId: metaContext.adAccountId,
+                    fileName: videoFile.fileName,
+                    mimeType: videoFile.mimeType,
+                    fileSizeBytes: videoFile.sizeBytes,
+                    processingStatus: "READY",
+                    uploadedAt: matchingSavedVideoUpload?.uploadedAt ?? new Date(),
+                    processedAt: new Date(),
+                };
+                const retainedUploads = previousUploads.filter(
+                    (item: unknown) => !(isRecord(item) && item.provider === "metaAds" && item.assetId === selectedMetaVideoAssetId && normalizeMetaAccountId(item.adAccountId) === normalizeMetaAccountId(metaContext.adAccountId)),
+                );
+                metaProvider.configuration = {
+                    ...currentConfiguration,
+                    creativeAssetUploads: [...retainedUploads, completedUpload],
+                };
+                campaign.markModified("providers.metaAds");
+                await campaign.save();
             }
 
             // Build only the Creative input.
             const creativeInput: CreateMetaAdsAdCreativeInput = {
                 name: creativeName,
+                format: retryCreativeFormat,
+                destinationType: retryDestinationType === "APP" ? "APP_STORE" : retryDestinationType,
+                ...(retryInstantFormId && { instantFormId: retryInstantFormId }),
+                ...(retryMessagingDestination && {
+                    messagingDestinationType: retryMessagingDestination.type,
+                    messagingDestinationId: retryMessagingDestination.id,
+                    ...(retryMessagingDestination.whatsappNumber && { whatsappNumber: retryMessagingDestination.whatsappNumber }),
+                }),
 
                 pageId: requireConfigString(
                     effectiveCreativeConfig,
@@ -4771,17 +5921,25 @@ router.post(
                     "Meta Creative description",
                 ),
 
+                ...(retryVideoId && {
+                    videoId: retryVideoId,
+                    videoThumbnailUrl: retryVideoThumbnailUrl,
+                }),
                 ...(retryImageHash
                     ? { imageHash: retryImageHash }
                     : { imageUrl: configuredImageUrl }),
 
-                destinationUrl,
+                ...(destinationUrl && { destinationUrl }),
 
-                callToAction: requireConfigString(
-                    effectiveCreativeConfig,
-                    ["callToAction", "call_to_action"],
-                    "Meta Creative call to action",
-                ) as CreateMetaAdsAdCreativeInput["callToAction"],
+                callToAction: (retryDestinationType === "APP"
+                    ? "INSTALL_MOBILE_APP"
+                    : retryDestinationType === "MESSAGING"
+                        ? retryMessagingDestination?.type === "MESSENGER"
+                            ? "MESSAGE_PAGE"
+                            : retryMessagingDestination?.type === "INSTAGRAM_DIRECT"
+                                ? "INSTAGRAM_MESSAGE"
+                                : "WHATSAPP_MESSAGE"
+                        : requireConfigString(effectiveCreativeConfig, ["callToAction", "call_to_action"], "Meta Creative call to action")) as CreateMetaAdsAdCreativeInput["callToAction"],
 
                 validateOnly: false,
                 confirm: true,
@@ -6078,6 +7236,16 @@ router.get("/lookups/google/merchant-center-links", async (req, res) =>
     ),
 );
 
+// ==========================================
+// GOOGLE ADS HOTEL CENTER LINK LOOKUP
+// ==========================================
+
+router.get("/lookups/google/hotel-center-links", async (req, res) =>
+    withGoogleAdsLookup(req, res, (context) =>
+        getGoogleAdsHotelCenterLinks(context),
+    ),
+);
+
 
 async function getSelectedMetaPixelLookupAccount(
     userId: string,
@@ -6632,6 +7800,29 @@ router.get(
                 });
             }
 
+            const accountIdValue = req.query.accountId;
+            if (typeof accountIdValue !== "string" || !accountIdValue.trim()) {
+                return res.status(400).json({
+                    success: false,
+                    message: "A selected Meta Ad Account ID is required.",
+                });
+            }
+
+            const requestedAccountId = accountIdValue.trim();
+            const normalizedRequestedAccountId = requestedAccountId.replace(/^act_/i, "");
+            if (!/^\d+$/.test(normalizedRequestedAccountId)) {
+                return res.status(400).json({
+                    success: false,
+                    message: "A valid Meta Ad Account ID is required.",
+                });
+            }
+
+            const accountIdCandidates = [...new Set([
+                requestedAccountId,
+                normalizedRequestedAccountId,
+                `act_${normalizedRequestedAccountId}`,
+            ])];
+
             const afterValue = req.query.after;
 
             if (
@@ -6661,6 +7852,7 @@ router.get(
                 provider: "metaAds",
                 status: "active",
                 isSelected: true,
+                externalAccountId: { $in: accountIdCandidates },
             })
                 .select("externalAccountId")
                 .lean();
@@ -6669,7 +7861,7 @@ router.get(
                 return res.status(409).json({
                     success: false,
                     message:
-                        "No active Meta Ads account is selected. Select a Meta Ad Account first.",
+                        "The requested Meta Ad Account is not the currently selected active account for this user. Refresh the account selection and try again.",
                 });
             }
 

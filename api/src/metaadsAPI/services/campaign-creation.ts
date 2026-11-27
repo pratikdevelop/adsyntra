@@ -1,4 +1,5 @@
 import { getProviderAccessToken } from "../../utils/provider-token.utils.js";
+import { META_SPECIAL_AD_CATEGORY_COUNTRY_CODES } from "./meta-special-ad-category.constants.js";
 
 export interface MetaAdsCreationContext {
   adAccountId: string;
@@ -28,6 +29,7 @@ export interface CreateMetaAdsCampaignInput {
   objective: MetaAdsCampaignObjective;
 
   specialAdCategories?: string[];
+  specialAdCategoryCountries?: string[];
   buyingType?: "AUCTION" | "RESERVED";
 
   isAdsetBudgetSharingEnabled?: boolean;
@@ -44,6 +46,9 @@ export interface CreateMetaAdsCampaignInput {
   // Campaign-level bidding
   bidStrategy?: MetaAdsBidStrategy;
 
+  // Campaign-level Product Catalog for Dynamic Product Ads.
+  promotedObject?: Pick<MetaAdsPromotedObject, "product_catalog_id">;
+
   // Campaign schedule
   startTime?: string;
   stopTime?: string;
@@ -53,6 +58,7 @@ interface ValidatedMetaAdsCampaignInput {
   name: string;
   objective: MetaAdsCampaignObjective;
   specialAdCategories: string[];
+  specialAdCategoryCountries: string[];
   buyingType: "AUCTION" | "RESERVED";
   validateOnly: boolean;
   confirm?: boolean;
@@ -61,11 +67,14 @@ interface ValidatedMetaAdsCampaignInput {
   dailyBudgetMinorUnits?: string;
   lifetimeBudgetMinorUnits?: string;
   bidStrategy?: MetaAdsBidStrategy;
+  promotedObject?: Pick<MetaAdsPromotedObject, "product_catalog_id">;
 
   isAdsetBudgetSharingEnabled?: boolean;
   startTime?: string;
   stopTime?: string;
 }
+
+
 const META_OPTIMIZATION_GOALS_BY_OBJECTIVE: Record<
   MetaAdsCampaignObjective,
   readonly string[]
@@ -95,6 +104,7 @@ const META_OPTIMIZATION_GOALS_BY_OBJECTIVE: Record<
   OUTCOME_SALES: [
     "OFFSITE_CONVERSIONS",
     "VALUE",
+    "LINK_CLICKS",
   ],
 
   OUTCOME_APP_PROMOTION: [
@@ -106,6 +116,7 @@ export interface CreateMetaAdsAdInput {
   name: string;
   adSetId: string;
   creativeId: string;
+  trackingSpecs?: Array<Record<string, string[]>>;
 
   validateOnly?: boolean;
   confirm?: boolean;
@@ -128,11 +139,26 @@ export type MetaAdsCallToAction =
   | "SIGN_UP"
   | "CONTACT_US"
   | "GET_QUOTE"
-  | "DOWNLOAD";
+  | "DOWNLOAD"
+  | "INSTALL_MOBILE_APP"
+  | "APPLY_NOW"
+  | "SUBSCRIBE"
+  | "MESSAGE_PAGE"
+  | "INSTAGRAM_MESSAGE"
+  | "WHATSAPP_MESSAGE";
 
 export interface CreateMetaAdsAdCreativeInput {
   name: string;
   pageId: string;
+  /** Provider-native AdCreative shape supported by the current workflow. */
+  format?: string;
+  /** Website, Page-owned Instant Form, messaging or App Store destination. */
+  destinationType?: string;
+  /** Existing, active Lead Form owned by the selected Facebook Page. */
+  instantFormId?: string;
+  messagingDestinationType?: "MESSENGER" | "INSTAGRAM_DIRECT" | "WHATSAPP";
+  messagingDestinationId?: string;
+  whatsappNumber?: string;
   instagramActorId?: string;
   existingPostId?: string;
   primaryText: string;
@@ -140,7 +166,11 @@ export interface CreateMetaAdsAdCreativeInput {
   description?: string;
   imageUrl?: string;
   imageHash?: string;
-  destinationUrl: string;
+  videoId?: string;
+  videoThumbnailUrl?: string;
+  destinationUrl?: string;
+  /** Required when format is CATALOG_TEMPLATE. */
+  productSetId?: string;
   callToAction: MetaAdsCallToAction;
   validateOnly?: boolean;
   confirm?: boolean;
@@ -837,11 +867,11 @@ function normalizeAdAccountId(value: string): string {
 }
 
 function getMetaApiVersion(): string {
-  const version = process.env.META_ADS_API_VERSION?.trim() || "v27.0";
+  const version = process.env.META_ADS_API_VERSION?.trim() || "v26.0";
 
   if (!/^v\d+\.\d+$/.test(version)) {
     throw new MetaAdsCampaignCreationError(
-      "Invalid META_ADS_API_VERSION. Expected a version such as v27.0.",
+      "Invalid META_ADS_API_VERSION. Expected a version such as v26.0.",
       500,
     );
   }
@@ -915,8 +945,57 @@ function validateCreateCampaignInput(
     );
   }
 
+  const rawCategoryCountries = input.specialAdCategoryCountries ?? [];
+  if (
+    !Array.isArray(rawCategoryCountries) ||
+    !rawCategoryCountries.every((country) => typeof country === "string")
+  ) {
+    throw new MetaAdsCampaignCreationError(
+      "specialAdCategoryCountries must be an array of ISO country codes.",
+      400,
+    );
+  }
+  const specialAdCategoryCountries = rawCategoryCountries
+    .map((country) => country.trim().toUpperCase())
+    .filter(Boolean);
+  if (specialAdCategories.length > 0 && specialAdCategoryCountries.length === 0) {
+    throw new MetaAdsCampaignCreationError(
+      "A Meta Special Ad Category requires at least one special_ad_category_country.",
+      400,
+    );
+  }
+  if (specialAdCategories.length === 0 && specialAdCategoryCountries.length > 0) {
+    throw new MetaAdsCampaignCreationError(
+      "specialAdCategoryCountries cannot be supplied when no Special Ad Category is selected.",
+      400,
+    );
+  }
+  if (new Set(specialAdCategoryCountries).size !== specialAdCategoryCountries.length) {
+    throw new MetaAdsCampaignCreationError(
+      "Duplicate Special Ad Category country codes are not allowed.",
+      400,
+    );
+  }
+  const invalidCategoryCountries = specialAdCategoryCountries.filter(
+    (country) => !META_SPECIAL_AD_CATEGORY_COUNTRY_CODES.has(country),
+  );
+  if (invalidCategoryCountries.length > 0) {
+    throw new MetaAdsCampaignCreationError(
+      `Unsupported Meta Special Ad Category country code(s): ${invalidCategoryCountries.join(", ")}.`,
+      400,
+    );
+  }
+
   // 4. Buying type
   const buyingType = input.buyingType ?? "AUCTION";
+  const productCatalogId = input.promotedObject?.product_catalog_id?.trim();
+  if (input.promotedObject !== undefined && (!productCatalogId || !/^\d+$/.test(productCatalogId))) {
+    throw new MetaAdsCampaignCreationError("Campaign promoted_object.product_catalog_id must be a valid numeric Meta Product Catalog ID.", 400);
+  }
+  const promotedObject = productCatalogId
+    ? { product_catalog_id: productCatalogId }
+    : undefined;
+
 
   if (buyingType !== "AUCTION" && buyingType !== "RESERVED") {
     throw new MetaAdsCampaignCreationError(
@@ -1090,6 +1169,7 @@ function validateCreateCampaignInput(
     name,
     objective,
     specialAdCategories,
+    specialAdCategoryCountries,
     buyingType,
     validateOnly,
     confirm: input.confirm,
@@ -1098,6 +1178,7 @@ function validateCreateCampaignInput(
     dailyBudgetMinorUnits,
     lifetimeBudgetMinorUnits,
     bidStrategy,
+    promotedObject,
 
     isAdsetBudgetSharingEnabled:
       input.isAdsetBudgetSharingEnabled,
@@ -1632,7 +1713,26 @@ export async function createMetaAdsAd(
     );
   }
 
-  // 4. Validate mutation mode
+  // 4. Validate App Install tracking specifications locally before either
+  // validation-only return or live provider execution.
+  if (input.trackingSpecs !== undefined) {
+    if (
+      !Array.isArray(input.trackingSpecs) ||
+      input.trackingSpecs.some((spec) =>
+        !spec || typeof spec !== "object" || Array.isArray(spec) ||
+        Object.values(spec).some((value) =>
+          !Array.isArray(value) || !value.every((entry) => typeof entry === "string" && entry.trim()),
+        ),
+      )
+    ) {
+      throw new MetaAdsCampaignCreationError(
+        "trackingSpecs must be an array of Meta tracking specification objects containing string arrays.",
+        400,
+      );
+    }
+  }
+
+  // 5. Validate mutation mode
   const validateOnly = input.validateOnly ?? true;
 
   if (typeof validateOnly !== "boolean") {
@@ -1676,6 +1776,10 @@ export async function createMetaAdsAd(
     }),
     status: "PAUSED",
   });
+
+  if (input.trackingSpecs !== undefined) {
+    form.set("tracking_specs", JSON.stringify(input.trackingSpecs));
+  }
 
   // 7. Call Meta API
   let response: Response;
@@ -1789,6 +1893,7 @@ export interface MetaAdsPromotedObject {
   custom_conversion_id?: string;
   offline_conversion_data_set_id?: string;
   product_set_id?: string;
+  product_catalog_id?: string;
 
 }
 
@@ -1952,6 +2057,20 @@ function validateMetaObjectiveCompatibility(
     "offline_conversion_data_set_id",
   );
   validateNumericId(promoted?.product_set_id, "product_set_id");
+  validateNumericId(promoted?.product_catalog_id, "product_catalog_id");
+
+  if (objective === "OUTCOME_SALES" && goal === "LINK_CLICKS") {
+    if (
+      destinationType !== "WEBSITE" ||
+      !promoted?.product_set_id ||
+      promoted.custom_event_type?.trim().toUpperCase() !== "PURCHASE"
+    ) {
+      throw new MetaAdsCampaignCreationError(
+        "OUTCOME_SALES with LINK_CLICKS is reserved in this AdSyntra workflow for Website Catalog Dynamic Product Ads with a Product Set and PURCHASE custom event.",
+        400,
+      );
+    }
+  }
 
   // 6. Website conversion goals require a conversion source
   if (
@@ -2049,6 +2168,7 @@ function validateMetaObjectiveCompatibility(
       "LEAD_GENERATION",
       "PAGE_LIKES",
       "POST_ENGAGEMENT",
+      "CONVERSATIONS",
     ].includes(goal) &&
     !promoted?.page_id
   ) {
@@ -2089,6 +2209,13 @@ export async function createMetaAdsAdSet(
       destinationType: input.destinationType,
       promotedObject: input.promoted_object,
     });
+  if (
+    ["MESSENGER", "INSTAGRAM_DIRECT", "WHATSAPP"].includes(input.destinationType ?? "") &&
+    optimizationGoal === "CONVERSATIONS" &&
+    input.placements?.mode !== "AUTOMATIC"
+  ) {
+    throw new MetaAdsCampaignCreationError("Meta messaging campaigns currently require Automatic placements.", 400);
+  }
   // 1. Validate Campaign ID
   if (!campaignId || !/^\d+$/.test(campaignId)) {
     throw new MetaAdsCampaignCreationError(
@@ -2520,6 +2647,25 @@ export async function createMetaAdsAdSet(
     ...placementTargeting,
   };
 
+  if (optimizationGoal === "APP_INSTALLS") {
+    const devicePlatforms = (normalizedTargeting as Record<string, unknown>).device_platforms;
+    const userOs = (normalizedTargeting as Record<string, unknown>).user_os;
+    if (
+      input.destinationType !== "APP_STORE" ||
+      !Array.isArray(devicePlatforms) ||
+      devicePlatforms.length !== 1 ||
+      devicePlatforms[0] !== "mobile" ||
+      !Array.isArray(userOs) ||
+      userOs.length !== 1 ||
+      !["ANDROID", "IOS"].includes(String(userOs[0]).toUpperCase())
+    ) {
+      throw new MetaAdsCampaignCreationError(
+        "APP_INSTALLS requires APP_STORE destination and mobile-only targeting with exactly one supported user_os value (ANDROID or IOS).",
+        400,
+      );
+    }
+  }
+
   if (
     targeting.age_min !== undefined &&
     (!Number.isInteger(targeting.age_min) ||
@@ -2799,6 +2945,53 @@ export async function createMetaAdsAdCreative(
   context: MetaAdsCreationContext,
   input: CreateMetaAdsAdCreativeInput,
 ): Promise<MetaAdsAdCreativeCreationResult> {
+  // The creative service uses separate provider-native payloads for image and
+  // video. Never coerce Carousel or destination-specific drafts into either.
+  const creativeFormat = typeof input.format === "string"
+    ? input.format.trim().toUpperCase()
+    : input.format === undefined || input.format === null
+      ? "SINGLE_IMAGE"
+      : "";
+  if (creativeFormat !== "SINGLE_IMAGE" && creativeFormat !== "SINGLE_VIDEO" && creativeFormat !== "CATALOG_TEMPLATE") {
+    throw new MetaAdsCampaignCreationError(
+      "The current Meta creative service supports SINGLE_IMAGE, SINGLE_VIDEO and CATALOG_TEMPLATE. Carousel requires its own child-attachment workflow.",
+      400,
+    );
+  }
+  const destinationType = typeof input.destinationType === "string"
+    ? input.destinationType.trim().toUpperCase()
+    : input.destinationType === undefined || input.destinationType === null
+      ? "WEBSITE"
+      : "";
+  if (!["WEBSITE", "INSTANT_FORM", "MESSAGING", "APP_STORE"].includes(destinationType)) {
+    throw new MetaAdsCampaignCreationError("The current Meta creative service supports WEBSITE, INSTANT_FORM, MESSAGING and APP_STORE destinations.", 400);
+  }
+  const suppliedProductSetId = input.productSetId?.trim();
+  if (creativeFormat === "CATALOG_TEMPLATE") {
+    if (destinationType !== "WEBSITE") {
+      throw new MetaAdsCampaignCreationError("CATALOG_TEMPLATE creatives require a Website destination.", 400);
+    }
+    if (!suppliedProductSetId || !/^\d+$/.test(suppliedProductSetId)) {
+      throw new MetaAdsCampaignCreationError("A valid numeric Product Set ID is required for a Catalog Template creative.", 400);
+    }
+  } else if (suppliedProductSetId) {
+    throw new MetaAdsCampaignCreationError("Product Set ID is only accepted with a CATALOG_TEMPLATE creative.", 400);
+  }
+
+  const instantFormId = destinationType === "INSTANT_FORM"
+    ? input.instantFormId?.trim()
+    : undefined;
+
+  if (
+    destinationType === "INSTANT_FORM" &&
+    (!instantFormId || !/^\d+$/.test(instantFormId))
+  ) {
+    throw new MetaAdsCampaignCreationError(
+      "A valid Page-owned Meta Instant Form ID is required for an Instant Form creative.",
+      400,
+    );
+  }
+
   // 1. Validate creative name
   const name = input.name?.trim();
 
@@ -2829,6 +3022,52 @@ export async function createMetaAdsAdCreative(
     );
   }
 
+  const messagingDestinationType = destinationType === "MESSAGING" ? input.messagingDestinationType : undefined;
+  const messagingDestinationId = destinationType === "MESSAGING" ? input.messagingDestinationId?.trim() : undefined;
+  let whatsappNumber: string | undefined;
+  let messagingCallToAction: MetaAdsCallToAction | undefined;
+  let messagingCtaValue: Record<string, string> | undefined;
+
+  if (destinationType === "MESSAGING") {
+    if (!messagingDestinationType || !["MESSENGER", "INSTAGRAM_DIRECT", "WHATSAPP"].includes(messagingDestinationType)) {
+      throw new MetaAdsCampaignCreationError("A supported Messenger, Instagram Direct or WhatsApp identity is required.", 400);
+    }
+    if (!messagingDestinationId) {
+      throw new MetaAdsCampaignCreationError("The selected Meta messaging identity ID is required.", 400);
+    }
+    if (messagingDestinationType === "MESSENGER" && messagingDestinationId !== pageId) {
+      throw new MetaAdsCampaignCreationError("The selected Messenger identity must match the selected Facebook Page.", 400);
+    }
+    if (messagingDestinationType === "INSTAGRAM_DIRECT" && (!instagramActorId || messagingDestinationId !== instagramActorId)) {
+      throw new MetaAdsCampaignCreationError("Instagram Direct requires the linked Instagram professional account ID as the Instagram Actor ID.", 400);
+    }
+    if (messagingDestinationType === "WHATSAPP") {
+      const rawWhatsAppNumber = input.whatsappNumber?.trim() || messagingDestinationId;
+      const normalizedWhatsAppNumber = rawWhatsAppNumber.replace(/[\s().-]/g, "");
+      if (!/^\+?[1-9]\d{6,14}$/.test(normalizedWhatsAppNumber)) {
+        throw new MetaAdsCampaignCreationError("The connected WhatsApp Business number must be a valid international phone number.", 400);
+      }
+      if (messagingDestinationId.replace(/[\s().-]/g, "") !== normalizedWhatsAppNumber) {
+        throw new MetaAdsCampaignCreationError("The selected WhatsApp identity does not match the connected WhatsApp Business number.", 400);
+      }
+      whatsappNumber = normalizedWhatsAppNumber;
+    }
+
+    messagingCallToAction = messagingDestinationType === "MESSENGER"
+      ? "MESSAGE_PAGE"
+      : messagingDestinationType === "INSTAGRAM_DIRECT"
+        ? "INSTAGRAM_MESSAGE"
+        : "WHATSAPP_MESSAGE";
+    messagingCtaValue = {
+      app_destination: messagingDestinationType,
+      app_destination_page_id: pageId,
+      ...(whatsappNumber && { whatsapp_number: whatsappNumber }),
+    };
+    if (existingPostId) {
+      throw new MetaAdsCampaignCreationError("Messaging ads must use a new Single Image or Single Video creative; existing Page-post mode is not supported.", 400);
+    }
+  }
+
   // 4. Validate creative text
   const primaryText = input.primaryText?.trim();
   const headline = input.headline?.trim();
@@ -2841,53 +3080,115 @@ export async function createMetaAdsAdCreative(
     );
   }
 
-  // 5. Validate image and destination
-  // Existing-post creatives do not require a new image or destination URL.
-  // const existingPostId = input.existingPostId?.trim();
-  const existingPostId = input.existingPostId?.trim();
+  // 5. Validate image and destination.
+  // Existing Page-post mode is available only when a caller explicitly
+  // supplies an existingPostId. Never silently substitute a demo Page Post.
+  if (input.existingPostId !== undefined && input.existingPostId !== null && typeof input.existingPostId !== "string") {
+    throw new MetaAdsCampaignCreationError(
+      "Existing Page Post ID must be a string when supplied explicitly.",
+      400,
+    );
+  }
+  const existingPostId = typeof input.existingPostId === "string"
+    ? input.existingPostId.trim()
+    : "";
 
-  let imageUrl;
+  let imageUrl: string | undefined;
   let imageHash: string | undefined;
-  let destinationUrl;
+  let videoId: string | undefined;
+  let videoThumbnailUrl: string | undefined;
+  let destinationUrl: string | undefined;
 
-  if (!existingPostId) {
-    imageHash = input.imageHash?.trim() || undefined;
-
-    const suppliedImageUrl = input.imageUrl?.trim();
-
-    if (!imageHash && !imageUrl && input.validateOnly === false) {
-      throw new MetaAdsCampaignCreationError(
-        "Either imageHash or imageUrl is required for a live Meta Ad Creative.",
-        400,
-      );
-    }
-
-    // Prefer the uploaded Meta image hash when available.
-    // Preserve HTTPS image URL support for existing callers.
-    if (!imageHash) {
-      imageUrl = validateMetaHttpsUrl(
-        suppliedImageUrl!,
-        "Creative image URL",
-      );
-    }
-
-    destinationUrl = validateMetaHttpsUrl(
-      input.destinationUrl,
-      "Destination URL",
+  if ((creativeFormat === "SINGLE_VIDEO" || creativeFormat === "CATALOG_TEMPLATE") && existingPostId) {
+    throw new MetaAdsCampaignCreationError(
+      "Existing Page-post mode cannot be combined with a new Single Video creative.",
+      400,
     );
   }
 
-  // 6. Validate CTA
-  const supportedCtas: MetaAdsCallToAction[] = [
-    "LEARN_MORE",
-    "SHOP_NOW",
-    "SIGN_UP",
-    "CONTACT_US",
-    "GET_QUOTE",
-    "DOWNLOAD",
-  ];
+  if (["INSTANT_FORM", "APP_STORE"].includes(destinationType) && existingPostId) {
+    throw new MetaAdsCampaignCreationError(
+      "Instant Form and App Install ads must use a new destination-specific Ad Creative; existing Page-post mode is not supported.",
+      400,
+    );
+  }
 
-  if (!supportedCtas.includes(input.callToAction)) {
+  if (!existingPostId) {
+    const validationOnlyMode = input.validateOnly ?? true;
+    if (creativeFormat === "CATALOG_TEMPLATE") {
+      destinationUrl = validateMetaHttpsUrl(input.destinationUrl, "Catalog website destination URL");
+    } else if (creativeFormat === "SINGLE_IMAGE") {
+      imageHash = input.imageHash?.trim() || undefined;
+      const suppliedImageUrl = input.imageUrl?.trim();
+
+      // Validation-only may reference a private AdSyntra Asset Library image;
+      // the route validates ownership but intentionally does not upload it.
+      if (!imageHash && !suppliedImageUrl && !validationOnlyMode) {
+        throw new MetaAdsCampaignCreationError(
+          "Either an uploaded Meta image hash or a valid HTTPS image URL is required for live creation of a new Meta Ad Creative.",
+          400,
+        );
+      }
+      if (!imageHash && suppliedImageUrl) {
+        imageUrl = validateMetaHttpsUrl(suppliedImageUrl, "Creative image URL");
+      }
+    } else {
+      const suppliedVideoId = input.videoId?.trim();
+      if (suppliedVideoId && !/^\d+$/.test(suppliedVideoId)) {
+        throw new MetaAdsCampaignCreationError("Meta Video ID must be numeric.", 400);
+      }
+      if (!suppliedVideoId && !validationOnlyMode) {
+        throw new MetaAdsCampaignCreationError(
+          "A processed Meta video ID is required for live Single Video creative creation.",
+          400,
+        );
+      }
+      videoId = suppliedVideoId || undefined;
+
+      const suppliedThumbnailUrl = input.videoThumbnailUrl?.trim();
+      if (suppliedThumbnailUrl) {
+        videoThumbnailUrl = validateMetaHttpsUrl(
+          suppliedThumbnailUrl,
+          "Meta video thumbnail URL",
+        );
+      } else if (!validationOnlyMode) {
+        throw new MetaAdsCampaignCreationError(
+          "A processed HTTPS video thumbnail is required before creating a Meta video creative.",
+          400,
+        );
+      }
+    }
+
+    if (creativeFormat !== "CATALOG_TEMPLATE") {
+      destinationUrl = destinationType === "MESSAGING"
+        ? undefined
+        : destinationType === "INSTANT_FORM"
+          ? "https://fb.me/"
+          : destinationType === "APP_STORE"
+            ? validateMetaHttpsUrl(input.destinationUrl, "App Store destination URL")
+            : validateMetaHttpsUrl(input.destinationUrl, "Destination URL");
+    }
+  }
+
+  // 6. Validate the CTA against the selected destination's supported set.
+  const supportedCtas: MetaAdsCallToAction[] = creativeFormat === "CATALOG_TEMPLATE"
+    ? ["SHOP_NOW"]
+    : destinationType === "APP_STORE"
+    ? ["INSTALL_MOBILE_APP"]
+    : destinationType === "INSTANT_FORM"
+      ? ["APPLY_NOW", "DOWNLOAD", "GET_QUOTE", "LEARN_MORE", "SIGN_UP", "SUBSCRIBE"]
+      : destinationType === "MESSAGING"
+        ? [messagingCallToAction!]
+        : ["LEARN_MORE", "SHOP_NOW", "SIGN_UP", "CONTACT_US", "GET_QUOTE", "DOWNLOAD"];
+  const resolvedCallToAction = creativeFormat === "CATALOG_TEMPLATE"
+    ? "SHOP_NOW"
+    : destinationType === "APP_STORE"
+    ? "INSTALL_MOBILE_APP"
+    : destinationType === "MESSAGING"
+      ? messagingCallToAction!
+      : input.callToAction;
+
+  if (!supportedCtas.includes(resolvedCallToAction)) {
     throw new MetaAdsCampaignCreationError(
       "Unsupported Meta Ads call-to-action type.",
       400,
@@ -2929,6 +3230,10 @@ export async function createMetaAdsAdCreative(
     name,
   });
 
+  if (creativeFormat === "CATALOG_TEMPLATE") {
+    form.set("product_set_id", suppliedProductSetId!);
+  }
+
   if (existingPostId) {
     // Existing Page post creative
     const match = /^(\d+)_(\d+)$/.exec(existingPostId);
@@ -2968,21 +3273,29 @@ export async function createMetaAdsAdCreative(
 
 
 
-    const supportedCtas: MetaAdsCallToAction[] = [
-      "LEARN_MORE",
-      "SHOP_NOW",
-      "SIGN_UP",
-      "CONTACT_US",
-      "GET_QUOTE",
-      "DOWNLOAD",
-    ];
+    const supportedCtas: MetaAdsCallToAction[] = destinationType === "APP_STORE"
+      ? ["INSTALL_MOBILE_APP"]
+      : destinationType === "INSTANT_FORM"
+        ? ["APPLY_NOW", "DOWNLOAD", "GET_QUOTE", "LEARN_MORE", "SIGN_UP", "SUBSCRIBE"]
+        : destinationType === "MESSAGING"
+          ? [messagingCallToAction!]
+          : ["LEARN_MORE", "SHOP_NOW", "SIGN_UP", "CONTACT_US", "GET_QUOTE", "DOWNLOAD"];
 
-    if (!supportedCtas.includes(input.callToAction)) {
+    if (!supportedCtas.includes(resolvedCallToAction)) {
       throw new MetaAdsCampaignCreationError(
         "Unsupported Meta Ads call-to-action type.",
         400,
       );
     }
+
+    const callToActionValue = destinationType === "INSTANT_FORM"
+      ? {
+          link: "https://fb.me/",
+          lead_gen_form_id: instantFormId!,
+        }
+      : destinationType === "MESSAGING"
+        ? messagingCtaValue!
+        : { link: destinationUrl! };
 
     const objectStorySpec = {
       page_id: pageId,
@@ -2991,24 +3304,48 @@ export async function createMetaAdsAdCreative(
         instagram_actor_id: instagramActorId,
       }),
 
-      link_data: {
-        ...(imageHash
-          ? { image_hash: imageHash }
-          : { picture: imageUrl! }),
-
-        link: destinationUrl!,
-        message: primaryText,
-        name: headline,
-
-        ...(description && { description }),
-
-        call_to_action: {
-          type: input.callToAction,
-          value: {
-            link: destinationUrl!,
-          },
-        },
-      },
+      ...(creativeFormat === "SINGLE_VIDEO"
+        ? {
+            video_data: {
+              video_id: videoId!,
+              image_url: videoThumbnailUrl!,
+              message: primaryText,
+              title: headline,
+              ...(description && { link_description: description }),
+              call_to_action: {
+                type: resolvedCallToAction,
+                value: callToActionValue,
+              },
+            },
+          }
+        : creativeFormat === "CATALOG_TEMPLATE"
+          ? {
+              template_data: {
+                message: primaryText,
+                link: destinationUrl!,
+                name: headline,
+                ...(description && { description }),
+                call_to_action: {
+                  type: "SHOP_NOW",
+                  value: { link: destinationUrl! },
+                },
+              },
+            }
+          : {
+              link_data: {
+                ...(imageHash
+                  ? { image_hash: imageHash }
+                  : { picture: imageUrl! }),
+                ...(destinationType !== "MESSAGING" && { link: destinationUrl! }),
+                message: primaryText,
+                name: headline,
+                ...(description && { description }),
+                call_to_action: {
+                  type: resolvedCallToAction,
+                  value: callToActionValue,
+                },
+              },
+            }),
     };
 
     form.set(
@@ -3120,6 +3457,16 @@ export async function createMetaAdsCampaign(
     special_ad_categories: JSON.stringify(validated.specialAdCategories),
   });
 
+  if (validated.specialAdCategoryCountries.length > 0) {
+    form.set(
+      "special_ad_category_country",
+      JSON.stringify(validated.specialAdCategoryCountries),
+    );
+  }
+
+  if (validated.promotedObject) {
+    form.set("promoted_object", JSON.stringify(validated.promotedObject));
+  }
 
   if (validated.startTime) {
     form.set("start_time", validated.startTime);
@@ -3285,6 +3632,65 @@ console.info("[META ADS CAMPAIGN BUNDLE INPUT]", {
       "Campaign objective and Ad Set campaignObjective must match.",
       400,
     );
+  }
+
+  if (String(input.creative.format ?? "").trim().toUpperCase() === "CATALOG_TEMPLATE") {
+    const campaignCatalogId = input.campaign.promotedObject?.product_catalog_id?.trim();
+    const adSetProductSetId = input.adSet.promoted_object?.product_set_id?.trim();
+    const creativeProductSetId = input.creative.productSetId?.trim();
+    if (
+      input.campaign.objective !== "OUTCOME_SALES" ||
+      input.adSet.optimization_goal.trim().toUpperCase() !== "LINK_CLICKS" ||
+      input.adSet.billing_event.trim().toUpperCase() !== "LINK_CLICKS" ||
+      input.adSet.destinationType !== "WEBSITE" ||
+      input.creative.destinationType !== "WEBSITE" ||
+      !campaignCatalogId || !/^\d+$/.test(campaignCatalogId) ||
+      !adSetProductSetId || !/^\d+$/.test(adSetProductSetId) ||
+      adSetProductSetId !== creativeProductSetId ||
+      input.adSet.promoted_object?.custom_event_type?.trim().toUpperCase() !== "PURCHASE" ||
+      input.creative.callToAction !== "SHOP_NOW" ||
+      input.adSet.placements?.mode !== "AUTOMATIC"
+    ) {
+      throw new MetaAdsCampaignCreationError(
+        "Catalog Dynamic Product Ads require matching Campaign Catalog and Ad Set/Creative Product Set IDs, OUTCOME_SALES, Link Clicks optimization and billing, Website destination, PURCHASE custom event, Automatic placements and Shop Now CTA.",
+        400,
+      );
+    }
+    if (input.adSet.promoted_object?.pixel_id || input.adSet.promoted_object?.custom_conversion_id || input.adSet.promoted_object?.offline_conversion_data_set_id) {
+      throw new MetaAdsCampaignCreationError("The initial Catalog Link Clicks workflow must not include website Pixel or Custom Conversion optimization fields.", 400);
+    }
+  } else if (
+    input.campaign.promotedObject?.product_catalog_id ||
+    input.adSet.promoted_object?.product_set_id ||
+    input.creative.productSetId
+  ) {
+    throw new MetaAdsCampaignCreationError("Catalog and Product Set identifiers are only accepted with a CATALOG_TEMPLATE creative.", 400);
+  }
+
+  if (input.adSet.optimization_goal.trim().toUpperCase() === "APP_INSTALLS") {
+    const applicationId = input.adSet.promoted_object?.application_id?.trim();
+    const hasMatchingInstallTracking = Boolean(
+      applicationId &&
+      input.ad.trackingSpecs?.some((spec) =>
+        Array.isArray(spec["action.type"]) &&
+        spec["action.type"].includes("mobile_app_install") &&
+        Array.isArray(spec.application) &&
+        spec.application.includes(applicationId),
+      ),
+    );
+
+    if (
+      input.campaign.objective !== "OUTCOME_APP_PROMOTION" ||
+      input.adSet.destinationType !== "APP_STORE" ||
+      !applicationId ||
+      !input.adSet.promoted_object?.object_store_url ||
+      !hasMatchingInstallTracking
+    ) {
+      throw new MetaAdsCampaignCreationError(
+        "App Install creation requires OUTCOME_APP_PROMOTION, APP_STORE, a matching promoted application/store listing and mobile_app_install tracking for that application.",
+        400,
+      );
+    }
   }
 
   if (input.campaign.isAdsetBudgetSharingEnabled === true) {

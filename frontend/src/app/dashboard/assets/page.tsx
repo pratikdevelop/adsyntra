@@ -1497,7 +1497,7 @@ export default function AssetLibraryPage() {
     return (
       <Box className="mx-auto max-w-7xl p-6">
         <Paper variant="outlined" className="rounded-2xl p-8">
-          <Stack alignItems="center" spacing={2}>
+          <Stack sx={{ alignItems: "center" }} spacing={2}>
             <Avatar sx={{ width: 56, height: 56, bgcolor: "#e8f0fe", color: "#1967d2" }}>
               <Inventory2Outlined />
             </Avatar>
@@ -1567,7 +1567,7 @@ export default function AssetLibraryPage() {
       {/* Page heading */}
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div className="min-w-0">
-          <Stack direction="row" alignItems="center" spacing={1.25} className="mb-1">
+          <Stack sx={{ alignItems: "center" }} direction="row" spacing={1.25} className="mb-1">
             <Avatar variant="rounded" sx={{ width: 38, height: 38, bgcolor: "#e8f0fe", color: "#1967d2" }}>
               <Inventory2Outlined fontSize="small" />
             </Avatar>
@@ -1621,7 +1621,7 @@ export default function AssetLibraryPage() {
         {statCards.map((item) => (
           <Card key={item.label} variant="outlined" sx={{ borderColor: "#dadce0", borderRadius: 2.5, boxShadow: "none" }}>
             <CardContent sx={{ p: 2, "&:last-child": { pb: 2 } }}>
-              <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
+              <Stack sx={{ alignItems: "center", justifyContent: "space-between" }} direction="row" spacing={1}>
                 <Typography variant="caption" sx={{ color: "#5f6368", fontWeight: 600 }}>{item.label}</Typography>
                 <Avatar variant="rounded" sx={{ width: 32, height: 32, bgcolor: item.background, color: item.accent }}>
                   {item.icon}
@@ -1646,7 +1646,7 @@ export default function AssetLibraryPage() {
                 Sync provider assets and keep their original IDs and creative data in your library.
               </Typography>
             </div>
-            <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+            <Stack sx={{ flexWrap: "wrap" }} direction="row" spacing={1} useFlexGap>
               <Button
                 size="medium"
                 variant="outlined"
@@ -1674,7 +1674,7 @@ export default function AssetLibraryPage() {
         <Box sx={{ p: { xs: 2, md: 2.5 } }}>
           {/* Search and source filters */}
           <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-            <Stack direction="row" spacing={0.5} useFlexGap flexWrap="wrap" sx={{ alignItems: "center" }}>
+            <Stack direction="row" spacing={0.5} useFlexGap  sx={{ alignItems: "center", flexWrap: "wrap" }}>
               {SOURCE_FILTERS.map((filter) => {
                 const selected = sourceFilter === filter.value;
                 return (
@@ -1743,7 +1743,7 @@ export default function AssetLibraryPage() {
           </div>
 
           {/* Asset count and loading state */}
-          <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ pt: 2, pb: 1.5 }}>
+          <Stack direction="row" sx={{ pt: 2, pb: 1.5, justifyContent: "space-between", alignItems: "center" }}>
             <Typography variant="body2" sx={{ color: "#5f6368", fontWeight: 600 }}>
               {totalAssets.toLocaleString()} {totalAssets === 1 ? "asset" : "assets"}
             </Typography>
@@ -1767,7 +1767,7 @@ export default function AssetLibraryPage() {
             </div>
           ) : assets.length === 0 ? (
             <Paper variant="outlined" sx={{ minHeight: 300, borderStyle: "dashed", borderColor: "#dadce0", borderRadius: 2.5, display: "grid", placeItems: "center", p: 4 }}>
-              <Stack alignItems="center" spacing={1.5} sx={{ maxWidth: 420, textAlign: "center" }}>
+              <Stack  spacing={1.5} sx={{ maxWidth: 420, textAlign: "center", alignItems: "center" }}>
                 <Avatar variant="rounded" sx={{ width: 58, height: 58, bgcolor: "#f1f3f4", color: "#5f6368" }}>
                   <Inventory2Outlined fontSize="large" />
                 </Avatar>
@@ -1823,7 +1823,7 @@ export default function AssetLibraryPage() {
                           <Typography variant="subtitle2" noWrap title={asset.name} sx={{ color: "#202124", fontWeight: 700 }}>
                             {asset.name}
                           </Typography>
-                          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ mt: 0.75 }}>
+                          <Stack direction="row" spacing={0.75} sx={{ mt: 0.75, alignItems: "center" }}>
                             <Chip
                               size="small"
                               label={getSourceLabel(asset)}
@@ -1836,7 +1836,7 @@ export default function AssetLibraryPage() {
                           </Stack>
                         </div>
 
-                        <Stack direction="row" flexWrap="wrap" useFlexGap gap={0.75}>
+                        <Stack sx={{ flexWrap: "wrap", gap: 0.75 }} direction="row" useFlexGap >
                           {dimensions && <Typography variant="caption" sx={{ color: "#5f6368" }}>{dimensions}px</Typography>}
                           {asset.aspectRatio && <Typography variant="caption" sx={{ color: "#5f6368" }}>· {asset.aspectRatio}</Typography>}
                           {asset.sizeBytes ? <Typography variant="caption" sx={{ color: "#5f6368" }}>· {formatBytes(asset.sizeBytes)}</Typography> : null}
@@ -1894,7 +1894,7 @@ export default function AssetLibraryPage() {
 
           {/* Pagination */}
           {totalPages > 1 && (
-            <Stack direction={{ xs: "column", sm: "row" }} alignItems="center" justifyContent="space-between" spacing={1.5} sx={{ pt: 3 }}>
+            <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} sx={{ pt: 3, alignItems: "center", justifyContent: "space-between" }}>
               <Typography variant="caption" sx={{ color: "#5f6368" }}>
                 Showing page {page} of {totalPages}
               </Typography>
@@ -1923,7 +1923,7 @@ export default function AssetLibraryPage() {
       >
         <form onSubmit={handleUpload}>
           <DialogTitle sx={{ pb: 1.25 }}>
-            <Stack direction="row" alignItems="flex-start" justifyContent="space-between" spacing={2}>
+            <Stack sx={{ alignItems: "flex-start", justifyContent: "space-between" }} direction="row" spacing={2}>
               <div>
                 <Typography variant="h6" sx={{ color: "#202124", fontWeight: 700 }}>Add assets</Typography>
                 <DialogContentText sx={{ mt: 0.5, fontSize: 13 }}>
@@ -1988,7 +1988,7 @@ export default function AssetLibraryPage() {
                     variant="outlined"
                     sx={{ borderStyle: "dashed", borderColor: selectedFile ? "#1a73e8" : "#dadce0", bgcolor: selectedFile ? "#f8fbff" : "#fafbfc", borderRadius: 2.5, p: 2.5 }}
                   >
-                    <Stack alignItems="center" spacing={1.25}>
+                    <Stack sx={{ alignItems: "center" }} spacing={1.25}>
                       <Avatar variant="rounded" sx={{ width: 46, height: 46, bgcolor: "#e8f0fe", color: "#1967d2" }}>
                         <CloudUploadOutlined />
                       </Avatar>
@@ -2054,7 +2054,7 @@ export default function AssetLibraryPage() {
         {selectedAsset && (
           <>
             <DialogTitle sx={{ pb: 1.5 }}>
-              <Stack direction="row" justifyContent="space-between" alignItems="flex-start" spacing={2}>
+              <Stack sx={{ justifyContent: "space-between", alignItems: "flex-start" }} direction="row" spacing={2}>
                 <div className="min-w-0">
                   <Typography variant="h6" noWrap sx={{ color: "#202124", fontWeight: 700 }}>{selectedAsset.name}</Typography>
                   <Stack direction="row" spacing={1} sx={{ mt: 1 }}>

@@ -46,6 +46,9 @@ export interface CapabilityOption {
   value: string;
   label: string;
   description?: string;
+   /** Provider enum may exist even when this AdSyntra workflow is not ready. */
+ implementationStatus?: CapabilityImplementationStatus;
+ limitation?: string;
 }
 
 export interface CampaignCapabilityDefinition {

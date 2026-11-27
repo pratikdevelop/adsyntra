@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap');
 @import "tailwindcss";
 
 /* AdSyntra appearance preference: MUI and Tailwind share one root theme flag. */
@@ -5,7 +6,6 @@
 
 /* ---- FONT SETUP ---- */
 /* Load IBM Plex Sans properly (weights + responsive optical sizing) */
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap');
 
 /* Apply font only at the root, let inheritance handle the rest */
 html {

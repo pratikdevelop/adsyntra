@@ -10,7 +10,7 @@ import {
   getCampaignRecords,
   readManagedCampaigns,
   writeManagedCampaigns,
-} from "../../_lib/campaigns";
+} from "../_lib/campaigns";
 
 const GOOGLE_TYPES = [
   { value: "SEARCH", label: "Search" },

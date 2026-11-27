@@ -1484,8 +1484,7 @@ export default function CampaignsPage({
             direction="row"
             spacing={1.25}
             useFlexGap
-            flexWrap="wrap"
-            sx={{ flex: 1, minWidth: 0, alignItems: "center" }}
+            sx={{ flex: 1, minWidth: 0, alignItems: "center", flexWrap: "wrap" }}
           >
             <TextField
               size="small"
@@ -2133,9 +2132,8 @@ export default function CampaignsPage({
                               >
                                 <Stack
                                   direction={{ xs: "column", sm: "row" }}
-                                  justifyContent="space-between"
                                   spacing={0.75}
-                                  sx={{ mb: 1.5, alignItems: { xs: "flex-start", sm: "center" } }}
+                                  sx={{ mb: 1.5, alignItems: { xs: "flex-start", sm: "center" }, justifyContent: "space-between" }}
                                 >
                                   <Box>
                                     <Typography className="text-sm font-bold tracking-tight text-slate-900" variant="subtitle1" fontWeight={800}>
@@ -2250,12 +2248,9 @@ export default function CampaignsPage({
                               <Divider className="!my-5 !border-slate-200" sx={{ my: 2 }} />
                               <Stack
                                 className="mb-3"
-                                position="relative"
-                                display="flex"
                                 direction={{ xs: "column", sm: "row" }}
-                                justifyContent="space-between"
                                 spacing={1}
-                                sx={{alignItems: { xs: "flex-start", sm: "center" }, mb: 1.5}}
+                                sx={{ alignItems: { xs: "flex-start", sm: "center" }, mb: 1.5, position: "relative", display: "flex", justifyContent: "space-between" }}
                               >
                                 <Box flex={1} sx={{ minWidth: 0 }}>
                                   <Typography className="text-sm font-bold tracking-tight text-slate-900" variant="subtitle1" fontWeight={800}>
@@ -2322,13 +2317,12 @@ export default function CampaignsPage({
                                     <Paper key={groupKey} className="rounded-2xl border border-slate-200 bg-white shadow-sm transition-shadow hover:shadow-md" variant="outlined" sx={{ p: { xs: 1.5, sm: 2 }, borderRadius: 3, display: "flex", flexDirection: "column", borderColor: "#e2e8f0" }} >
                                       <Stack
                                         direction={{ xs: "column", sm: "row" }}
-                                        justifyContent="space-between"
-                                        spacing={1.5} sx={{ alignItems: { xs: "stretch", sm: "center" } }}>
+                                        spacing={1.5} sx={{ alignItems: { xs: "stretch", sm: "center" }, justifyContent: "space-between" }}>
                                         <Box sx={{ minWidth: 0 }}>
                                           <Typography className="text-sm font-bold tracking-tight text-slate-900" fontWeight={800} variant="body2">
                                             {group.name || `Untitled ${campaign.provider === "googleAds" ? "ad group" : "ad set"}`}
                                           </Typography>
-                                          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mt: 0.75 }}>
+                                          <Stack direction="row" spacing={1} useFlexGap sx={{ mt: 0.75, flexWrap: "wrap" }}>
                                             <Chip size="small" label={groupStatus} color={/ACTIVE|ENABLED/.test(groupStatus) ? "success" : /PAUSED/.test(groupStatus) ? "warning" : "default"} />
                                             {group.type && <Chip size="small" variant="outlined" label={String(group.type).replace(/_/g, " ")} />}
                                             {group.optimization_goal && <Chip size="small" variant="outlined" label={String(group.optimization_goal).replace(/_/g, " ")} />}
@@ -2394,14 +2388,14 @@ export default function CampaignsPage({
                                                     />
                                                   )}
                                                   <Box sx={{ flex: 1, minWidth: 0 }}>
-                                                    <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ alignItems: "center" }}>
+                                                    <Stack direction="row" spacing={1} useFlexGap sx={{ alignItems: "center", flexWrap: "wrap" }}>
                                                       <Typography className="text-xs font-bold text-slate-900" variant="body2" fontWeight={800}>{ad.name || `Ad ${ad.id}`}</Typography>
                                                       <Chip size="small" label={adStatus} color={/ACTIVE|ENABLED/.test(adStatus) ? "success" : /PAUSED/.test(adStatus) ? "warning" : "default"} />
                                                       {ad.type && <Chip size="small" variant="outlined" label={String(ad.type).replace(/_/g, " ")} />}
                                                     </Stack>
                                                     <Typography className="!mt-2 text-sm font-bold text-slate-800" variant="body2" sx={{ mt: 0.75, fontWeight: 700 }}>{creative.headline}</Typography>
                                                     <Typography className="!mt-1 text-xs leading-5 text-slate-600" variant="body2" color="text.secondary" sx={{ mt: 0.25, whiteSpace: "pre-wrap" }}>{creative.body}</Typography>
-                                                    <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ mt: 1 }}>
+                                                    <Stack direction="row" spacing={1} useFlexGap sx={{ mt: 1, flexWrap: "wrap" }}>
                                                       <Chip size="small" variant="outlined" label={`CTA: ${creative.callToAction}`} />
                                                       {creative.assetCount > 0 && <Chip size="small" variant="outlined" label={`${creative.assetCount} linked asset${creative.assetCount === 1 ? "" : "s"}`} />}
                                                       {ad.creative?.id && <Chip size="small" variant="outlined" label={`Creative ${ad.creative.id}`} />}

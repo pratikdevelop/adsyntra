@@ -538,9 +538,9 @@ function CopyField({ label, value }: { label: string; value: string }) {
       <Typography variant="caption" color="text.secondary" display="block">
         {label}
       </Typography>
-      <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mt: 0.35, minWidth: 0 }}>
+      <Stack direction="row" spacing={0.5} sx={{ mt: 0.35, minWidth: 0, alignItems: "center" }}>
         <Typography
-          variant="body2"
+          variant="body1"
           fontWeight={600}
           sx={{ fontFamily: "ui-monospace,monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}
         >
@@ -758,7 +758,7 @@ function PerformanceMaxAssetGroupAccordion({
     >
       <AccordionSummary expandIcon={<ExpandMoreRoundedIcon />} sx={{ px: { xs: 1.5, md: 2 }, py: 1 }}>
         <Box sx={{ minWidth: 0, width: "100%", pr: 1 }}>
-          <Stack direction={{ xs: "column", sm: "row" }} alignItems={{ xs: "flex-start", sm: "center" }} spacing={1} flexWrap="wrap" useFlexGap>
+          <Stack sx={{ alignItems: { xs: "flex-start", sm: "center" }, flexWrap: "wrap" }} direction={{ xs: "column", sm: "row" }} spacing={1} useFlexGap>
             <Typography fontWeight={750} sx={{ overflowWrap: "anywhere" }}>{groupName}</Typography>
             <Chip size="small" label={status.replace(/_/g, " ")} color={statusColor(status)} />
             <Chip size="small" label="Asset group" variant="outlined" />
@@ -795,7 +795,7 @@ function PerformanceMaxAssetGroupAccordion({
             </Stack>
           </Box>
         )}
-        <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
+        <Stack direction="row" spacing={1} sx={{ mb: 1.5, alignItems: "center" }}>
           <Typography variant="subtitle2" fontWeight={750}>Linked assets</Typography>
           <Chip size="small" label={loaded ? `${assets.length} loaded` : "Not loaded"} variant="outlined" />
           {loading && <CircularProgress size={16} />}
@@ -828,14 +828,14 @@ function PerformanceMaxAssetGroupAccordion({
 
             return (
               <Paper key={`${fieldType}:${assetId}`} variant="outlined" sx={{ p: 1.5, borderRadius: 2.5 }}>
-                <Stack direction={{ xs: "column", sm: "row" }} spacing={1.5} alignItems={{ xs: "stretch", sm: "flex-start" }}>
+                <Stack sx={{ alignItems: { xs: "stretch", sm: "flex-start" } }} direction={{ xs: "column", sm: "row" }} spacing={1.5} >
                   {mediaUrl && assetType === "IMAGE" ? (
                     <Box component="img" src={mediaUrl} alt={stringValue(asset.name) ?? fieldType} sx={{ width: { xs: "100%", sm: 136 }, height: 104, objectFit: "contain", bgcolor: "action.hover", borderRadius: 1.5 }} />
                   ) : youtubeEmbed ? (
                     <Box component="iframe" src={youtubeEmbed} title={stringValue(asset.videoTitle, asset.name) ?? "Performance Max video asset"} sx={{ width: { xs: "100%", sm: 180 }, height: 104, border: 0, borderRadius: 1.5, bgcolor: "action.hover" }} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen />
                   ) : null}
                   <Box sx={{ minWidth: 0, flex: 1 }}>
-                    <Stack direction="row" spacing={0.75} alignItems="center" flexWrap="wrap" useFlexGap sx={{ mb: 0.5 }}>
+                    <Stack direction="row" spacing={0.75} useFlexGap sx={{ mb: 0.5, alignItems: "center", flexWrap: "wrap" }}>
                       <Typography variant="body2" fontWeight={750}>{stringValue(asset.name, asset.videoTitle) ?? fieldType.replace(/_/g, " ")}</Typography>
                       <Chip size="small" label={fieldType.replace(/_/g, " ")} variant="outlined" />
                       <Chip size="small" label={assetStatus.replace(/_/g, " ")} color={statusColor(assetStatus)} />
@@ -1153,7 +1153,7 @@ export default function CampaignDetailPage() {
       >
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="min-w-0">
-            <Stack direction="row" spacing={0.5} alignItems="center" sx={{ mb: 0.5 }}>
+            <Stack direction="row" spacing={0.5} sx={{ mb: 0.5, alignItems: "center" }}>
               <Button
                 component={Link}
                 href="/dashboard/campaigns"
@@ -1164,7 +1164,7 @@ export default function CampaignDetailPage() {
                 All campaigns
               </Button>
             </Stack>
-            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+            <Stack sx={{ alignItems: "center", flexWrap: "wrap" }} direction="row" spacing={1} useFlexGap>
               <Chip
                 size="small"
                 icon={<CampaignRoundedIcon fontSize="small" />}
@@ -1185,7 +1185,7 @@ export default function CampaignDetailPage() {
               ID: {campaign.id} · Account: {campaign.accountId ?? "—"}
             </Typography>
           </div>
-          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap className="shrink-0">
+          <Stack sx={{ flexWrap: "wrap" }} direction="row" spacing={1} useFlexGap className="shrink-0">
             <Tooltip title="Refresh campaign and hierarchy data" arrow>
               <span>
                 <IconButton
@@ -1290,7 +1290,7 @@ export default function CampaignDetailPage() {
               title={provider === "googleAds" ? (isPerformanceMax ? "Asset groups & assets" : "Ad groups & ads") : "Ad sets & ads"}
               subtitle="Explore the campaign structure, ad content and creative assets"
               end={
-                <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                <Stack sx={{ flexWrap: "wrap" }} direction="row" spacing={1} useFlexGap>
                   <Chip size="small" label={`${groups.length} ${provider === "googleAds" ? (isPerformanceMax ? "asset groups" : "ad groups") : "ad sets"}`} variant="outlined" />
                   <Chip size="small" label={isPerformanceMax ? `${totalAssetsLoaded} assets loaded` : `${totalAdsLoaded} ads loaded`} variant="outlined" />
                 </Stack>
@@ -1401,11 +1401,9 @@ export default function CampaignDetailPage() {
                   >
                     <AccordionSummary expandIcon={<ExpandMoreRoundedIcon />} sx={{ px: { xs: 1.5, md: 2 }, py: 1 }}>
                       <Box sx={{ minWidth: 0, width: "100%", pr: 1 }}>
-                        <Stack
+                        <Stack sx={{ alignItems: { xs: "flex-start", sm: "center" }, flexWrap: "wrap" }}
                           direction={{ xs: "column", sm: "row" }}
-                          alignItems={{ xs: "flex-start", sm: "center" }}
                           spacing={1}
-                          flexWrap="wrap"
                           useFlexGap
                         >
                           <Typography fontWeight={750} sx={{ overflowWrap: "anywhere" }}>
@@ -1504,7 +1502,7 @@ export default function CampaignDetailPage() {
                         </AccordionDetails>
                       </Accordion>
 
-                      <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1.5 }}>
+                      <Stack direction="row" spacing={1} sx={{ mb: 1.5, alignItems: "center" }}>
                         <Typography variant="subtitle2" fontWeight={750}>
                           Ads and creative
                         </Typography>
@@ -1560,7 +1558,7 @@ export default function CampaignDetailPage() {
                               <Box sx={{ p: { xs: 1.5, md: 2.25 } }}>
                                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                                   <div className="min-w-0">
-                                    <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap alignItems="center">
+                                    <Stack sx={{ flexWrap: "wrap", alignItems: "center" }} direction="row" spacing={1} useFlexGap >
                                       <Typography variant="subtitle1" fontWeight={800} sx={{ overflowWrap: "anywhere" }}>
                                         {stringValue(ad.name) ?? `Ad ${adId}`}
                                       </Typography>
@@ -1572,7 +1570,7 @@ export default function CampaignDetailPage() {
                                       {creativeId ? ` · Creative ID: ${creativeId}` : ""}
                                     </Typography>
                                   </div>
-                                  <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap className="shrink-0">
+                                  <Stack sx={{ flexWrap: "wrap" }} direction="row" spacing={0.75} useFlexGap className="shrink-0">
                                     <Chip size="small" icon={<ImageRoundedIcon fontSize="small" />} label={`${imageCount}`} variant="outlined" />
                                     <Chip size="small" icon={<VideocamRoundedIcon fontSize="small" />} label={`${videoCount}`} variant="outlined" />
                                     <Chip size="small" icon={<TextFieldsRoundedIcon fontSize="small" />} label={`${creative.textAssets.length}`} variant="outlined" />
@@ -1592,7 +1590,7 @@ export default function CampaignDetailPage() {
                                       border: "1px solid rgba(255,255,255,.06)",
                                     }}
                                   >
-                                    <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1.25 }}>
+                                    <Stack direction="row" sx={{ mb: 1.25, justifyContent: "space-between", alignItems: "center" }}>
                                       <Typography
                                         variant="overline"
                                         sx={{ color: "#cbd5e1", fontWeight: 800, letterSpacing: ".14em", fontSize: 11 }}
@@ -1781,7 +1779,7 @@ export default function CampaignDetailPage() {
                                       )}
                                     </Box>
                                     <Divider />
-                                    <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                                    <Stack sx={{ flexWrap: "wrap" }} direction="row" spacing={1} useFlexGap>
                                       {creative.callToAction && (
                                         <Chip label={`CTA · ${creative.callToAction}`} color="primary" size="small" />
                                       )}
@@ -1917,7 +1915,7 @@ export default function CampaignDetailPage() {
               </Button>
             )}
             {groupsLoading && groups.length > 0 && (
-              <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 1 }}>
+              <Stack direction="row" spacing={1} sx={{ mt: 1, alignItems: "center" }}>
                 <CircularProgress size={16} />
                 <Typography variant="caption" color="text.secondary">
                   {isPerformanceMax ? "Loading more asset groups…" : "Loading more groups…"}

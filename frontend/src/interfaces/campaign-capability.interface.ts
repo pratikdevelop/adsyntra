@@ -17,6 +17,8 @@ export interface CampaignCapabilityOption {
   value: string;
   label: string;
   description?: string;
+ implementationStatus?: CapabilityImplementationStatus;
+  limitation?: string;
 }
 
 export interface CampaignCapabilityDefinition {

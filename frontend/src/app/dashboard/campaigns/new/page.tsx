@@ -9623,6 +9623,7 @@ useEffect(() => {
       execution: {
         validateOnly: executionMode === "VALIDATE_ONLY",
         confirm: executionMode === "LIVE",
+        metaValidateCampaign: executionMode === "VALIDATE_ONLY"
       },
     };
   };

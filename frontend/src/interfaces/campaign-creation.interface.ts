@@ -17,7 +17,7 @@ import type {
     CreativeMediaType,
     CreativeTextField,
     CreativeAssetSelectionSource
-} from "./type";
+} from "@/types/campaign-creation.type";
 
 /* -------------------------------------------------------------------------- */
 /* Campaign capability and creative requirement contracts                    */

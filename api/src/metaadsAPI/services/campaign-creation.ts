@@ -36,6 +36,8 @@ export interface CreateMetaAdsCampaignInput {
 
   validateOnly?: boolean;
   confirm?: boolean;
+  /** Ask Meta to validate the Campaign request without creating it. Only valid with validateOnly:true. */
+  metaValidateOnly?: boolean;
 
   // Campaign-level budget settings
   budgetLevel?: "CAMPAIGN" | "AD_SET";
@@ -62,6 +64,7 @@ interface ValidatedMetaAdsCampaignInput {
   buyingType: "AUCTION" | "RESERVED";
   validateOnly: boolean;
   confirm?: boolean;
+  metaValidateOnly: boolean;
 
   budgetLevel: "CAMPAIGN" | "AD_SET";
   dailyBudgetMinorUnits?: string;
@@ -193,6 +196,7 @@ export interface MetaAdsCampaignCreationResult {
   status: "PAUSED";
   buyingType: "AUCTION" | "RESERVED";
   metaResponse: Record<string, unknown> | null;
+  validationSource?: "LOCAL" | "META_API";
 }
 
 interface MetaApiErrorBody {
@@ -867,11 +871,23 @@ function normalizeAdAccountId(value: string): string {
 }
 
 function getMetaApiVersion(): string {
-  const version = process.env.META_ADS_API_VERSION?.trim() || "v26.0";
+  // META_GRAPH_API_VERSION is the shared setting returned by MetaOAuthConfig.
+  // Keep the legacy META_ADS_API_VERSION as a fallback, but fail rather than
+  // silently sending Ads requests to a different Graph API version.
+  const graphVersion = process.env.META_GRAPH_API_VERSION?.trim();
+  const adsVersion = process.env.META_ADS_API_VERSION?.trim();
 
+  if (graphVersion && adsVersion && graphVersion !== adsVersion) {
+    throw new MetaAdsCampaignCreationError(
+      "META_GRAPH_API_VERSION and META_ADS_API_VERSION must match when both are configured.",
+      500,
+    );
+  }
+
+  const version = graphVersion || adsVersion || "v26.0";
   if (!/^v\d+\.\d+$/.test(version)) {
     throw new MetaAdsCampaignCreationError(
-      "Invalid META_ADS_API_VERSION. Expected a version such as v26.0.",
+      "Invalid Meta Graph API version. Expected a value such as v26.0.",
       500,
     );
   }
@@ -1025,6 +1041,20 @@ function validateCreateCampaignInput(
     );
   }
 
+  const metaValidateOnly = input.metaValidateOnly ?? false;
+  if (typeof metaValidateOnly !== "boolean") {
+    throw new MetaAdsCampaignCreationError(
+      "metaValidateOnly must be a boolean.",
+      400,
+    );
+  }
+  if (metaValidateOnly && !validateOnly) {
+    throw new MetaAdsCampaignCreationError(
+      "Meta native Campaign validation requires validateOnly:true.",
+      400,
+    );
+  }
+
   if (!validateOnly && input.confirm !== true) {
     throw new MetaAdsCampaignCreationError(
       "Live Campaign creation requires validateOnly: false and confirm: true.",
@@ -1173,6 +1203,7 @@ function validateCreateCampaignInput(
     buyingType,
     validateOnly,
     confirm: input.confirm,
+    metaValidateOnly,
 
     budgetLevel,
     dailyBudgetMinorUnits,
@@ -3432,7 +3463,7 @@ export async function createMetaAdsCampaign(
   const validated = validateCreateCampaignInput(input);
 
 
-  if (validated.validateOnly) {
+  if (validated.validateOnly && !validated.metaValidateOnly) {
     return {
       validateOnly: true,
       adAccountId: context.adAccountId,
@@ -3442,6 +3473,7 @@ export async function createMetaAdsCampaign(
       status: "PAUSED",
       buyingType: validated.buyingType,
       metaResponse: null,
+      validationSource: "LOCAL",
     };
   }
 
@@ -3508,6 +3540,10 @@ export async function createMetaAdsCampaign(
     );
   }
 
+  if (validated.metaValidateOnly) {
+    form.set("execution_options", JSON.stringify(["validate_only"]));
+  }
+
   let response: Response;
   let responseBody: unknown;
 
@@ -3539,6 +3575,34 @@ export async function createMetaAdsCampaign(
       response.status,
       responseBody,
     );
+  }
+
+  // Meta's validate_only response is success:true and intentionally has no ID.
+  if (validated.metaValidateOnly) {
+    if (
+      !responseBody ||
+      typeof responseBody !== "object" ||
+      Array.isArray(responseBody) ||
+      (responseBody as Record<string, unknown>).success !== true
+    ) {
+      throw new MetaAdsCampaignCreationError(
+        "Meta did not confirm native Campaign validation success.",
+        502,
+        responseBody,
+      );
+    }
+
+    return {
+      validateOnly: true,
+      adAccountId: context.adAccountId,
+      campaignId: null,
+      name: validated.name,
+      objective: validated.objective,
+      status: "PAUSED",
+      buyingType: validated.buyingType,
+      metaResponse: responseBody as Record<string, unknown>,
+      validationSource: "META_API",
+    };
   }
 
   if (
@@ -3736,6 +3800,7 @@ console.info("[META ADS CAMPAIGN BUNDLE INPUT]", {
       {
         ...input.campaign,
         validateOnly: true,
+        metaValidateOnly: input.campaign.metaValidateOnly === true,
       },
     );
 
@@ -4187,4 +4252,6 @@ export async function resumeMetaAdsCampaignForUser(
     );
   }
 }
+
+
 

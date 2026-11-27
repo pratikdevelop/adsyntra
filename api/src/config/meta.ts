@@ -9,6 +9,12 @@ function getRequiredEnv(name: string): string {
   return value;
 }
 
+
+export interface  MetaaUthState { 
+  authId: string;
+  
+
+}
 export interface MetaOAuthConfig {
   appId: string;
   appSecret: string;

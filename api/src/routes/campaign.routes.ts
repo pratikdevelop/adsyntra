@@ -1482,6 +1482,7 @@ function buildMetaCampaignBundleInput(
     execution: {
         validateOnly: boolean;
         confirm: boolean;
+        metaValidateCampaign: boolean;
     },
     uploadedMetaImageHash?: string,
     uploadedMetaVideo?: { videoId: string; thumbnailUrl: string },
@@ -1908,6 +1909,7 @@ function buildMetaCampaignBundleInput(
 
             validateOnly: execution.validateOnly,
             confirm: execution.confirm,
+            metaValidateOnly: execution.metaValidateCampaign,
         },
 
         adSet: {
@@ -2555,19 +2557,28 @@ router.post("/", async (req: Request, res: Response) => {
 
         const confirm =
             executionConfig.confirm ?? false;
+        const metaValidateCampaign =
+            executionConfig.metaValidateCampaign ?? false;
 
         if (
             typeof validateOnly !== "boolean" ||
-            typeof confirm !== "boolean"
+            typeof confirm !== "boolean" ||
+            typeof metaValidateCampaign !== "boolean"
         ) {
             throw new CampaignRequestValidationError(
-                "execution.validateOnly and execution.confirm must be booleans.",
+                "execution.validateOnly, execution.confirm and execution.metaValidateCampaign must be booleans.",
+            );
+        }
+        if (metaValidateCampaign && (!validateOnly || confirm)) {
+            throw new CampaignRequestValidationError(
+                "execution.metaValidateCampaign requires validateOnly:true and confirm:false.",
             );
         }
 
         const execution = {
             validateOnly,
             confirm,
+            metaValidateCampaign,
         };
         const providerDocuments: CampaignProviders = {};
 
@@ -4539,6 +4550,9 @@ router.post("/", async (req: Request, res: Response) => {
                     accountId: metaRequest.accountId,
                     creationStatus: metaProvider.creationStatus,
                     validateOnly: result.validateOnly,
+                    validationSource: result.validateOnly
+                        ? (result.campaign.validationSource ?? "LOCAL")
+                        : null,
 
                     campaign: result.campaign,
                     adSet: result.adSet,

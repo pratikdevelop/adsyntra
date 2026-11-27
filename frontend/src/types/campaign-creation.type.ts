@@ -29,6 +29,7 @@ export type CampaignExecutionPayload = {
     execution: {
         validateOnly: boolean;
         confirm: boolean;
+        metaValidateCampaign: boolean;
     };
 };
 export type PlatformMode = "googleAds" | "metaAds" | "both";
